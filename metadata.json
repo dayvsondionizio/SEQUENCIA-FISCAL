@@ -1,0 +1,5 @@
+{
+  "name": "Auditória de Integridade Fiscal",
+  "description": "Ferramenta para auditoria de sequência numérica e integridade de arquivos XML de NF-e e NFC-e.",
+  "requestFramePermissions": []
+}
