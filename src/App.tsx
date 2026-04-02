@@ -285,29 +285,40 @@ export default function App() {
     
     const fileArray = Array.from(files);
     
-    // Extract potential source name (ZIP file or root folder)
-    let sourceName = "";
-    if (fileArray.length > 0) {
-      const firstFile = fileArray[0];
-      if (firstFile.name.toLowerCase().endsWith('.zip')) {
-        sourceName = firstFile.name;
-      } else if (firstFile.webkitRelativePath) {
-        sourceName = firstFile.webkitRelativePath.split('/')[0];
-      } else if (fileArray.length > 1) {
-        sourceName = "Lote de Arquivos";
+    // Identify all unique sources in this batch
+    const newSources = new Set<string>();
+    fileArray.forEach(file => {
+      const nameLower = file.name.toLowerCase();
+      const isCompressed = nameLower.endsWith('.zip') || nameLower.endsWith('.rar');
+      
+      if (isCompressed) {
+        newSources.add(file.name);
+      } else if (file.webkitRelativePath) {
+        // Root folder from webkitRelativePath
+        const root = file.webkitRelativePath.split('/')[0];
+        if (root) newSources.add(root);
+      }
+    });
+
+    // Fallback for single file or simple batch
+    if (newSources.size === 0 && fileArray.length > 0) {
+      if (fileArray.length === 1) {
+        newSources.add(fileArray[0].name);
       } else {
-        sourceName = firstFile.name;
+        newSources.add("Lote de Arquivos");
       }
     }
 
-    // Check if this source has already been attached
-    if (sourceName && attachedSources.includes(sourceName) && !sourceName.includes("Lote")) {
+    const uniqueNewSources = Array.from(newSources).filter(s => !attachedSources.includes(s));
+    
+    // If NO new sources identified (all already present), stop
+    if (uniqueNewSources.length === 0 && fileArray.length > 0) {
       setIsProcessing(false);
       return;
     }
 
-    if (sourceName && !attachedSources.includes(sourceName)) {
-      setAttachedSources(prev => [...prev, sourceName]);
+    if (uniqueNewSources.length > 0) {
+      setAttachedSources(prev => [...prev, ...uniqueNewSources]);
     }
 
     setProcessingProgress({ current: 0, total: fileArray.length });
