@@ -284,148 +284,114 @@ export default function App() {
     setIsConfirmed(false);
     
     const fileArray = Array.from(files);
-    
-    // Identify all unique sources in this batch
-    const compressedSources = new Set<string>();
-    const folderSources = new Set<string>();
-    
-    fileArray.forEach(file => {
-      const nameLower = file.name.toLowerCase();
-      const isCompressed = nameLower.endsWith('.zip') || nameLower.endsWith('.rar');
-      
-      if (isCompressed) {
-        compressedSources.add(file.name);
-      } else if (file.webkitRelativePath) {
-        const root = file.webkitRelativePath.split('/')[0];
-        if (root) folderSources.add(root);
-      }
-    });
+    const discoveredSources = new Set<string>(attachedSources);
+    const updatedProcessedNames = new Set(processedFileNames);
 
-    // Strategy: Prefer ZIPs. If none found, use folders.
-    const newSources = compressedSources.size > 0 
-      ? Array.from(compressedSources)
-      : Array.from(folderSources);
-
-    // Fallback for single file or simple batch (no ZIPs, no folders)
-    if (newSources.length === 0 && fileArray.length > 0) {
-      if (fileArray.length === 1) {
-        newSources.push(fileArray[0].name);
-      } else {
-        newSources.push("Lote de Arquivos");
-      }
-    }
-
-    const uniqueNewSources = newSources.filter(s => !attachedSources.includes(s));
-    
-    // If NO new sources identified (all already present), stop
-    if (uniqueNewSources.length === 0 && fileArray.length > 0) {
-      setIsProcessing(false);
-      return;
-    }
-
-    if (uniqueNewSources.length > 0) {
-      setAttachedSources(prev => [...prev, ...uniqueNewSources]);
-    }
-
-    setProcessingProgress({ current: 0, total: fileArray.length });
-    
-    const BATCH_SIZE = 50;
     let finalXmls: XmlData[] = [];
     let finalInuts: XmlData[] = [];
     let finalOthers: XmlData[] = [];
-    let updatedProcessedNames = new Set(processedFileNames);
+
+    const processZipRecursively = async (zipData: any, results: any) => {
+      try {
+        const zip = await JSZip.loadAsync(zipData);
+        for (const name of Object.keys(zip.files)) {
+          const entry = zip.files[name];
+          if (entry.dir) {
+            // Track folder names
+            const parts = name.split('/').filter(p => p);
+            if (parts.length > 0) discoveredSources.add(parts[0]);
+            continue;
+          }
+
+          const nameLower = name.toLowerCase();
+          if (nameLower.endsWith('.xml')) {
+            if (updatedProcessedNames.has(name)) continue;
+            updatedProcessedNames.add(name);
+            results.localTotalCount++;
+            try {
+              const xmlText = await entry.async('text');
+              const data = parseXML(xmlText, name);
+              if (data.isCancelamento) results.localCancellations++;
+              if (data.tipo === 'inutilizacao') {
+                results.localInuts.push(data);
+                results.localInutsCount++;
+              } else if (data.tipo === 'nfe') {
+                results.localXmls.push(data);
+                results.localValidNfCount++;
+              } else {
+                results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
+              }
+            } catch (e) {
+              console.error('Erro ao processar XML do ZIP:', name, e);
+            }
+          } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
+            const innerZipName = name.split('/').pop() || name;
+            discoveredSources.add(innerZipName);
+            const innerZipData = await entry.async('arraybuffer');
+            await processZipRecursively(innerZipData, results);
+          } else {
+            // Check for hidden files
+            if (!name.includes('/.') && !name.startsWith('__')) {
+              results.localNonXmlCount++;
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Erro ao processar ZIP recursivamente:', e);
+      }
+    };
+
+    setProcessingProgress({ current: 0, total: fileArray.length });
+    const BATCH_SIZE = 10; // Smaller batch for recursive work
 
     try {
       for (let i = 0; i < fileArray.length; i += BATCH_SIZE) {
         const batch = fileArray.slice(i, i + BATCH_SIZE);
         const results = await Promise.all(batch.map(async (file) => {
-          // Check for duplicate individual files
-          if (updatedProcessedNames.has(file.name)) {
-            return null;
-          }
+          if (updatedProcessedNames.has(file.name)) return null;
 
-          let localXmls: XmlData[] = [];
-          let localInuts: XmlData[] = [];
-          let localOthers: XmlData[] = [];
-          let localValidNfCount = 0;
-          let localInutsCount = 0;
-          let localTotalCount = 0;
-          let localCancellations = 0;
-          let localNonXmlCount = 0;
+          let res = { 
+            localXmls: [] as XmlData[], 
+            localInuts: [] as XmlData[], 
+            localOthers: [] as XmlData[], 
+            localTotalCount: 0, 
+            localCancellations: 0,
+            localValidNfCount: 0,
+            localInutsCount: 0,
+            localNonXmlCount: 0
+          };
 
-          if (file.name.toLowerCase().endsWith('.xml')) {
+          const nameLower = file.name.toLowerCase();
+          if (nameLower.endsWith('.xml')) {
             updatedProcessedNames.add(file.name);
-            localTotalCount++;
+            res.localTotalCount++;
             try {
               const text = await file.text();
               const data = parseXML(text, file.name);
-              if (data.isCancelamento) localCancellations++;
+              if (data.isCancelamento) res.localCancellations++;
               if (data.tipo === 'inutilizacao') {
-                localInuts.push(data);
-                localInutsCount++;
+                res.localInuts.push(data);
+                res.localInutsCount++;
               } else if (data.tipo === 'nfe') {
-                localXmls.push(data);
-                localValidNfCount++;
+                res.localXmls.push(data);
+                res.localValidNfCount++;
               } else {
-                localOthers.push({ fileName: file.name, subTipo: data.subTipo, tipo: data.tipo } as any);
+                res.localOthers.push({ fileName: file.name, subTipo: data.subTipo, tipo: data.tipo } as any);
               }
             } catch (e) {
               console.error('Erro ao processar XML:', file.name, e);
             }
-          } else if (file.name.toLowerCase().endsWith('.zip')) {
-            try {
-              const zip = await JSZip.loadAsync(file);
-              const xmlFiles = Object.keys(zip.files).filter(name => 
-                name.toLowerCase().endsWith('.xml') && !zip.files[name].dir
-              );
-              
-              const zipResults = await Promise.all(xmlFiles.map(async (xmlPath) => {
-                // Check for duplicates inside ZIP
-                if (updatedProcessedNames.has(xmlPath)) {
-                  return null;
-                }
-                
-                try {
-                  const xmlText = await zip.files[xmlPath].async('text');
-                  const data = parseXML(xmlText, xmlPath);
-                  updatedProcessedNames.add(xmlPath);
-                  return { data, path: xmlPath };
-                } catch (e) {
-                  console.error('Erro ao processar XML do ZIP:', xmlPath, e);
-                  return null;
-                }
-              }));
-
-              zipResults.forEach(res => {
-                if (!res) return;
-                localTotalCount++;
-                if (res.data.isCancelamento) localCancellations++;
-                if (res.data.tipo === 'inutilizacao') {
-                  localInuts.push(res.data);
-                  localInutsCount++;
-                } else if (res.data.tipo === 'nfe') {
-                  localXmls.push(res.data);
-                  localValidNfCount++;
-                } else {
-                  localOthers.push({ fileName: res.data.fileName, subTipo: res.data.subTipo, tipo: res.data.tipo } as any);
-                }
-              });
-            } catch (e) {
-              console.error('Erro ao processar ZIP:', file.name, e);
-            }
+          } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
+            discoveredSources.add(file.name);
+            const zipData = await file.arrayBuffer();
+            await processZipRecursively(zipData, res);
           } else {
-            localNonXmlCount++;
+            if (file.webkitRelativePath) {
+              discoveredSources.add(file.webkitRelativePath.split('/')[0]);
+            }
+            res.localNonXmlCount++;
           }
-          return { 
-            localXmls, 
-            localInuts, 
-            localOthers, 
-            localTotalCount, 
-            localCancellations,
-            localValidNfCount,
-            localInutsCount,
-            localNonXmlCount
-          };
+          return res;
         }));
 
         results.forEach(res => {
@@ -453,6 +419,7 @@ export default function App() {
         await new Promise(resolve => setTimeout(resolve, 0));
       }
 
+      setAttachedSources(Array.from(discoveredSources));
       setProcessedFileNames(updatedProcessedNames);
       setXmlList(prev => [...prev, ...finalXmls]);
       setInutilizacoes(prev => [...prev, ...finalInuts]);
