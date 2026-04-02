@@ -5,6 +5,7 @@
 
 import React, { useState, useRef, useMemo } from 'react';
 import JSZip from 'jszip';
+import { createExtractorFromData } from 'node-unrar-js';
 import { 
   FileText, 
   FolderOpen, 
@@ -291,17 +292,16 @@ export default function App() {
     let finalInuts: XmlData[] = [];
     let finalOthers: XmlData[] = [];
 
-    const processZipRecursively = async (zipData: any, results: any, containerName: string) => {
+    const processArchiveRecursively = async (archiveData: ArrayBuffer, results: any, containerName: string) => {
+      let isZip = false;
       try {
-        const zip = await JSZip.loadAsync(zipData);
+        const zip = await JSZip.loadAsync(archiveData);
+        isZip = true;
         let hasDirectXmls = false;
         
-        // Scan for XMLs in this ZIP to determine if it should be shown as a source
         for (const name of Object.keys(zip.files)) {
           const entry = zip.files[name];
-          const nameLower = name.toLowerCase();
-          const isXml = nameLower.endsWith('.xml');
-          if (!entry.dir && isXml) {
+          if (!entry.dir && name.toLowerCase().endsWith('.xml')) {
             hasDirectXmls = true;
             break;
           }
@@ -337,18 +337,75 @@ export default function App() {
               console.error('Erro ao processar XML do ZIP:', name, e);
             }
           } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
-            const innerZipName = name.split('/').pop() || name;
-            const innerZipData = await entry.async('arraybuffer');
-            await processZipRecursively(innerZipData, results, innerZipName);
+            const innerArchiveName = name.split('/').pop() || name;
+            const innerArchiveData = await entry.async('arraybuffer');
+            await processArchiveRecursively(innerArchiveData, results, innerArchiveName);
           } else {
-            // Check for hidden files
             if (!name.includes('/.') && !name.startsWith('__')) {
               results.localNonXmlCount++;
             }
           }
         }
       } catch (e) {
-        console.error('Erro ao processar ZIP recursivamente:', e);
+        // Not a ZIP, try as RAR
+        if (!isZip) {
+          try {
+            const extractor = await createExtractorFromData({ data: archiveData });
+            const list = extractor.getFileList();
+            const fileHeaders = [...list.fileHeaders];
+            
+            let hasDirectXmls = false;
+            for (const header of fileHeaders) {
+              if (header.name.toLowerCase().endsWith('.xml')) {
+                hasDirectXmls = true;
+                break;
+              }
+            }
+
+            if (hasDirectXmls) {
+              discoveredSources.add(containerName);
+            }
+
+            const extracted = extractor.extract();
+            for (const file of extracted.files) {
+              if (file.fileHeader.flags.directory) continue;
+              
+              const name = file.fileHeader.name;
+              const nameLower = name.toLowerCase();
+              
+              if (nameLower.endsWith('.xml')) {
+                if (updatedProcessedNames.has(name)) continue;
+                updatedProcessedNames.add(name);
+                results.localTotalCount++;
+                try {
+                  const xmlText = new TextDecoder().decode(file.extraction);
+                  const data = parseXML(xmlText, name);
+                  if (data.isCancelamento) results.localCancellations++;
+                  if (data.tipo === 'inutilizacao') {
+                    results.localInuts.push(data);
+                    results.localInutsCount++;
+                  } else if (data.tipo === 'nfe') {
+                    results.localXmls.push(data);
+                    results.localValidNfCount++;
+                  } else {
+                    results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
+                  }
+                } catch (e) {
+                  console.error('Erro ao processar XML do RAR:', name, e);
+                }
+              } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
+                const innerArchiveName = name.split('/').pop() || name;
+                await processArchiveRecursively(file.extraction.buffer as ArrayBuffer, results, innerArchiveName);
+              } else {
+                if (!name.includes('/.') && !name.startsWith('__')) {
+                  results.localNonXmlCount++;
+                }
+              }
+            }
+          } catch (rarErr) {
+            console.error('Erro ao processar RAR ou formato desconhecido:', containerName, rarErr);
+          }
+        }
       }
     };
 
@@ -395,7 +452,7 @@ export default function App() {
             }
           } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
             const zipData = await file.arrayBuffer();
-            await processZipRecursively(zipData, res, file.name);
+            await processArchiveRecursively(zipData, res, file.name);
           } else {
             if (file.webkitRelativePath) {
               discoveredSources.add(file.webkitRelativePath.split('/')[0]);
