@@ -54,12 +54,19 @@ interface XmlData {
   nNFIni?: number;
   nNFFin?: number;
   fileName: string;
+  // Relationship data
+  emitCnpj?: string;
+  emitNome?: string;
+  destCnpj?: string;
+  destNome?: string;
 }
 
 interface SerieAnalysis {
   cnpj: string;
   ie: string;
   razaoSocial: string;
+  partnerNome?: string;
+  direcao?: 'entrada' | 'saida';
   modelo: string;
   serie: string;
   xmls: XmlData[];
@@ -184,12 +191,25 @@ function parseXML(xmlText: string, fileName: string): XmlData {
     const modelo = getTextContent('mod');
     const tpEmis = getTextContent('tpEmis');
     
+    // Extract Emitente and Destinatário
+    const emit = doc.getElementsByTagName('emit')[0];
+    const dest = doc.getElementsByTagName('dest')[0];
+    
+    const emitCnpj = emit?.getElementsByTagName('CNPJ')[0]?.textContent || '';
+    const emitNome = emit?.getElementsByTagName('xNome')[0]?.textContent || '';
+    const destCnpj = dest?.getElementsByTagName('CNPJ')[0]?.textContent || '';
+    const destNome = dest?.getElementsByTagName('xNome')[0]?.textContent || '';
+
     if (numero && serie && modelo) {
       return {
         tipo: 'nfe',
-        cnpj: getTextContent('CNPJ'),
+        cnpj: emitCnpj, // Default to issuer for legacy compatibility
+        emitCnpj,
+        emitNome,
+        destCnpj,
+        destNome,
         ie: getTextContent('IE'),
-        razaoSocial: getTextContent('xNome'),
+        razaoSocial: emitNome,
         modelo,
         serie,
         numero,
@@ -550,15 +570,27 @@ export default function App() {
   const runAnalysis = () => {
     if (xmlList.length === 0) return;
 
+    // 1. Identify the Main Company (CNPJ focus)
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+
+    const mainCnpj = Object.entries(cnpjCounts).sort((a,b) => b[1] - a[1])[0]?.[0];
     const groups: { [key: string]: SerieAnalysis } = {};
 
     xmlList.forEach(xml => {
-      const key = `${xml.cnpj}_${xml.modelo}_${xml.serie}`;
+      const direcao = xml.emitCnpj === mainCnpj ? 'saida' : 'entrada';
+      const key = `${mainCnpj}_${direcao}_${xml.modelo}_${xml.serie}`;
+      
       if (!groups[key]) {
         groups[key] = {
-          cnpj: xml.cnpj!,
+          cnpj: mainCnpj || xml.cnpj!,
           ie: xml.ie || 'N/A',
-          razaoSocial: xml.razaoSocial || 'Empresa não identificada',
+          razaoSocial: xml.emitCnpj === mainCnpj ? xml.emitNome || 'Sua Empresa' : xml.destNome || 'Sua Empresa',
+          partnerNome: xml.emitCnpj === mainCnpj ? xml.destNome : xml.emitNome,
+          direcao,
           modelo: xml.modelo!,
           serie: xml.serie!,
           xmls: [],
@@ -1058,14 +1090,31 @@ export default function App() {
                       </div>
                       
                       <div className="flex-1">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-3">
                           <h3 className="font-bold text-slate-800 text-lg">{serie.razaoSocial}</h3>
+                          <div className={cn(
+                            "px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider border",
+                            serie.direcao === 'saida' 
+                              ? "bg-blue-50 text-blue-700 border-blue-200" 
+                              : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          )}>
+                            {serie.direcao === 'saida' ? 'Saída' : 'Entrada'}
+                          </div>
                           <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-200">
                             {serie.mesReferencia}
                           </span>
                         </div>
-                        <div className="text-slate-400 text-sm font-medium">
-                          Mod {serie.modelo} • Série {serie.serie} • CNPJ {serie.cnpj} • IE {serie.ie}
+                        <div className="text-slate-400 text-sm font-medium flex items-center gap-2">
+                          <span className="font-bold text-slate-500 underline underline-offset-4 decoration-slate-200">Mod {serie.modelo} • Série {serie.serie}</span>
+                          {serie.partnerNome && (
+                            <>
+                              <span className="text-slate-300">|</span>
+                              <span className="text-[11px] italic">
+                                {serie.direcao === 'saida' ? 'Cliente: ' : 'Fornecedor: '}
+                                <span className="text-slate-500 font-bold uppercase">{serie.partnerNome}</span>
+                              </span>
+                            </>
+                          )}
                         </div>
                       </div>
 
@@ -1233,10 +1282,23 @@ export default function App() {
               </thead>
               <tbody>
                 {analysis.map((s, idx) => (
-                  <tr key={idx}>
-                    <td className="font-medium">{s.razaoSocial}<br/><span className="text-[9px] font-mono opacity-60">{s.cnpj}</span></td>
-                    <td className="whitespace-nowrap">{s.mesReferencia}</td>
-                    <td className="whitespace-nowrap font-mono">{s.modelo} - Ser {s.serie}</td>
+                    <tr key={idx}>
+                      <td className="font-medium">
+                        {s.razaoSocial}<br/>
+                        <span className="text-[9px] font-mono opacity-60">{s.cnpj}</span>
+                      </td>
+                      <td className="whitespace-nowrap">
+                        <div className="flex flex-col">
+                          <span>{s.mesReferencia}</span>
+                          <span className={cn(
+                            "text-[8px] font-black uppercase px-1 rounded-sm border w-fit",
+                            s.direcao === 'saida' ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          )}>
+                            {s.direcao === 'saida' ? 'Saída' : 'Entrada'}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="whitespace-nowrap font-mono">{s.modelo} - Ser {s.serie}</td>
                     <td className="text-center font-bold">{s.recebidos}</td>
                     <td className={cn("text-center font-bold", s.faltantes.length > 0 ? "text-red-600" : "text-green-600")}>
                       {s.faltantes.length}
@@ -1253,15 +1315,27 @@ export default function App() {
             {analysis.some(s => s.faltantes.length > 0) ? (
               <div className="space-y-6">
                 {analysis.filter(s => s.faltantes.length > 0).map((s, idx) => (
-                  <div key={idx} className="border border-slate-200 rounded-lg p-4 bg-slate-50/20">
-                    <div className="font-black border-b border-slate-200 pb-2 mb-3 flex justify-between items-center">
-                      <span>Série {s.serie} - {s.modelo === '55' ? 'NF-e' : 'NFC-e'}</span>
-                      <span className="text-xs uppercase text-slate-400">Total Faltante: {s.faltantes.length}</span>
+                    <div key={idx} className="border border-slate-200 rounded-lg p-4 bg-slate-50/20">
+                      <div className="font-black border-b border-slate-200 pb-2 mb-3 flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                          <span className={cn(
+                            "text-[8px] px-1.5 py-0.5 rounded border uppercase",
+                            s.direcao === 'saida' ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          )}>
+                            {s.direcao === 'saida' ? 'Saída' : 'Entrada'}
+                          </span>
+                          <span>Série {s.serie} - {s.modelo === '55' ? 'NF-e' : 'NFC-e'}</span>
+                        </div>
+                        <span className="text-xs uppercase text-slate-400">Total Faltante: {s.faltantes.length}</span>
+                      </div>
+                      <div className="text-sm border-b border-slate-100 pb-3 mb-3 text-slate-500 italic">
+                        {s.direcao === 'saida' ? 'Destinatário: ' : 'Emitente: '}
+                        <span className="font-bold uppercase">{s.partnerNome}</span>
+                      </div>
+                      <div className="text-sm leading-relaxed font-mono">
+                        {formatarFaixas(agruparFaixas(s.faltantes))}
+                      </div>
                     </div>
-                    <div className="text-sm leading-relaxed font-mono">
-                      {formatarFaixas(agruparFaixas(s.faltantes))}
-                    </div>
-                  </div>
                 ))}
               </div>
             ) : (
