@@ -294,20 +294,20 @@ export default function App() {
     const processZipRecursively = async (zipData: any, results: any, containerName: string) => {
       try {
         const zip = await JSZip.loadAsync(zipData);
-        let hasDirectFiles = false;
+        let hasDirectXmls = false;
         
-        // Scan for files in this ZIP to determine if it should be shown as a source
+        // Scan for XMLs in this ZIP to determine if it should be shown as a source
         for (const name of Object.keys(zip.files)) {
           const entry = zip.files[name];
           const nameLower = name.toLowerCase();
-          const isArchive = nameLower.endsWith('.zip') || nameLower.endsWith('.rar');
-          if (!entry.dir && !isArchive && !name.includes('/.') && !name.startsWith('__')) {
-            hasDirectFiles = true;
+          const isXml = nameLower.endsWith('.xml');
+          if (!entry.dir && isXml) {
+            hasDirectXmls = true;
             break;
           }
         }
 
-        if (hasDirectFiles) {
+        if (hasDirectXmls) {
           discoveredSources.add(containerName);
         }
 
@@ -824,21 +824,17 @@ export default function App() {
                     </div>
                   </div>
                   
-                  <div className="flex flex-col items-center gap-3">
+                  <div className="flex flex-col items-center">
                     <button 
                       onClick={() => fileInputRef.current?.click()}
-                      className="flex items-center gap-3 px-10 py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all active:scale-95 shadow-xl shadow-slate-200/50"
+                      className="flex items-center gap-3 px-10 py-5 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all active:scale-95 shadow-xl shadow-slate-200/50 hover:scale-[1.02]"
                     >
-                      <FileText className="w-5 h-5 text-blue-400" />
+                      <Upload className="w-6 h-6 text-blue-400" />
                       Anexar Arquivos (ZIP ou XMLs)
                     </button>
-                    <button 
-                      onClick={() => folderInputRef.current?.click()}
-                      className="text-[10px] font-black text-slate-400 hover:text-slate-600 flex items-center gap-1.5 uppercase tracking-widest transition-all px-4 py-1.5 hover:bg-slate-100 rounded-lg"
-                    >
-                      <FolderOpen className="w-3.5 h-3.5" />
-                      Ou selecionar pasta descompactada
-                    </button>
+                    <p className="text-[10px] font-medium text-slate-400 mt-4 uppercase tracking-[0.2em] select-none">
+                      Arraste pastas aqui se preferir
+                    </p>
                   </div>
                 </div>
                 <input 
