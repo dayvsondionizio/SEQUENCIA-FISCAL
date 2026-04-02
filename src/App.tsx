@@ -777,14 +777,14 @@ export default function App() {
                       className="flex items-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-xl font-semibold hover:bg-slate-800 transition-all active:scale-95 text-sm"
                     >
                       <FileText className="w-4 h-4" />
-                      Selecionar Arquivos
+                      Arquivos Compactados (ZIP/RAR)
                     </button>
                     <button 
                       onClick={() => folderInputRef.current?.click()}
                       className="flex items-center gap-2 px-6 py-3 bg-white border-2 border-slate-200 text-slate-700 rounded-xl font-semibold hover:border-slate-300 transition-all active:scale-95 text-sm"
                     >
                       <FolderOpen className="w-4 h-4" />
-                      Selecionar Pasta
+                      Pasta (XMLs Descompactados)
                     </button>
                   </div>
                 </div>
