@@ -286,30 +286,36 @@ export default function App() {
     const fileArray = Array.from(files);
     
     // Identify all unique sources in this batch
-    const newSources = new Set<string>();
+    const compressedSources = new Set<string>();
+    const folderSources = new Set<string>();
+    
     fileArray.forEach(file => {
       const nameLower = file.name.toLowerCase();
       const isCompressed = nameLower.endsWith('.zip') || nameLower.endsWith('.rar');
       
       if (isCompressed) {
-        newSources.add(file.name);
+        compressedSources.add(file.name);
       } else if (file.webkitRelativePath) {
-        // Root folder from webkitRelativePath
         const root = file.webkitRelativePath.split('/')[0];
-        if (root) newSources.add(root);
+        if (root) folderSources.add(root);
       }
     });
 
-    // Fallback for single file or simple batch
-    if (newSources.size === 0 && fileArray.length > 0) {
+    // Strategy: Prefer ZIPs. If none found, use folders.
+    const newSources = compressedSources.size > 0 
+      ? Array.from(compressedSources)
+      : Array.from(folderSources);
+
+    // Fallback for single file or simple batch (no ZIPs, no folders)
+    if (newSources.length === 0 && fileArray.length > 0) {
       if (fileArray.length === 1) {
-        newSources.add(fileArray[0].name);
+        newSources.push(fileArray[0].name);
       } else {
-        newSources.add("Lote de Arquivos");
+        newSources.push("Lote de Arquivos");
       }
     }
 
-    const uniqueNewSources = Array.from(newSources).filter(s => !attachedSources.includes(s));
+    const uniqueNewSources = newSources.filter(s => !attachedSources.includes(s));
     
     // If NO new sources identified (all already present), stop
     if (uniqueNewSources.length === 0 && fileArray.length > 0) {
