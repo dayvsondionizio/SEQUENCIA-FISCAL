@@ -734,7 +734,7 @@ export default function App() {
     const withProblems = all.filter(s => s.faltantes.length > 0);
     if (withProblems.length === 0) return '';
     const first = withProblems[0];
-    let msg = `Prezado(a) Cliente,\n\nIdentificamos quebra de sequência numérica em ${withProblems.length} série(s).\n\nEMPRESA: ${first.razaoSocial}\nCNPJ: ${first.cnpj}\nIE: ${first.ie}\nMÊS: ${first.mesReferencia}\n\n`;
+    let msg = `Prezado(a) Cliente,\n\nIdentificamos quebra de sequência numérica de VENDAS/SAÍDAS em ${withProblems.length} série(s).\n\nEMPRESA: ${first.razaoSocial}\nCNPJ: ${first.cnpj}\nIE: ${first.ie}\nMÊS: ${first.mesReferencia}\n\n`;
     withProblems.forEach((s, i) => {
       msg += `${i + 1}. SÉRIE ${s.serie} - Modelo ${s.modelo}\n`;
       msg += `• Faixa: ${s.min} a ${s.max}\n`;
@@ -798,7 +798,7 @@ export default function App() {
     if (seriesComProblemas.length === 0) return '';
 
     const first = seriesComProblemas[0];
-    let msg = `Prezado(a) Cliente,\n\nIdentificamos quebra de sequência numérica em ${seriesComProblemas.length} série(s).\n\nEMPRESA: ${first.razaoSocial}\nCNPJ: ${first.cnpj}\n\n`;
+    let msg = `Prezado(a) Cliente,\n\nIdentificamos quebra de sequência numérica de VENDAS/SAÍDAS em ${seriesComProblemas.length} série(s).\n\nEMPRESA: ${first.razaoSocial}\nCNPJ: ${first.cnpj}\n\n`;
     
     seriesComProblemas.forEach((s, i) => {
       msg += `${i + 1}. SÉRIE ${s.serie} - Modelo ${s.modelo}\n`;
@@ -860,7 +860,7 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-4xl font-black tracking-tight text-white mb-1">Sequência Fiscal</h1>
-              <p className="text-slate-400 font-medium text-lg">Auditoria de Integridade e Conformidade de XMLs</p>
+              <p className="text-slate-400 font-medium text-lg">Auditoria de Sequência de Vendas e Saídas</p>
             </div>
           </div>
 
@@ -1348,8 +1348,8 @@ export default function App() {
         <div className="hidden print:block p-0">
           <div className="print-header flex justify-between items-end">
             <div>
-              <div className="print-title">Relatório de Auditoria de Sequência Fiscal</div>
-              <div className="text-sm text-slate-500 font-bold mt-1">Auditado em {new Date().toLocaleDateString('pt-BR')} às {new Date().toLocaleTimeString('pt-BR')}</div>
+              <div className="print-title text-slate-900">Relatório de Auditoria de Sequência (Vendas/Saídas)</div>
+              <div className="text-sm text-slate-500 font-bold mt-1 uppercase tracking-widest">Documentos Emitidos pela Empresa</div>
             </div>
             <div className="text-right">
               <div className="font-black text-slate-900 border-2 border-slate-900 px-3 py-1 uppercase text-sm">Cópia de Auditoria</div>
