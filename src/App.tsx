@@ -54,11 +54,20 @@ interface XmlData {
   nNFIni?: number;
   nNFFin?: number;
   fileName: string;
+  sourceName?: string;
   // Relationship data
   emitCnpj?: string;
   emitNome?: string;
   destCnpj?: string;
   destNome?: string;
+}
+
+interface SourceMetadata {
+  name: string;
+  isZip: boolean;
+  totalXmls: number;
+  saidaCount: number;
+  entradaCount: number;
 }
 
 interface SerieAnalysis {
@@ -290,7 +299,7 @@ export default function App() {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [analystName, setAnalystName] = useState('');
-  const [attachedSources, setAttachedSources] = useState<string[]>([]);
+  const [attachedSources, setAttachedSources] = useState<SourceMetadata[]>([]);
   const [processedFileNames, setProcessedFileNames] = useState<Set<string>>(new Set());
   const [entradaCount, setEntradaCount] = useState(0);
   
@@ -347,7 +356,11 @@ export default function App() {
     setIsConfirmed(false);
     
     const fileArray = Array.from(files);
-    const discoveredSources = new Set<string>(attachedSources);
+    
+    // Convert current sources back to a Map for easier updates
+    const sourceMap = new Map<string, SourceMetadata>();
+    attachedSources.forEach(s => sourceMap.set(s.name, s));
+
     const updatedProcessedNames = new Set(processedFileNames);
 
     let finalXmls: XmlData[] = [];
@@ -370,7 +383,15 @@ export default function App() {
         }
 
         if (hasDirectXmls) {
-          discoveredSources.add(containerName);
+          if (!sourceMap.has(containerName)) {
+            sourceMap.set(containerName, {
+              name: containerName,
+              isZip: true,
+              totalXmls: 0,
+              saidaCount: 0,
+              entradaCount: 0
+            });
+          }
         }
 
         for (const name of Object.keys(zip.files)) {
@@ -385,6 +406,7 @@ export default function App() {
             try {
               const xmlText = await entry.async('text');
               const data = parseXML(xmlText, name);
+              data.sourceName = containerName;
               if (data.isCancelamento) results.localCancellations++;
               if (data.tipo === 'inutilizacao') {
                 results.localInuts.push(data);
@@ -429,7 +451,15 @@ export default function App() {
             }
 
             if (hasDirectXmls) {
-              discoveredSources.add(containerName);
+              if (!sourceMap.has(containerName)) {
+                sourceMap.set(containerName, {
+                  name: containerName,
+                  isZip: true,
+                  totalXmls: 0,
+                  saidaCount: 0,
+                  entradaCount: 0
+                });
+              }
             }
 
             const extracted = extractor.extract();
@@ -446,6 +476,7 @@ export default function App() {
                 try {
                   const xmlText = new TextDecoder().decode(file.extraction);
                   const data = parseXML(xmlText, name);
+                  data.sourceName = containerName;
                   if (data.isCancelamento) results.localCancellations++;
                   if (data.tipo === 'inutilizacao') {
                     results.localInuts.push(data);
@@ -498,11 +529,21 @@ export default function App() {
           const nameLower = file.name.toLowerCase();
           if (nameLower.endsWith('.xml')) {
             updatedProcessedNames.add(file.name);
-            discoveredSources.add("Arquivos Individuais");
+            const indSource = "Arquivos Individuais";
+            if (!sourceMap.has(indSource)) {
+              sourceMap.set(indSource, {
+                name: indSource,
+                isZip: false,
+                totalXmls: 0,
+                saidaCount: 0,
+                entradaCount: 0
+              });
+            }
             res.localTotalCount++;
             try {
               const text = await file.text();
               const data = parseXML(text, file.name);
+              data.sourceName = "Arquivos Individuais";
               if (data.isCancelamento) res.localCancellations++;
               if (data.tipo === 'inutilizacao') {
                 res.localInuts.push(data);
@@ -520,8 +561,15 @@ export default function App() {
             const zipData = await file.arrayBuffer();
             await processArchiveRecursively(zipData, res, file.name);
           } else {
-            if (file.webkitRelativePath) {
-              discoveredSources.add(file.webkitRelativePath.split('/')[0]);
+            const sName = file.webkitRelativePath ? file.webkitRelativePath.split('/')[0] : file.name;
+            if (!sourceMap.has(sName)) {
+              sourceMap.set(sName, {
+                name: sName,
+                isZip: false,
+                totalXmls: 0,
+                saidaCount: 0,
+                entradaCount: 0
+              });
             }
             res.localNonXmlCount++;
           }
@@ -553,7 +601,7 @@ export default function App() {
         await new Promise(resolve => setTimeout(resolve, 0));
       }
 
-      setAttachedSources(Array.from(discoveredSources));
+      setAttachedSources(Array.from(sourceMap.values()));
       setProcessedFileNames(updatedProcessedNames);
       setXmlList(prev => [...prev, ...finalXmls]);
       setInutilizacoes(prev => [...prev, ...finalInuts]);
@@ -887,19 +935,67 @@ export default function App() {
                     <div className="p-6 border-t border-slate-100/50">
                       <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Fontes Anexadas</div>
                       <div className="flex flex-wrap gap-2">
-                        {attachedSources.map((source, sIdx) => (
-                          <div 
-                            key={sIdx}
-                            className="flex items-center gap-2 bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg border border-blue-100 text-xs font-bold"
-                          >
-                            {source.toLowerCase().endsWith('.zip') || source.toLowerCase().endsWith('.rar') ? (
-                              <FileText className="w-3 h-3" />
-                            ) : (
-                              <FolderOpen className="w-3 h-3" />
-                            )}
-                            {source}
-                          </div>
-                        ))}
+                        {attachedSources.map((source, sIdx) => {
+                          // Classificar a fonte com base nos XMLs recebidos
+                          const sourceXmls = xmlList.filter(x => x.sourceName === source.name);
+                          
+                          // Identificar o CNPJ da empresa auditada no lote todo
+                          const cnpjCounts: Record<string, number> = {};
+                          xmlList.forEach(x => {
+                            if (x.emitCnpj) cnpjCounts[x.emitCnpj] = (cnpjCounts[x.emitCnpj] || 0) + 1;
+                          });
+                          const topCnpj = Object.entries(cnpjCounts).sort((a,b) => b[1] - a[1])[0]?.[0];
+
+                          let status: 'awaiting' | 'sales' | 'purchases' | 'mixed' = 'awaiting';
+                          if (sourceXmls.length > 0 && topCnpj) {
+                            const hasSaida = sourceXmls.some(x => x.emitCnpj === topCnpj);
+                            const hasEntrada = sourceXmls.some(x => x.destCnpj === topCnpj);
+                            
+                            if (hasSaida && hasEntrada) status = 'mixed';
+                            else if (hasSaida) status = 'sales';
+                            else if (hasEntrada) status = 'purchases';
+                          }
+
+                          return (
+                            <div 
+                              key={sIdx}
+                              className="group flex items-center gap-2 bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-all hover:border-blue-300"
+                            >
+                              {source.isZip ? (
+                                <FileText className="w-3 h-3 text-blue-500" />
+                              ) : (
+                                <FolderOpen className="w-3 h-3 text-blue-500" />
+                              )}
+                              <span className="text-slate-700">{source.name}</span>
+                              <div className="flex items-center gap-1.5 ml-1">
+                                <span className="bg-slate-50 text-slate-400 px-1.5 py-0.5 rounded text-[9px] border border-slate-100">
+                                  {sourceXmls.length} XMLs
+                                </span>
+                                
+                                {status === 'sales' && (
+                                  <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded text-[9px] border border-emerald-100">
+                                    Vendas
+                                  </span>
+                                )}
+                                {status === 'purchases' && (
+                                  <span className="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded text-[9px] border border-amber-100">
+                                    Compras - Ignorada
+                                  </span>
+                                )}
+                                {status === 'mixed' && (
+                                  <span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[9px] border border-blue-100">
+                                    Misto
+                                  </span>
+                                )}
+                                {status === 'awaiting' && (
+                                  <span className="bg-slate-50 text-slate-400 px-1.5 py-0.5 rounded text-[9px] border border-slate-100">
+                                    Pronto
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -1059,13 +1155,6 @@ export default function App() {
                 </select>
                 <div className="flex-1" />
                 
-                {entradaCount > 0 && (
-                  <div className="flex items-center gap-2 bg-amber-50 text-amber-700 px-4 py-2 rounded-xl text-xs font-bold border border-amber-100 shadow-sm animate-in fade-in slide-in-from-right-4 duration-500">
-                    <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
-                    {entradaCount} Notas de Entrada identificadas (filtradas da auditoria)
-                  </div>
-                )}
-
                 {analysis && (
                   <div className="flex flex-col items-end">
                     <button 
