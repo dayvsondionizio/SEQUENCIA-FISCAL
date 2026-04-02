@@ -291,17 +291,29 @@ export default function App() {
     let finalInuts: XmlData[] = [];
     let finalOthers: XmlData[] = [];
 
-    const processZipRecursively = async (zipData: any, results: any) => {
+    const processZipRecursively = async (zipData: any, results: any, containerName: string) => {
       try {
         const zip = await JSZip.loadAsync(zipData);
+        let hasDirectFiles = false;
+        
+        // Scan for files in this ZIP to determine if it should be shown as a source
         for (const name of Object.keys(zip.files)) {
           const entry = zip.files[name];
-          if (entry.dir) {
-            // Track folder names
-            const parts = name.split('/').filter(p => p);
-            if (parts.length > 0) discoveredSources.add(parts[0]);
-            continue;
+          const nameLower = name.toLowerCase();
+          const isArchive = nameLower.endsWith('.zip') || nameLower.endsWith('.rar');
+          if (!entry.dir && !isArchive && !name.includes('/.') && !name.startsWith('__')) {
+            hasDirectFiles = true;
+            break;
           }
+        }
+
+        if (hasDirectFiles) {
+          discoveredSources.add(containerName);
+        }
+
+        for (const name of Object.keys(zip.files)) {
+          const entry = zip.files[name];
+          if (entry.dir) continue;
 
           const nameLower = name.toLowerCase();
           if (nameLower.endsWith('.xml')) {
@@ -326,9 +338,8 @@ export default function App() {
             }
           } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
             const innerZipName = name.split('/').pop() || name;
-            discoveredSources.add(innerZipName);
             const innerZipData = await entry.async('arraybuffer');
-            await processZipRecursively(innerZipData, results);
+            await processZipRecursively(innerZipData, results, innerZipName);
           } else {
             // Check for hidden files
             if (!name.includes('/.') && !name.startsWith('__')) {
@@ -364,6 +375,7 @@ export default function App() {
           const nameLower = file.name.toLowerCase();
           if (nameLower.endsWith('.xml')) {
             updatedProcessedNames.add(file.name);
+            discoveredSources.add("Arquivos Individuais");
             res.localTotalCount++;
             try {
               const text = await file.text();
@@ -382,9 +394,8 @@ export default function App() {
               console.error('Erro ao processar XML:', file.name, e);
             }
           } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
-            discoveredSources.add(file.name);
             const zipData = await file.arrayBuffer();
-            await processZipRecursively(zipData, res);
+            await processZipRecursively(zipData, res, file.name);
           } else {
             if (file.webkitRelativePath) {
               discoveredSources.add(file.webkitRelativePath.split('/')[0]);
@@ -813,20 +824,20 @@ export default function App() {
                     </div>
                   </div>
                   
-                  <div className="flex flex-wrap justify-center gap-3">
+                  <div className="flex flex-col items-center gap-3">
                     <button 
                       onClick={() => fileInputRef.current?.click()}
-                      className="flex items-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-xl font-semibold hover:bg-slate-800 transition-all active:scale-95 text-sm"
+                      className="flex items-center gap-3 px-10 py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all active:scale-95 shadow-xl shadow-slate-200/50"
                     >
-                      <FileText className="w-4 h-4" />
-                      Arquivos Compactados (ZIP/RAR)
+                      <FileText className="w-5 h-5 text-blue-400" />
+                      Anexar Arquivos (ZIP ou XMLs)
                     </button>
                     <button 
                       onClick={() => folderInputRef.current?.click()}
-                      className="flex items-center gap-2 px-6 py-3 bg-white border-2 border-slate-200 text-slate-700 rounded-xl font-semibold hover:border-slate-300 transition-all active:scale-95 text-sm"
+                      className="text-[10px] font-black text-slate-400 hover:text-slate-600 flex items-center gap-1.5 uppercase tracking-widest transition-all px-4 py-1.5 hover:bg-slate-100 rounded-lg"
                     >
-                      <FolderOpen className="w-4 h-4" />
-                      Pasta (XMLs Descompactados)
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      Ou selecionar pasta descompactada
                     </button>
                   </div>
                 </div>
