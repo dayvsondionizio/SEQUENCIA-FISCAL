@@ -291,6 +291,36 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
+  // Helper to traverse file tree (DataTransferItem)
+  const traverseFileTree = async (item: FileSystemEntry, path?: string): Promise<File[]> => {
+    return new Promise((resolve) => {
+      const files: File[] = [];
+      if (item.isFile) {
+        (item as FileSystemFileEntry).file((file) => {
+          resolve([file]);
+        });
+      } else if (item.isDirectory) {
+        const dirReader = (item as FileSystemDirectoryEntry).createReader();
+        const readEntries = () => {
+          dirReader.readEntries(async (entries) => {
+            if (entries.length > 0) {
+              for (const entry of entries) {
+                const innerFiles = await traverseFileTree(entry, (path || '') + item.name + '/');
+                files.push(...innerFiles);
+              }
+              readEntries();
+            } else {
+              resolve(files);
+            }
+          });
+        };
+        readEntries();
+      } else {
+        resolve([]);
+      }
+    });
+  };
+
   const handleFiles = async (files: FileList | File[]) => {
     setIsProcessing(true);
     setIsConfirmed(false);
@@ -865,10 +895,24 @@ export default function App() {
                 )}
                 onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-blue-500', 'bg-blue-50'); }}
                 onDragLeave={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-blue-500', 'bg-blue-50'); }}
-                onDrop={(e) => {
+                onDrop={async (e) => {
                   e.preventDefault();
                   e.currentTarget.classList.remove('border-blue-500', 'bg-blue-50');
-                  handleFiles(e.dataTransfer.files);
+                  
+                  const items = e.dataTransfer.items;
+                  if (items) {
+                    const allFiles: File[] = [];
+                    for (let i = 0; i < items.length; i++) {
+                      const item = items[i].webkitGetAsEntry();
+                      if (item) {
+                        const files = await traverseFileTree(item);
+                        allFiles.push(...files);
+                      }
+                    }
+                    handleFiles(allFiles);
+                  } else {
+                    handleFiles(e.dataTransfer.files);
+                  }
                 }}
               >
                 <div className={cn(
@@ -913,7 +957,7 @@ export default function App() {
                   type="file" 
                   ref={fileInputRef} 
                   multiple 
-                  accept=".xml,.zip" 
+                  accept=".xml,.zip,.rar" 
                   className="hidden" 
                   onChange={(e) => e.target.files && handleFiles(e.target.files)}
                 />
