@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import JSZip from 'jszip';
 import { createExtractorFromData } from 'node-unrar-js';
+// @ts-ignore
+import unrarWasmUrl from 'node-unrar-js/dist/js/unrar.wasm?url';
 import { 
   FileText, 
   FolderOpen, 
@@ -277,6 +279,15 @@ export default function App() {
   // Filters
   const [filterModelo, setFilterModelo] = useState('Todos');
 
+  const [wasmBinary, setWasmBinary] = useState<ArrayBuffer | null>(null);
+
+  useEffect(() => {
+    fetch(unrarWasmUrl)
+      .then(res => res.arrayBuffer())
+      .then(setWasmBinary)
+      .catch(err => console.error('Erro ao carregar motor RAR:', err));
+  }, []);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
@@ -350,7 +361,11 @@ export default function App() {
         // Not a ZIP, try as RAR
         if (!isZip) {
           try {
-            const extractor = await createExtractorFromData({ data: archiveData });
+            const options: any = { data: archiveData };
+            if (wasmBinary) {
+              options.wasmBinary = wasmBinary;
+            }
+            const extractor = await createExtractorFromData(options);
             const list = extractor.getFileList();
             const fileHeaders = [...list.fileHeaders];
             
