@@ -267,6 +267,8 @@ export default function App() {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [analystName, setAnalystName] = useState('');
+  const [attachedSources, setAttachedSources] = useState<string[]>([]);
+  const [processedFileNames, setProcessedFileNames] = useState<Set<string>>(new Set());
   
   // Editable messages state
   const [consolidatedMessage, setConsolidatedMessage] = useState('');
@@ -282,21 +284,49 @@ export default function App() {
     setIsConfirmed(false);
     
     const fileArray = Array.from(files);
+    
+    // Extract potential source name (ZIP file or root folder)
+    let sourceName = "";
+    if (fileArray.length > 0) {
+      const firstFile = fileArray[0];
+      if (firstFile.name.toLowerCase().endsWith('.zip')) {
+        sourceName = firstFile.name;
+      } else if (firstFile.webkitRelativePath) {
+        sourceName = firstFile.webkitRelativePath.split('/')[0];
+      } else if (fileArray.length > 1) {
+        sourceName = "Lote de Arquivos";
+      } else {
+        sourceName = firstFile.name;
+      }
+    }
+
+    // Check if this source has already been attached
+    if (sourceName && attachedSources.includes(sourceName) && !sourceName.includes("Lote")) {
+      setIsProcessing(false);
+      return;
+    }
+
+    if (sourceName && !attachedSources.includes(sourceName)) {
+      setAttachedSources(prev => [...prev, sourceName]);
+    }
+
     setProcessingProgress({ current: 0, total: fileArray.length });
     
-    // Process in batches to avoid blocking the main thread and saturating memory
     const BATCH_SIZE = 50;
     let finalXmls: XmlData[] = [];
     let finalInuts: XmlData[] = [];
     let finalOthers: XmlData[] = [];
-    let totalXmlsCount = 0;
-    let otherXmlsCount = 0;
-    let cancellationsCount = 0;
+    let updatedProcessedNames = new Set(processedFileNames);
 
     try {
       for (let i = 0; i < fileArray.length; i += BATCH_SIZE) {
         const batch = fileArray.slice(i, i + BATCH_SIZE);
         const results = await Promise.all(batch.map(async (file) => {
+          // Check for duplicate individual files
+          if (updatedProcessedNames.has(file.name)) {
+            return null;
+          }
+
           let localXmls: XmlData[] = [];
           let localInuts: XmlData[] = [];
           let localOthers: XmlData[] = [];
@@ -307,6 +337,7 @@ export default function App() {
           let localNonXmlCount = 0;
 
           if (file.name.toLowerCase().endsWith('.xml')) {
+            updatedProcessedNames.add(file.name);
             localTotalCount++;
             try {
               const text = await file.text();
@@ -332,9 +363,15 @@ export default function App() {
               );
               
               const zipResults = await Promise.all(xmlFiles.map(async (xmlPath) => {
+                // Check for duplicates inside ZIP
+                if (updatedProcessedNames.has(xmlPath)) {
+                  return null;
+                }
+                
                 try {
                   const xmlText = await zip.files[xmlPath].async('text');
                   const data = parseXML(xmlText, xmlPath);
+                  updatedProcessedNames.add(xmlPath);
                   return { data, path: xmlPath };
                 } catch (e) {
                   console.error('Erro ao processar XML do ZIP:', xmlPath, e);
@@ -375,16 +412,14 @@ export default function App() {
         }));
 
         results.forEach(res => {
+          if (!res) return;
           finalXmls.push(...res.localXmls);
           finalInuts.push(...res.localInuts);
           finalOthers.push(...res.localOthers);
-          totalXmlsCount += res.localTotalCount;
-          cancellationsCount += res.localCancellations;
           
-          // Update cumulative batch stats incrementally
           setStats(prev => ({
             ...prev,
-            totalFiles: prev.totalFiles + 1, // Correct incremental update
+            totalFiles: prev.totalFiles + 1,
             validNf: prev.validNf + res.localValidNfCount,
             inutilizations: prev.inutilizations + res.localInutsCount,
             cancellations: prev.cancellations + res.localCancellations,
@@ -398,10 +433,10 @@ export default function App() {
           total: fileArray.length 
         });
         
-        // Yield to the main thread
         await new Promise(resolve => setTimeout(resolve, 0));
       }
 
+      setProcessedFileNames(updatedProcessedNames);
       setXmlList(prev => [...prev, ...finalXmls]);
       setInutilizacoes(prev => [...prev, ...finalInuts]);
       setOtherXmlsList(prev => [...prev, ...finalOthers]);
@@ -552,6 +587,8 @@ export default function App() {
     setExpandedIdx(null);
     setIsConfirmed(false);
     setConsolidatedMessage('');
+    setAttachedSources([]);
+    setProcessedFileNames(new Set());
   };
 
   const filteredAnalysis = useMemo(() => {
@@ -706,6 +743,27 @@ export default function App() {
                       <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Não-XML</div>
                     </div>
                   </div>
+
+                  {attachedSources.length > 0 && (
+                    <div className="p-6 border-t border-slate-100/50">
+                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Fontes Anexadas</div>
+                      <div className="flex flex-wrap gap-2">
+                        {attachedSources.map((source, sIdx) => (
+                          <div 
+                            key={sIdx}
+                            className="flex items-center gap-2 bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg border border-blue-100 text-xs font-bold"
+                          >
+                            {source.toLowerCase().endsWith('.zip') || source.toLowerCase().endsWith('.rar') ? (
+                              <FileText className="w-3 h-3" />
+                            ) : (
+                              <FolderOpen className="w-3 h-3" />
+                            )}
+                            {source}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
 
 
