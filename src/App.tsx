@@ -367,141 +367,139 @@ export default function App() {
     let finalInuts: XmlData[] = [];
     let finalOthers: XmlData[] = [];
 
-    const processArchiveRecursively = async (archiveData: ArrayBuffer, results: any, containerName: string) => {
-      let isZip = false;
-      try {
-        const zip = await JSZip.loadAsync(archiveData);
-        isZip = true;
-        let hasDirectXmls = false;
-        
-        for (const name of Object.keys(zip.files)) {
-          const entry = zip.files[name];
-          if (!entry.dir && name.toLowerCase().endsWith('.xml')) {
-            hasDirectXmls = true;
-            break;
-          }
-        }
+        const checkMagicBytes = (buffer: ArrayBuffer | Uint8Array) => {
+      const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+      if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04) return 'zip';
+      if (bytes.length >= 6 && bytes[0] === 0x52 && bytes[1] === 0x61 && bytes[2] === 0x72 && bytes[3] === 0x21 && bytes[4] === 0x1A && bytes[5] === 0x07) return 'rar';
+      return 'unknown';
+    };
 
-        if (hasDirectXmls) {
-          if (!sourceMap.has(containerName)) {
-            sourceMap.set(containerName, {
-              name: containerName,
-              isZip: true,
-              totalXmls: 0,
-              saidaCount: 0,
-              entradaCount: 0
-            });
-          }
-        }
+    const processArchiveRecursively = async (archiveData: ArrayBuffer | Uint8Array, results: any, containerName: string, archivePath: string = '') => {
+      const type = checkMagicBytes(archiveData);
+      const currentPath = archivePath ? `${archivePath}/${containerName}` : containerName;
 
-        for (const name of Object.keys(zip.files)) {
-          const entry = zip.files[name];
-          if (entry.dir) continue;
-
-          const nameLower = name.toLowerCase();
-          if (nameLower.endsWith('.xml')) {
-            if (updatedProcessedNames.has(name)) continue;
-            updatedProcessedNames.add(name);
-            results.localTotalCount++;
-            try {
-              const xmlText = await entry.async('text');
-              const data = parseXML(xmlText, name);
-              data.sourceName = containerName;
-              if (data.isCancelamento) results.localCancellations++;
-              if (data.tipo === 'inutilizacao') {
-                results.localInuts.push(data);
-                results.localInutsCount++;
-              } else if (data.tipo === 'nfe') {
-                results.localXmls.push(data);
-                results.localValidNfCount++;
-              } else {
-                results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
-              }
-            } catch (e) {
-              console.error('Erro ao processar XML do ZIP:', name, e);
-            }
-          } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
-            const innerArchiveName = name.split('/').pop() || name;
-            const innerArchiveData = await entry.async('arraybuffer');
-            await processArchiveRecursively(innerArchiveData, results, innerArchiveName);
-          } else {
-            if (!name.includes('/.') && !name.startsWith('__')) {
-              results.localNonXmlCount++;
+      if (type === 'zip' || type === 'unknown') {
+        try {
+          const zip = await JSZip.loadAsync(archiveData);
+          let hasDirectXmls = false;
+          
+          for (const name of Object.keys(zip.files)) {
+            const entry = zip.files[name];
+            if (!entry.dir && name.toLowerCase().endsWith('.xml')) {
+              hasDirectXmls = true; break;
             }
           }
-        }
-      } catch (e) {
-        // Not a ZIP, try as RAR
-        if (!isZip) {
-          try {
-            const options: any = { data: archiveData };
-            if (wasmBinary) {
-              options.wasmBinary = wasmBinary;
-            }
-            const extractor = await createExtractorFromData(options);
-            const list = extractor.getFileList();
-            const fileHeaders = [...list.fileHeaders];
+
+          if (hasDirectXmls && !sourceMap.has(containerName)) {
+            sourceMap.set(containerName, { name: containerName, isZip: true, totalXmls: 0, saidaCount: 0, entradaCount: 0 });
+          }
+
+          for (const name of Object.keys(zip.files)) {
+            const entry = zip.files[name];
+            if (entry.dir) continue;
+
+            const nameLower = name.toLowerCase();
+            const uniqueName = `${currentPath}::${name}`;
             
-            let hasDirectXmls = false;
-            for (const header of fileHeaders) {
-              if (header.name.toLowerCase().endsWith('.xml')) {
-                hasDirectXmls = true;
-                break;
-              }
-            }
-
-            if (hasDirectXmls) {
-              if (!sourceMap.has(containerName)) {
-                sourceMap.set(containerName, {
-                  name: containerName,
-                  isZip: true,
-                  totalXmls: 0,
-                  saidaCount: 0,
-                  entradaCount: 0
-                });
-              }
-            }
-
-            const extracted = extractor.extract();
-            for (const file of extracted.files) {
-              if (file.fileHeader.flags.directory) continue;
-              
-              const name = file.fileHeader.name;
-              const nameLower = name.toLowerCase();
-              
-              if (nameLower.endsWith('.xml')) {
-                if (updatedProcessedNames.has(name)) continue;
-                updatedProcessedNames.add(name);
-                results.localTotalCount++;
-                try {
-                  const xmlText = new TextDecoder().decode(file.extraction);
-                  const data = parseXML(xmlText, name);
-                  data.sourceName = containerName;
-                  if (data.isCancelamento) results.localCancellations++;
-                  if (data.tipo === 'inutilizacao') {
-                    results.localInuts.push(data);
-                    results.localInutsCount++;
-                  } else if (data.tipo === 'nfe') {
-                    results.localXmls.push(data);
-                    results.localValidNfCount++;
-                  } else {
-                    results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
-                  }
-                } catch (e) {
-                  console.error('Erro ao processar XML do RAR:', name, e);
+            if (nameLower.endsWith('.xml')) {
+              if (updatedProcessedNames.has(uniqueName)) continue;
+              updatedProcessedNames.add(uniqueName);
+              results.localTotalCount++;
+              try {
+                const xmlText = await entry.async('text');
+                const data = parseXML(xmlText, name);
+                data.sourceName = containerName;
+                if (data.isCancelamento) results.localCancellations++;
+                if (data.tipo === 'inutilizacao') {
+                  results.localInuts.push(data); results.localInutsCount++;
+                } else if (data.tipo === 'nfe') {
+                  results.localXmls.push(data); results.localValidNfCount++;
+                } else {
+                  results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
                 }
-              } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
-                const innerArchiveName = name.split('/').pop() || name;
-                await processArchiveRecursively(file.extraction.buffer as ArrayBuffer, results, innerArchiveName);
-              } else {
-                if (!name.includes('/.') && !name.startsWith('__')) {
-                  results.localNonXmlCount++;
-                }
+              } catch (e) {
+                console.error('Erro ao processar XML do ZIP:', name, e);
+              }
+            } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
+              const innerArchiveName = name.split('/').pop() || name;
+              const innerArchiveData = await entry.async('arraybuffer');
+              await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
+            } else {
+              if (!name.includes('/.') && !name.startsWith('__')) {
+                results.localNonXmlCount++;
               }
             }
-          } catch (rarErr) {
-            console.error('Erro ao processar RAR ou formato desconhecido:', containerName, rarErr);
           }
+          if (type === 'zip') return;
+        } catch (e) {
+          if (type === 'zip') {
+            console.error('Erro ao ler ZIP garantido:', containerName, e);
+            return;
+          }
+        }
+      }
+
+      if (type === 'rar' || type === 'unknown') {
+        try {
+          const bufDesc = archiveData instanceof Uint8Array 
+              ? archiveData.buffer.slice(archiveData.byteOffset, archiveData.byteOffset + archiveData.byteLength)
+              : archiveData;
+          const options: any = { data: bufDesc };
+          if (wasmBinary) options.wasmBinary = wasmBinary;
+          const extractor = await createExtractorFromData(options);
+          
+          let hasDirectXmls = false;
+          const list = extractor.getFileList();
+          for (const header of list.fileHeaders) {
+              if (header.name.toLowerCase().endsWith('.xml')) {
+                  hasDirectXmls = true; break;
+              }
+          }
+
+          if (hasDirectXmls && !sourceMap.has(containerName)) {
+             sourceMap.set(containerName, { name: containerName, isZip: true, totalXmls: 0, saidaCount: 0, entradaCount: 0 });
+          }
+
+          const extracted = extractor.extract();
+          for (const file of extracted.files) {
+            if (file.fileHeader.flags.directory) continue;
+            
+            const name = file.fileHeader.name;
+            const nameLower = name.toLowerCase();
+            const uniqueName = `${currentPath}::${name}`;
+            
+            if (nameLower.endsWith('.xml')) {
+              if (updatedProcessedNames.has(uniqueName)) continue;
+              updatedProcessedNames.add(uniqueName);
+              results.localTotalCount++;
+              try {
+                const xmlText = new TextDecoder().decode(file.extraction);
+                const data = parseXML(xmlText, name);
+                data.sourceName = containerName;
+                if (data.isCancelamento) results.localCancellations++;
+                if (data.tipo === 'inutilizacao') {
+                  results.localInuts.push(data); results.localInutsCount++;
+                } else if (data.tipo === 'nfe') {
+                  results.localXmls.push(data); results.localValidNfCount++;
+                } else {
+                  results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
+                }
+              } catch (e) {
+                   console.error('Erro ao processar XML do RAR:', name, e);
+              }
+            } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
+              const innerArchiveName = name.split('/').pop() || name;
+              const extraction = file.extraction;
+              const innerData = extraction.buffer.slice(extraction.byteOffset, extraction.byteOffset + extraction.byteLength);
+              await processArchiveRecursively(innerData, results, innerArchiveName, currentPath);
+            } else {
+              if (!name.includes('/.') && !name.startsWith('__')) {
+                results.localNonXmlCount++;
+              }
+            }
+          }
+        } catch (rarErr) {
+          console.error('Erro ao processar RAR ou formato desconhecido:', containerName, rarErr);
         }
       }
     };
@@ -513,7 +511,8 @@ export default function App() {
       for (let i = 0; i < fileArray.length; i += BATCH_SIZE) {
         const batch = fileArray.slice(i, i + BATCH_SIZE);
         const results = await Promise.all(batch.map(async (file) => {
-          if (updatedProcessedNames.has(file.name)) return null;
+          const fileUniqueIdentifier = file.webkitRelativePath || file.name;
+          if (updatedProcessedNames.has(fileUniqueIdentifier)) return null;
 
           let res = { 
             localXmls: [] as XmlData[], 
@@ -528,7 +527,7 @@ export default function App() {
 
           const nameLower = file.name.toLowerCase();
           if (nameLower.endsWith('.xml')) {
-            updatedProcessedNames.add(file.name);
+            updatedProcessedNames.add(fileUniqueIdentifier);
             const indSource = "Arquivos Individuais";
             if (!sourceMap.has(indSource)) {
               sourceMap.set(indSource, {
