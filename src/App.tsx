@@ -399,53 +399,38 @@ export default function App() {
     };
 
 
+    
     const processArchiveRecursively = async (archiveData: ArrayBuffer | Uint8Array, results: any, containerName: string, archivePath: string = '') => {
       const type = checkMagicBytes(archiveData);
       const currentPath = archivePath ? `${archivePath}/${containerName}` : containerName;
       
-      if (type === 'rar') {
-        setExtractionStatus(`Extraindo RAR5: ${containerName}...`);
-      }
+      if (type === 'rar') setExtractionStatus(`Extraindo RAR5: ${containerName}...`);
+
+      if (type === 'zip') {
         try {
           const zip = await JSZip.loadAsync(archiveData);
           let hasDirectXmls = false;
-          
           for (const name of Object.keys(zip.files)) {
             const entry = zip.files[name];
             const baseName = name.split('/').pop() || name;
-            const isXml = name.toLowerCase().endsWith('.xml') || /^[0-9]{44}$/.test(baseName);
-            if (!entry.dir && isXml) {
+            if (!entry.dir && (name.toLowerCase().endsWith('.xml') || /^[0-9]{44}$/.test(baseName))) {
               hasDirectXmls = true; break;
             }
           }
-
           if (hasDirectXmls && !sourceMap.has(containerName)) {
             sourceMap.set(containerName, { name: containerName, isZip: true, totalXmls: 0, saidaCount: 0, entradaCount: 0 });
           }
-
           for (const name of Object.keys(zip.files)) {
             const entry = zip.files[name];
             if (entry.dir) continue;
-            
-            const nameLower = name.toLowerCase();
             const uniqueName = `${currentPath}::${name}`;
-            
-            const isArchive = nameLower.endsWith('.zip') || nameLower.endsWith('.rar');
-            
-            if (!isArchive) {
+            if (!name.toLowerCase().endsWith('.zip') && !name.toLowerCase().endsWith('.rar')) {
               if (updatedProcessedNames.has(uniqueName)) continue;
-              
               try {
-                // Get entry content
                 const xmlText = await entry.async('text');
-                if (!xmlText) continue;
-
                 const looksLikeXml = xmlText.trim().startsWith('<');
-                // Regex for 44 digits chave de acesso in the filename
-                const baseName = name.split(/[/\\]/).pop() || "";
-                const isPotentialXml = /^[0-9]{44}$/.test(baseName) || nameLower.endsWith('.xml');
-                
-                if (looksLikeXml || isPotentialXml) {
+                const baseName = name.split(/[/\]/).pop() || "";
+                if (looksLikeXml || /^[0-9]{44}$/.test(baseName) || name.toLowerCase().endsWith('.xml')) {
                   const data = parseXML(xmlText, name);
                   if (data.tipo !== 'outro') {
                     updatedProcessedNames.add(uniqueName);
@@ -459,164 +444,90 @@ export default function App() {
                     } else {
                       results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
                     }
-                  } else {
-                    results.localNonXmlCount++;
-                  }
-                } else {
-                   // Se não parece XML e não tem nome de chave, conta como não-XML se não for pasta
-                   if (!name.endsWith('/')) results.localNonXmlCount++;
-                }
-              } catch (e) {
-                console.error('Erro ao processar arquivo do ZIP:', name, e);
-                results.localNonXmlCount++;
-              }
+                  } else { results.localNonXmlCount++; }
+                } else { results.localNonXmlCount++; }
+              } catch (e) { results.localNonXmlCount++; }
             } else {
-              const innerArchiveName = name.split(/[/\\]/).pop() || name;
-              if (innerArchiveName.endsWith('.zip') || innerArchiveName.endsWith('.rar')) {
-                const innerArchiveData = await entry.async('uint8array');
-                await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
-              }
+              const innerArchiveName = name.split(/[/\]/).pop() || name;
+              const innerArchiveData = await entry.async('uint8array');
+              await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
             }
           }
-          if (type === 'zip') return;
-        } catch (e) {
-          if (type === 'zip') {
-            console.error('Erro ao ler ZIP garantido:', containerName, e);
-            return;
-          }
-        }
+          return;
+        } catch (e) { console.error('Erro ZIP:', e); return; }
+      }
 
       if (type === 'rar' || type === 'unknown') {
+        // TENTATIVA 1: LibArchive.js com Timeout
         try {
-          // TENTATIVA 1: LibArchive.js (Mais robusto para RAR5/RAR6)
-          try {
-            // @ts-ignore
-            if (typeof Archive === 'undefined') {
-              const script = document.createElement('script');
-              script.src = 'https://cdn.jsdelivr.net/npm/libarchive.js/dist/libarchive.js';
-              document.head.appendChild(script);
-              await new Promise(r => script.onload = r);
-              // @ts-ignore
-              Archive.init({ workerUrl: 'https://unpkg.com/libarchive.js/dist/worker-bundle.js' });
-            }
-            
-            setExtractionStatus(`Extraindo RAR5: ${containerName}... (Análise Profunda)`);
-            
-            const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
-            const blob = new Blob([uint8]);
-            // @ts-ignore
-            const archive = await Archive.open(blob);
-            const files = await archive.extractFiles();
-            
-            let hasXmls = false;
-            for (const [path, fileData] of Object.entries(files)) {
-                const name = path;
-                const isArchive = name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar');
-                if (isArchive) {
-                    const buffer = await (fileData as any).arrayBuffer();
-                    await processArchiveRecursively(new Uint8Array(buffer), results, name, currentPath);
-                } else {
-                    const xmlText = await (fileData as any).text();
-                    const looksLikeXml = xmlText.trim().startsWith('<');
-                    const baseName = name.split(/[/\\]/).pop() || "";
-                    const isPotentialXml = /^[0-9]{44}$/.test(baseName) || name.toLowerCase().endsWith('.xml');
-                    
-                    if (looksLikeXml || isPotentialXml) {
-                        const data = parseXML(xmlText, name);
-                        if (data.tipo !== 'outro') {
-                            hasXmls = true;
-                            results.localTotalCount++;
-                            data.sourceName = containerName;
-                            if (data.isCancelamento) results.localCancellations++;
-                            if (data.tipo === 'inutilizacao') {
-                                results.localInuts.push(data); results.localInutsCount++;
-                            } else if (data.tipo === 'nfe') {
-                                results.localXmls.push(data); results.localValidNfCount++;
-                            } else {
-                                results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
-                            }
-                        } else {
-                            results.localNonXmlCount++;
-                        }
-                    } else {
-                        if (!name.endsWith('/')) results.localNonXmlCount++;
-                    }
-                }
-            }
-            if (hasXmls && !sourceMap.has(containerName)) {
-                sourceMap.set(containerName, { name: containerName, isZip: true, totalXmls: 0, saidaCount: 0, entradaCount: 0 });
-            }
-            setExtractionStatus(null);
-            return; // Sucesso com LibArchive
-          } catch (libErr) {
-            console.warn('LibArchive falhou, tentando node-unrar-js...', libErr);
+          if (typeof (window as any).Archive === 'undefined') {
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/libarchive.js/dist/libarchive.js';
+            document.head.appendChild(script);
+            await new Promise(r => script.onload = r);
+            (window as any).Archive.init({ workerUrl: 'https://unpkg.com/libarchive.js/dist/worker-bundle.js' });
           }
-
-          // TENTATIVA 2: node-unrar-js (Fallback clássico)
           const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
-          
-          // Criamos um buffer totalmente novo e isolado, com padding
-          const padding = 1024 * 1024; // 1MB de segurança
-          const cleanBuffer = new ArrayBuffer(uint8.length + padding);
-          const view = new Uint8Array(cleanBuffer);
-          view.set(uint8);
-          
-          let currentWasm = wasmBinary;
-          if (!currentWasm) {
-            currentWasm = await loadWasm();
+          const archive = await Promise.race([
+            (window as any).Archive.open(new Blob([uint8])),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
+          ]) as any;
+          const entries = await archive.getEntries();
+          let hasXmls = false;
+          for (const entry of entries) {
+            const name = entry.getPath();
+            if (entry.isFolder()) continue;
+            const fileData = await entry.extract();
+            if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
+              await processArchiveRecursively(new Uint8Array(await fileData.arrayBuffer()), results, name, currentPath);
+            } else {
+              const xmlText = await fileData.text();
+              const looksLikeXml = xmlText.trim().startsWith('<');
+              const baseName = name.split(/[/\]/).pop() || "";
+              if (looksLikeXml || /^[0-9]{44}$/.test(baseName) || name.toLowerCase().endsWith('.xml')) {
+                const data = parseXML(xmlText, name);
+                if (data.tipo !== 'outro') {
+                  hasXmls = true; results.localTotalCount++;
+                  data.sourceName = containerName;
+                  if (data.isCancelamento) results.localCancellations++;
+                  if (data.tipo === 'inutilizacao') {
+                    results.localInuts.push(data); results.localInutsCount++;
+                  } else if (data.tipo === 'nfe') {
+                    results.localXmls.push(data); results.localValidNfCount++;
+                  } else {
+                    results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
+                  }
+                } else { results.localNonXmlCount++; }
+              } else { results.localNonXmlCount++; }
+            }
           }
-
-          if (!currentWasm) {
-             throw new Error('Motor de extração RAR não carregado (verifique sua conexão)');
+          if (hasXmls && !sourceMap.has(containerName)) {
+            sourceMap.set(containerName, { name: containerName, isZip: true, totalXmls: 0, saidaCount: 0, entradaCount: 0 });
           }
+          setExtractionStatus(null);
+          return;
+        } catch (libErr) { console.warn('LibArchive falhou, tentando node-unrar-js...', libErr); }
 
-          const options: any = { 
-            data: view, // Passando o Uint8Array isolado
-            wasmBinary: currentWasm
-          };
-          const extractor = await createExtractorFromData(options);
-          
-          let hasDirectXmls = false;
-          const list = extractor.getFileList();
-          for (const header of list.fileHeaders) {
-              const baseName = header.name.split('/').pop() || header.name;
-              const isXml = header.name.toLowerCase().endsWith('.xml') || /^[0-9]{44}$/.test(baseName);
-              if (isXml) {
-                  hasDirectXmls = true; break;
-              }
-          }
-
-          if (hasDirectXmls && !sourceMap.has(containerName)) {
-             sourceMap.set(containerName, { name: containerName, isZip: true, totalXmls: 0, saidaCount: 0, entradaCount: 0 });
-          }
-
-          const extracted = extractor.extract();
-          for (const file of extracted.files) {
-            // Se tiver conteúdo (extraction.length > 0), nós processamos, ignorando se a flag diz ser diretório
-            if (!file.extraction || file.extraction.length === 0) continue;
-
-            const name = file.fileHeader.name;
-            const nameLower = name.toLowerCase();
-            const uniqueName = `${currentPath}::${name}`;
-            
-            const isArchive = nameLower.endsWith('.zip') || nameLower.endsWith('.rar');
-
-            if (!isArchive) {
-              if (updatedProcessedNames.has(uniqueName)) continue;
-              
-              try {
+        // TENTATIVA 2: node-unrar-js
+        try {
+          const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
+          const cleanBuffer = new ArrayBuffer(uint8.length + 1024*1024);
+          new Uint8Array(cleanBuffer).set(uint8);
+          let currentWasm = wasmBinary || await loadWasm();
+          if (currentWasm) {
+            const extractor = await createExtractorFromData({ data: new Uint8Array(cleanBuffer), wasmBinary: currentWasm });
+            const extracted = extractor.extract();
+            for (const file of extracted.files) {
+              if (!file.extraction || file.extraction.length === 0) continue;
+              const name = file.fileHeader.name;
+              if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
+                await processArchiveRecursively(file.extraction, results, name, currentPath);
+              } else {
                 const xmlText = new TextDecoder().decode(file.extraction);
-                const looksLikeXml = xmlText.trim().startsWith('<');
-                
-                const baseName = name.split(/[/\\]/).pop() || "";
-                const isPotentialXml = /^[0-9]{44}$/.test(baseName) || nameLower.endsWith('.xml');
-
-                if (looksLikeXml || isPotentialXml) {
+                if (xmlText.trim().startsWith('<') || name.toLowerCase().endsWith('.xml')) {
                   const data = parseXML(xmlText, name);
                   if (data.tipo !== 'outro') {
-                    updatedProcessedNames.add(uniqueName);
-                    results.localTotalCount++;
-                    data.sourceName = containerName;
+                    results.localTotalCount++; data.sourceName = containerName;
                     if (data.isCancelamento) results.localCancellations++;
                     if (data.tipo === 'inutilizacao') {
                       results.localInuts.push(data); results.localInutsCount++;
@@ -625,38 +536,13 @@ export default function App() {
                     } else {
                       results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
                     }
-                  } else {
-                    results.localNonXmlCount++;
-                  }
-                } else {
-                  results.localNonXmlCount++;
-                }
-              } catch (e) {
-                   console.error('Erro ao processar arquivo do RAR:', name, e);
-                   results.localNonXmlCount++;
+                  } else { results.localNonXmlCount++; }
+                } else { results.localNonXmlCount++; }
               }
-            } else {
-              const innerArchiveName = name.split(/[/\\]/).pop() || name;
-              const extraction = file.extraction;
-              const innerData = extraction.buffer.slice(extraction.byteOffset, extraction.byteOffset + extraction.byteLength);
-              await processArchiveRecursively(innerData, results, innerArchiveName, currentPath);
             }
           }
-        } catch (rarErr: any) {
-          console.error('Erro ao processar RAR:', containerName, rarErr);
-          
-          // Pegar os primeiros bytes para diagnóstico de DNA
-          const bytes = new Uint8Array(archiveData.slice(0, 10));
-          const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
-          
-          const errorDetail = rarErr?.message || rarErr?.toString() || 'Erro desconhecido';
-          if (sourceMap.has(containerName)) {
-            const src = sourceMap.get(containerName)!;
-            (src as any).error = true;
-            (src as any).errorMsg = `Erro RAR: ${errorDetail} (DNA: ${hex})`;
-            setAttachedSources(Array.from(sourceMap.values()));
-          }
-        }
+        } catch (rarErr) { console.error('Erro RAR final:', rarErr); }
+        setExtractionStatus(null);
       }
     };
 
