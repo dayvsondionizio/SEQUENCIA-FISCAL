@@ -7,7 +7,8 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import JSZip from 'jszip';
 import { createExtractorFromData } from 'node-unrar-js';
 // @ts-ignore
-import unrarWasmUrl from 'node-unrar-js/dist/js/unrar.wasm?url';
+// Usando CDN para garantir que o motor WASM seja carregado corretamente em qualquer ambiente
+const unrarWasmUrl = 'https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/dist/js/unrar.wasm';
 import { 
   FileText, 
   FolderOpen, 
@@ -473,15 +474,16 @@ export default function App() {
 
       if (type === 'rar' || type === 'unknown') {
         try {
-          // Garante que temos um Uint8Array para compatibilidade máxima
-          const uint8Data = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
+          // Garante uma cópia limpa da memória para evitar erro de leitura (File read error)
+          const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
+          const cleanBuffer = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength);
           
           let currentWasm = wasmBinary;
           if (!currentWasm) {
             currentWasm = await loadWasm();
           }
 
-          const options: any = { data: uint8Data };
+          const options: any = { data: cleanBuffer };
           if (currentWasm) options.wasmBinary = currentWasm;
           const extractor = await createExtractorFromData(options);
           
