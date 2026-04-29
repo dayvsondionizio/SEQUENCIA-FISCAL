@@ -469,9 +469,9 @@ export default function App() {
             } else {
               const innerArchiveName = name.split(/[/\\]/).pop() || name;
               if (innerArchiveName.endsWith('.zip') || innerArchiveName.endsWith('.rar')) {
-               // Usando uint8array para maior estabilidade na extração de sub-arquivos
-               const innerArchiveData = await entry.async('uint8array');
-               await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
+                const innerArchiveData = await entry.async('uint8array');
+                await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
+              }
             }
           }
           if (type === 'zip') return;
