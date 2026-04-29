@@ -474,9 +474,9 @@ export default function App() {
 
       if (type === 'rar' || type === 'unknown') {
         try {
-          // Garante uma cópia limpa da memória para evitar erro de leitura (File read error)
+          // Garante uma cópia de memória isolada e alinhada para o motor WASM
           const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
-          const cleanBuffer = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength);
+          const cleanBuffer = uint8.slice(0).buffer;
           
           let currentWasm = wasmBinary;
           if (!currentWasm) {
