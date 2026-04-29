@@ -317,15 +317,24 @@ export default function App() {
 
   const loadWasm = async () => {
     if (wasmBinary) return wasmBinary;
-    try {
-      const res = await fetch(unrarWasmUrl);
-      const arrayBuffer = await res.arrayBuffer();
-      setWasmBinary(arrayBuffer);
-      return arrayBuffer;
-    } catch (err) {
-      console.error('Erro ao carregar motor RAR:', err);
-      return null;
+    const sources = [
+      unrarWasmUrl,
+      'https://unpkg.com/node-unrar-js@2.0.2/dist/js/unrar.wasm'
+    ];
+    
+    for (const url of sources) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const arrayBuffer = await res.arrayBuffer();
+        if (arrayBuffer.byteLength < 10000) continue; // Muito pequeno para ser o WASM
+        setWasmBinary(arrayBuffer);
+        return arrayBuffer;
+      } catch (err) {
+        console.error(`Erro ao carregar motor RAR de ${url}:`, err);
+      }
     }
+    return null;
   };
 
   useEffect(() => {
@@ -474,17 +483,24 @@ export default function App() {
 
       if (type === 'rar' || type === 'unknown') {
         try {
-          // Garante uma cópia de memória isolada e alinhada para o motor WASM
+          // Alinhamento rigoroso de memória para RAR5
           const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
-          const cleanBuffer = uint8.slice(0).buffer;
+          const cleanBuffer = new Uint8Array(uint8.length);
+          cleanBuffer.set(uint8);
           
           let currentWasm = wasmBinary;
           if (!currentWasm) {
             currentWasm = await loadWasm();
           }
 
-          const options: any = { data: cleanBuffer };
-          if (currentWasm) options.wasmBinary = currentWasm;
+          if (!currentWasm) {
+             throw new Error('Motor de extração RAR não carregado (verifique sua conexão)');
+          }
+
+          const options: any = { 
+            data: cleanBuffer.buffer,
+            wasmBinary: currentWasm
+          };
           const extractor = await createExtractorFromData(options);
           
           let hasDirectXmls = false;
