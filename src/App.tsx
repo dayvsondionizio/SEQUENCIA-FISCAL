@@ -402,40 +402,47 @@ export default function App() {
           for (const name of Object.keys(zip.files)) {
             const entry = zip.files[name];
             if (entry.dir) continue;
-
+            
             const nameLower = name.toLowerCase();
             const uniqueName = `${currentPath}::${name}`;
             
-            const baseName = name.split('/').pop() || name;
-            const isPotentialXml = nameLower.endsWith('.xml') || /^[0-9]{44}$/.test(baseName);
+            // Deep Scan: Check filename OR treat as potential XML if size is reasonable
+            const isArchive = nameLower.endsWith('.zip') || nameLower.endsWith('.rar');
+            const isPotentialXml = !isArchive && (nameLower.endsWith('.xml') || /^[0-9]{44}$/.test(name.split(/[/\\]/).pop() || ""));
 
-            if (isPotentialXml) {
+            if (!isArchive) {
               if (updatedProcessedNames.has(uniqueName)) continue;
-              updatedProcessedNames.add(uniqueName);
-              results.localTotalCount++;
+              
               try {
                 const xmlText = await entry.async('text');
-                const data = parseXML(xmlText, name);
-                data.sourceName = containerName;
-                if (data.isCancelamento) results.localCancellations++;
-                if (data.tipo === 'inutilizacao') {
-                  results.localInuts.push(data); results.localInutsCount++;
-                } else if (data.tipo === 'nfe') {
-                  results.localXmls.push(data); results.localValidNfCount++;
-                } else {
-                  results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
+                // Check if content actually looks like XML/Fiscal before full parsing
+                const looksLikeXml = xmlText.trim().startsWith('<');
+                
+                if (looksLikeXml || isPotentialXml) {
+                  const data = parseXML(xmlText, name);
+                  if (data.tipo !== 'outro') {
+                    updatedProcessedNames.add(uniqueName);
+                    results.localTotalCount++;
+                    data.sourceName = containerName;
+                    if (data.isCancelamento) results.localCancellations++;
+                    if (data.tipo === 'inutilizacao') {
+                      results.localInuts.push(data); results.localInutsCount++;
+                    } else if (data.tipo === 'nfe') {
+                      results.localXmls.push(data); results.localValidNfCount++;
+                    } else {
+                      results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
+                    }
+                  } else if (isPotentialXml) {
+                     results.localNonXmlCount++;
+                  }
                 }
               } catch (e) {
-                console.error('Erro ao processar XML do ZIP:', name, e);
+                console.error('Erro ao processar arquivo do ZIP:', name, e);
               }
-            } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
-              const innerArchiveName = name.split('/').pop() || name;
+            } else {
+              const innerArchiveName = name.split(/[/\\]/).pop() || name;
               const innerArchiveData = await entry.async('arraybuffer');
               await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
-            } else {
-              if (!name.includes('/.') && !name.startsWith('__')) {
-                results.localNonXmlCount++;
-              }
             }
           }
           if (type === 'zip') return;
@@ -473,42 +480,47 @@ export default function App() {
           const extracted = extractor.extract();
           for (const file of extracted.files) {
             if (file.fileHeader.flags.directory) continue;
-            
+
             const name = file.fileHeader.name;
             const nameLower = name.toLowerCase();
             const uniqueName = `${currentPath}::${name}`;
             
-            const baseName = name.split('/').pop() || name;
-            const isPotentialXml = nameLower.endsWith('.xml') || /^[0-9]{44}$/.test(baseName);
+            const isArchive = nameLower.endsWith('.zip') || nameLower.endsWith('.rar');
+            const isPotentialXml = !isArchive && (nameLower.endsWith('.xml') || /^[0-9]{44}$/.test(name.split(/[/\\]/).pop() || ""));
 
-            if (isPotentialXml) {
+            if (!isArchive) {
               if (updatedProcessedNames.has(uniqueName)) continue;
-              updatedProcessedNames.add(uniqueName);
-              results.localTotalCount++;
+              
               try {
                 const xmlText = new TextDecoder().decode(file.extraction);
-                const data = parseXML(xmlText, name);
-                data.sourceName = containerName;
-                if (data.isCancelamento) results.localCancellations++;
-                if (data.tipo === 'inutilizacao') {
-                  results.localInuts.push(data); results.localInutsCount++;
-                } else if (data.tipo === 'nfe') {
-                  results.localXmls.push(data); results.localValidNfCount++;
-                } else {
-                  results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
+                const looksLikeXml = xmlText.trim().startsWith('<');
+
+                if (looksLikeXml || isPotentialXml) {
+                  const data = parseXML(xmlText, name);
+                  if (data.tipo !== 'outro') {
+                    updatedProcessedNames.add(uniqueName);
+                    results.localTotalCount++;
+                    data.sourceName = containerName;
+                    if (data.isCancelamento) results.localCancellations++;
+                    if (data.tipo === 'inutilizacao') {
+                      results.localInuts.push(data); results.localInutsCount++;
+                    } else if (data.tipo === 'nfe') {
+                      results.localXmls.push(data); results.localValidNfCount++;
+                    } else {
+                      results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
+                    }
+                  } else if (isPotentialXml) {
+                    results.localNonXmlCount++;
+                  }
                 }
               } catch (e) {
-                   console.error('Erro ao processar XML do RAR:', name, e);
+                   console.error('Erro ao processar arquivo do RAR:', name, e);
               }
-            } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
-              const innerArchiveName = name.split('/').pop() || name;
+            } else {
+              const innerArchiveName = name.split(/[/\\]/).pop() || name;
               const extraction = file.extraction;
               const innerData = extraction.buffer.slice(extraction.byteOffset, extraction.byteOffset + extraction.byteLength);
               await processArchiveRecursively(innerData, results, innerArchiveName, currentPath);
-            } else {
-              if (!name.includes('/.') && !name.startsWith('__')) {
-                results.localNonXmlCount++;
-              }
             }
           }
         } catch (rarErr) {
