@@ -403,43 +403,49 @@ export default function App() {
     
     
     
+    
     const processArchiveRecursively = async (archiveData: ArrayBuffer | Uint8Array, results: any, containerName: string, archivePath: string = '') => {
       const type = checkMagicBytes(archiveData);
       const currentPath = archivePath ? `${archivePath}/${containerName}` : containerName;
       
       if (type === 'rar') setExtractionStatus(`Extraindo RAR5: ${containerName}...`);
 
+      const ensureSourceInMap = (name: string, isArchive: boolean) => {
+        if (!sourceMap.has(name)) {
+          sourceMap.set(name, {
+            name: name,
+            isZip: isArchive,
+            totalXmls: 0,
+            saidaCount: 0,
+            entradaCount: 0
+          });
+        }
+      };
+
       if (type === 'zip') {
         try {
           const zip = await JSZip.loadAsync(archiveData);
-          let hasDirectXmls = false;
-          for (const name of Object.keys(zip.files)) {
-            const entry = zip.files[name];
-            // Simple split to avoid regex issues
-            const baseName = name.split('/').pop() || name;
-            if (!entry.dir && (name.toLowerCase().endsWith('.xml') || /^[0-9]{44}$/.test(baseName))) {
-              hasDirectXmls = true; break;
-            }
-          }
-          if (hasDirectXmls && !sourceMap.has(containerName)) {
-            sourceMap.set(containerName, { name: containerName, isZip: true, totalXmls: 0, saidaCount: 0, entradaCount: 0 });
-          }
           for (const name of Object.keys(zip.files)) {
             const entry = zip.files[name];
             if (entry.dir) continue;
             const uniqueName = `${currentPath}::${name}`;
+            const baseName = name.split('/').pop() || name;
+            
             if (!name.toLowerCase().endsWith('.zip') && !name.toLowerCase().endsWith('.rar')) {
               if (updatedProcessedNames.has(uniqueName)) continue;
               try {
                 const xmlText = await entry.async('text');
                 const looksLikeXml = xmlText.trim().startsWith('<');
-                const baseName = name.split('/').pop() || name;
                 if (looksLikeXml || /^[0-9]{44}$/.test(baseName) || name.toLowerCase().endsWith('.xml')) {
                   const data = parseXML(xmlText, name);
                   if (data.tipo !== 'outro') {
                     updatedProcessedNames.add(uniqueName);
+                    // Ensure the ZIP or the specific folder inside it is in the source map
+                    const displaySource = name.includes('/') ? `${containerName}/${name.split('/').slice(0,-1).join('/')}` : containerName;
+                    ensureSourceInMap(displaySource, true);
+                    
                     results.localTotalCount++;
-                    data.sourceName = containerName;
+                    data.sourceName = displaySource;
                     if (data.isCancelamento) results.localCancellations++;
                     if (data.tipo === 'inutilizacao') {
                       results.localInuts.push(data); results.localInutsCount++;
@@ -452,7 +458,7 @@ export default function App() {
                 } else { results.localNonXmlCount++; }
               } catch (e) { results.localNonXmlCount++; }
             } else {
-              const innerArchiveName = name.split('/').pop() || name;
+              const innerArchiveName = baseName;
               const innerArchiveData = await entry.async('uint8array');
               await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
             }
@@ -476,22 +482,25 @@ export default function App() {
             new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
           ]) as any;
           const entries = await archive.getEntries();
-          let hasXmls = false;
           for (const entry of entries) {
             const name = entry.getPath();
             if (entry.isFolder()) continue;
             const fileData = await entry.extract();
+            const baseName = name.split('/').pop() || name;
+            
             if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
-              await processArchiveRecursively(new Uint8Array(await fileData.arrayBuffer()), results, name, currentPath);
+              await processArchiveRecursively(new Uint8Array(await fileData.arrayBuffer()), results, baseName, currentPath);
             } else {
               const xmlText = await fileData.text();
               const looksLikeXml = xmlText.trim().startsWith('<');
-              const baseName = name.split('/').pop() || name;
               if (looksLikeXml || /^[0-9]{44}$/.test(baseName) || name.toLowerCase().endsWith('.xml')) {
                 const data = parseXML(xmlText, name);
                 if (data.tipo !== 'outro') {
-                  hasXmls = true; results.localTotalCount++;
-                  data.sourceName = containerName;
+                  const displaySource = name.includes('/') ? `${containerName}/${name.split('/').slice(0,-1).join('/')}` : containerName;
+                  ensureSourceInMap(displaySource, true);
+                  
+                  results.localTotalCount++;
+                  data.sourceName = displaySource;
                   if (data.isCancelamento) results.localCancellations++;
                   if (data.tipo === 'inutilizacao') {
                     results.localInuts.push(data); results.localInutsCount++;
@@ -503,9 +512,6 @@ export default function App() {
                 } else { results.localNonXmlCount++; }
               } else { results.localNonXmlCount++; }
             }
-          }
-          if (hasXmls && !sourceMap.has(containerName)) {
-            sourceMap.set(containerName, { name: containerName, isZip: true, totalXmls: 0, saidaCount: 0, entradaCount: 0 });
           }
           setExtractionStatus(null);
           return;
@@ -522,14 +528,18 @@ export default function App() {
             for (const file of extracted.files) {
               if (!file.extraction || file.extraction.length === 0) continue;
               const name = file.fileHeader.name;
+              const baseName = name.split('/').pop() || name;
               if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
-                await processArchiveRecursively(file.extraction, results, name, currentPath);
+                await processArchiveRecursively(file.extraction, results, baseName, currentPath);
               } else {
                 const xmlText = new TextDecoder().decode(file.extraction);
                 if (xmlText.trim().startsWith('<') || name.toLowerCase().endsWith('.xml')) {
                   const data = parseXML(xmlText, name);
                   if (data.tipo !== 'outro') {
-                    results.localTotalCount++; data.sourceName = containerName;
+                    const displaySource = name.includes('/') ? `${containerName}/${name.split('/').slice(0,-1).join('/')}` : containerName;
+                    ensureSourceInMap(displaySource, true);
+                    
+                    results.localTotalCount++; data.sourceName = displaySource;
                     if (data.isCancelamento) results.localCancellations++;
                     if (data.tipo === 'inutilizacao') {
                       results.localInuts.push(data); results.localInutsCount++;
