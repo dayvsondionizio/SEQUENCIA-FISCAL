@@ -485,7 +485,68 @@ export default function App() {
 
       if (type === 'rar' || type === 'unknown') {
         try {
-          // Cópia blindada de memória para evitar qualquer instabilidade do motor
+          // TENTATIVA 1: LibArchive.js (Mais robusto para RAR5/RAR6)
+          try {
+            // @ts-ignore
+            if (typeof Archive === 'undefined') {
+              const script = document.createElement('script');
+              script.src = 'https://cdn.jsdelivr.net/npm/libarchive.js/dist/libarchive.js';
+              document.head.appendChild(script);
+              await new Promise(r => script.onload = r);
+              // @ts-ignore
+              Archive.init({ workerUrl: 'https://cdn.jsdelivr.net/npm/libarchive.js/dist/worker-bundle.js' });
+            }
+            
+            const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
+            const blob = new Blob([uint8]);
+            // @ts-ignore
+            const archive = await Archive.open(blob);
+            const files = await archive.extractFiles();
+            
+            let hasXmls = false;
+            for (const [path, fileData] of Object.entries(files)) {
+                const name = path;
+                const isArchive = name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar');
+                if (isArchive) {
+                    const buffer = await (fileData as any).arrayBuffer();
+                    await processArchiveRecursively(new Uint8Array(buffer), results, name, currentPath);
+                } else {
+                    const xmlText = await (fileData as any).text();
+                    const looksLikeXml = xmlText.trim().startsWith('<');
+                    const baseName = name.split(/[/\\]/).pop() || "";
+                    const isPotentialXml = /^[0-9]{44}$/.test(baseName) || name.toLowerCase().endsWith('.xml');
+                    
+                    if (looksLikeXml || isPotentialXml) {
+                        const data = parseXML(xmlText, name);
+                        if (data.tipo !== 'outro') {
+                            hasXmls = true;
+                            results.localTotalCount++;
+                            data.sourceName = containerName;
+                            if (data.isCancelamento) results.localCancellations++;
+                            if (data.tipo === 'inutilizacao') {
+                                results.localInuts.push(data); results.localInutsCount++;
+                            } else if (data.tipo === 'nfe') {
+                                results.localXmls.push(data); results.localValidNfCount++;
+                            } else {
+                                results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
+                            }
+                        } else {
+                            results.localNonXmlCount++;
+                        }
+                    } else {
+                        if (!name.endsWith('/')) results.localNonXmlCount++;
+                    }
+                }
+            }
+            if (hasXmls && !sourceMap.has(containerName)) {
+                sourceMap.set(containerName, { name: containerName, isZip: true, totalXmls: 0, saidaCount: 0, entradaCount: 0 });
+            }
+            return; // Sucesso com LibArchive
+          } catch (libErr) {
+            console.warn('LibArchive falhou, tentando node-unrar-js...', libErr);
+          }
+
+          // TENTATIVA 2: node-unrar-js (Fallback clássico)
           const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
           
           // Criamos um buffer totalmente novo e isolado, com padding
