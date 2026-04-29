@@ -388,7 +388,9 @@ export default function App() {
           
           for (const name of Object.keys(zip.files)) {
             const entry = zip.files[name];
-            if (!entry.dir && name.toLowerCase().endsWith('.xml')) {
+            const baseName = name.split('/').pop() || name;
+            const isXml = name.toLowerCase().endsWith('.xml') || /^[0-9]{44}$/.test(baseName);
+            if (!entry.dir && isXml) {
               hasDirectXmls = true; break;
             }
           }
@@ -457,7 +459,9 @@ export default function App() {
           let hasDirectXmls = false;
           const list = extractor.getFileList();
           for (const header of list.fileHeaders) {
-              if (header.name.toLowerCase().endsWith('.xml')) {
+              const baseName = header.name.split('/').pop() || header.name;
+              const isXml = header.name.toLowerCase().endsWith('.xml') || /^[0-9]{44}$/.test(baseName);
+              if (isXml) {
                   hasDirectXmls = true; break;
               }
           }
