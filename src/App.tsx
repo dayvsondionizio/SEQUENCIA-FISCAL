@@ -485,7 +485,6 @@ export default function App() {
             return;
           }
         }
-      }
 
       if (type === 'rar' || type === 'unknown') {
         try {
