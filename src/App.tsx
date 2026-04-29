@@ -555,12 +555,16 @@ export default function App() {
           }
         } catch (rarErr: any) {
           console.error('Erro ao processar RAR:', containerName, rarErr);
-          // Mostrar o erro técnico para ajudar no diagnóstico
+          
+          // Pegar os primeiros bytes para diagnóstico de DNA
+          const bytes = new Uint8Array(archiveData.slice(0, 10));
+          const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+          
           const errorDetail = rarErr?.message || rarErr?.toString() || 'Erro desconhecido';
           if (sourceMap.has(containerName)) {
             const src = sourceMap.get(containerName)!;
             (src as any).error = true;
-            (src as any).errorMsg = `Erro RAR: ${errorDetail}`;
+            (src as any).errorMsg = `Erro RAR: ${errorDetail} (DNA: ${hex})`;
             setAttachedSources(Array.from(sourceMap.values()));
           }
         }
