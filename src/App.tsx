@@ -473,16 +473,15 @@ export default function App() {
 
       if (type === 'rar' || type === 'unknown') {
         try {
-          const bufDesc = archiveData instanceof Uint8Array 
-              ? archiveData.buffer.slice(archiveData.byteOffset, archiveData.byteOffset + archiveData.byteLength)
-              : archiveData;
+          // Garante que temos um Uint8Array para compatibilidade máxima
+          const uint8Data = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
           
           let currentWasm = wasmBinary;
           if (!currentWasm) {
             currentWasm = await loadWasm();
           }
 
-          const options: any = { data: bufDesc };
+          const options: any = { data: uint8Data };
           if (currentWasm) options.wasmBinary = currentWasm;
           const extractor = await createExtractorFromData(options);
           
@@ -552,13 +551,14 @@ export default function App() {
               await processArchiveRecursively(innerData, results, innerArchiveName, currentPath);
             }
           }
-        } catch (rarErr) {
+        } catch (rarErr: any) {
           console.error('Erro ao processar RAR:', containerName, rarErr);
-          // Adicionar um marcador de erro na fonte para feedback visual
+          // Mostrar o erro técnico para ajudar no diagnóstico
+          const errorDetail = rarErr?.message || rarErr?.toString() || 'Erro desconhecido';
           if (sourceMap.has(containerName)) {
             const src = sourceMap.get(containerName)!;
             (src as any).error = true;
-            (src as any).errorMsg = 'Erro ao abrir RAR (formato não suportado ou corrompido)';
+            (src as any).errorMsg = `Erro RAR: ${errorDetail}`;
             setAttachedSources(Array.from(sourceMap.values()));
           }
         }
