@@ -314,11 +314,21 @@ export default function App() {
 
   const [wasmBinary, setWasmBinary] = useState<ArrayBuffer | null>(null);
 
+  const loadWasm = async () => {
+    if (wasmBinary) return wasmBinary;
+    try {
+      const res = await fetch(unrarWasmUrl);
+      const arrayBuffer = await res.arrayBuffer();
+      setWasmBinary(arrayBuffer);
+      return arrayBuffer;
+    } catch (err) {
+      console.error('Erro ao carregar motor RAR:', err);
+      return null;
+    }
+  };
+
   useEffect(() => {
-    fetch(unrarWasmUrl)
-      .then(res => res.arrayBuffer())
-      .then(setWasmBinary)
-      .catch(err => console.error('Erro ao carregar motor RAR:', err));
+    loadWasm();
   }, []);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -459,8 +469,14 @@ export default function App() {
           const bufDesc = archiveData instanceof Uint8Array 
               ? archiveData.buffer.slice(archiveData.byteOffset, archiveData.byteOffset + archiveData.byteLength)
               : archiveData;
+          
+          let currentWasm = wasmBinary;
+          if (!currentWasm) {
+            currentWasm = await loadWasm();
+          }
+
           const options: any = { data: bufDesc };
-          if (wasmBinary) options.wasmBinary = wasmBinary;
+          if (currentWasm) options.wasmBinary = currentWasm;
           const extractor = await createExtractorFromData(options);
           
           let hasDirectXmls = false;
@@ -524,7 +540,14 @@ export default function App() {
             }
           }
         } catch (rarErr) {
-          console.error('Erro ao processar RAR ou formato desconhecido:', containerName, rarErr);
+          console.error('Erro ao processar RAR:', containerName, rarErr);
+          // Adicionar um marcador de erro na fonte para feedback visual
+          if (sourceMap.has(containerName)) {
+            const src = sourceMap.get(containerName)!;
+            (src as any).error = true;
+            (src as any).errorMsg = 'Erro ao abrir RAR (formato não suportado ou corrompido)';
+            setAttachedSources(Array.from(sourceMap.values()));
+          }
         }
       }
     };
@@ -1018,25 +1041,34 @@ export default function App() {
                                   {totalFiscalInSource} XMLs
                                 </span>
                                 
-                                {status === 'sales' && (
-                                  <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded text-[9px] border border-emerald-100">
-                                    Vendas
+                                {(source as any).error ? (
+                                  <span className="bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded text-[9px] border border-rose-100 flex items-center gap-1">
+                                    <AlertCircle className="w-2.5 h-2.5" />
+                                    {(source as any).errorMsg || 'Erro'}
                                   </span>
-                                )}
-                                {status === 'purchases' && (
-                                  <span className="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded text-[9px] border border-amber-100">
-                                    Compras - Ignorada
-                                  </span>
-                                )}
-                                {status === 'mixed' && (
-                                  <span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[9px] border border-blue-100">
-                                    Misto
-                                  </span>
-                                )}
-                                {status === 'awaiting' && (
-                                  <span className="bg-slate-50 text-slate-400 px-1.5 py-0.5 rounded text-[9px] border border-slate-100">
-                                    Pronto
-                                  </span>
+                                ) : (
+                                  <>
+                                    {status === 'sales' && (
+                                      <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded text-[9px] border border-emerald-100">
+                                        Vendas
+                                      </span>
+                                    )}
+                                    {status === 'purchases' && (
+                                      <span className="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded text-[9px] border border-amber-100">
+                                        Compras - Ignorada
+                                      </span>
+                                    )}
+                                    {status === 'mixed' && (
+                                      <span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[9px] border border-blue-100">
+                                        Misto
+                                      </span>
+                                    )}
+                                    {status === 'awaiting' && (
+                                      <span className="bg-slate-50 text-slate-400 px-1.5 py-0.5 rounded text-[9px] border border-slate-100">
+                                        Pronto
+                                      </span>
+                                    )}
+                                  </>
                                 )}
                               </div>
                             </div>
