@@ -442,12 +442,15 @@ export default function App() {
                     } else {
                       results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
                     }
-                  } else if (isPotentialXml) {
-                     results.localNonXmlCount++;
+                  } else {
+                    results.localNonXmlCount++;
                   }
+                } else {
+                  results.localNonXmlCount++;
                 }
               } catch (e) {
                 console.error('Erro ao processar arquivo do ZIP:', name, e);
+                results.localNonXmlCount++;
               }
             } else {
               const innerArchiveName = name.split(/[/\\]/).pop() || name;
@@ -525,12 +528,15 @@ export default function App() {
                     } else {
                       results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
                     }
-                  } else if (isPotentialXml) {
+                  } else {
                     results.localNonXmlCount++;
                   }
+                } else {
+                  results.localNonXmlCount++;
                 }
               } catch (e) {
                    console.error('Erro ao processar arquivo do RAR:', name, e);
+                   results.localNonXmlCount++;
               }
             } else {
               const innerArchiveName = name.split(/[/\\]/).pop() || name;
