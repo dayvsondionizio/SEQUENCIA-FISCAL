@@ -314,6 +314,7 @@ export default function App() {
   const [filterModelo, setFilterModelo] = useState('Todos');
 
   const [wasmBinary, setWasmBinary] = useState<ArrayBuffer | null>(null);
+  const [extractionStatus, setExtractionStatus] = useState<string | null>(null);
 
   const loadWasm = async () => {
     if (wasmBinary) return wasmBinary;
@@ -397,7 +398,6 @@ export default function App() {
       return 'unknown';
     };
 
-    const [extractionStatus, setExtractionStatus] = React.useState<string | null>(null);
 
     const processArchiveRecursively = async (archiveData: ArrayBuffer | Uint8Array, results: any, containerName: string, archivePath: string = '') => {
       const type = checkMagicBytes(archiveData);
