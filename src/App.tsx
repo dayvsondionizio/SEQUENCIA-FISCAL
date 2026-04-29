@@ -416,17 +416,20 @@ export default function App() {
             const nameLower = name.toLowerCase();
             const uniqueName = `${currentPath}::${name}`;
             
-            // Deep Scan: Check filename OR treat as potential XML if size is reasonable
             const isArchive = nameLower.endsWith('.zip') || nameLower.endsWith('.rar');
-            const isPotentialXml = !isArchive && (nameLower.endsWith('.xml') || /^[0-9]{44}$/.test(name.split(/[/\\]/).pop() || ""));
-
+            
             if (!isArchive) {
               if (updatedProcessedNames.has(uniqueName)) continue;
               
               try {
+                // Get entry content
                 const xmlText = await entry.async('text');
-                // Check if content actually looks like XML/Fiscal before full parsing
+                if (!xmlText) continue;
+
                 const looksLikeXml = xmlText.trim().startsWith('<');
+                // Regex for 44 digits chave de acesso in the filename
+                const baseName = name.split(/[/\\]/).pop() || "";
+                const isPotentialXml = /^[0-9]{44}$/.test(baseName) || nameLower.endsWith('.xml');
                 
                 if (looksLikeXml || isPotentialXml) {
                   const data = parseXML(xmlText, name);
@@ -446,7 +449,8 @@ export default function App() {
                     results.localNonXmlCount++;
                   }
                 } else {
-                  results.localNonXmlCount++;
+                   // Se não parece XML e não tem nome de chave, conta como não-XML se não for pasta
+                   if (!name.endsWith('/')) results.localNonXmlCount++;
                 }
               } catch (e) {
                 console.error('Erro ao processar arquivo do ZIP:', name, e);
@@ -498,14 +502,14 @@ export default function App() {
 
           const extracted = extractor.extract();
           for (const file of extracted.files) {
-            if (file.fileHeader.flags.directory) continue;
+            // Se tiver conteúdo (extraction.length > 0), nós processamos, ignorando se a flag diz ser diretório
+            if (!file.extraction || file.extraction.length === 0) continue;
 
             const name = file.fileHeader.name;
             const nameLower = name.toLowerCase();
             const uniqueName = `${currentPath}::${name}`;
             
             const isArchive = nameLower.endsWith('.zip') || nameLower.endsWith('.rar');
-            const isPotentialXml = !isArchive && (nameLower.endsWith('.xml') || /^[0-9]{44}$/.test(name.split(/[/\\]/).pop() || ""));
 
             if (!isArchive) {
               if (updatedProcessedNames.has(uniqueName)) continue;
@@ -513,6 +517,9 @@ export default function App() {
               try {
                 const xmlText = new TextDecoder().decode(file.extraction);
                 const looksLikeXml = xmlText.trim().startsWith('<');
+                
+                const baseName = name.split(/[/\\]/).pop() || "";
+                const isPotentialXml = /^[0-9]{44}$/.test(baseName) || nameLower.endsWith('.xml');
 
                 if (looksLikeXml || isPotentialXml) {
                   const data = parseXML(xmlText, name);
