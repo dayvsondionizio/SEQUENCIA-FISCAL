@@ -400,6 +400,9 @@ export default function App() {
 
 
     
+    
+    
+    
     const processArchiveRecursively = async (archiveData: ArrayBuffer | Uint8Array, results: any, containerName: string, archivePath: string = '') => {
       const type = checkMagicBytes(archiveData);
       const currentPath = archivePath ? `${archivePath}/${containerName}` : containerName;
@@ -412,6 +415,7 @@ export default function App() {
           let hasDirectXmls = false;
           for (const name of Object.keys(zip.files)) {
             const entry = zip.files[name];
+            // Simple split to avoid regex issues
             const baseName = name.split('/').pop() || name;
             if (!entry.dir && (name.toLowerCase().endsWith('.xml') || /^[0-9]{44}$/.test(baseName))) {
               hasDirectXmls = true; break;
@@ -429,7 +433,7 @@ export default function App() {
               try {
                 const xmlText = await entry.async('text');
                 const looksLikeXml = xmlText.trim().startsWith('<');
-                const baseName = name.split(/[/\]/).pop() || "";
+                const baseName = name.split('/').pop() || name;
                 if (looksLikeXml || /^[0-9]{44}$/.test(baseName) || name.toLowerCase().endsWith('.xml')) {
                   const data = parseXML(xmlText, name);
                   if (data.tipo !== 'outro') {
@@ -448,7 +452,7 @@ export default function App() {
                 } else { results.localNonXmlCount++; }
               } catch (e) { results.localNonXmlCount++; }
             } else {
-              const innerArchiveName = name.split(/[/\]/).pop() || name;
+              const innerArchiveName = name.split('/').pop() || name;
               const innerArchiveData = await entry.async('uint8array');
               await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
             }
@@ -458,7 +462,6 @@ export default function App() {
       }
 
       if (type === 'rar' || type === 'unknown') {
-        // TENTATIVA 1: LibArchive.js com Timeout
         try {
           if (typeof (window as any).Archive === 'undefined') {
             const script = document.createElement('script');
@@ -483,7 +486,7 @@ export default function App() {
             } else {
               const xmlText = await fileData.text();
               const looksLikeXml = xmlText.trim().startsWith('<');
-              const baseName = name.split(/[/\]/).pop() || "";
+              const baseName = name.split('/').pop() || name;
               if (looksLikeXml || /^[0-9]{44}$/.test(baseName) || name.toLowerCase().endsWith('.xml')) {
                 const data = parseXML(xmlText, name);
                 if (data.tipo !== 'outro') {
@@ -508,7 +511,6 @@ export default function App() {
           return;
         } catch (libErr) { console.warn('LibArchive falhou, tentando node-unrar-js...', libErr); }
 
-        // TENTATIVA 2: node-unrar-js
         try {
           const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
           const cleanBuffer = new ArrayBuffer(uint8.length + 1024*1024);
