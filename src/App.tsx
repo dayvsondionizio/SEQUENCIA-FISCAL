@@ -485,14 +485,14 @@ export default function App() {
 
       if (type === 'rar' || type === 'unknown') {
         try {
-          // Alinhamento e Padding (Preenchimento) para evitar ERAR_EREAD em RAR5
+          // Cópia blindada de memória para evitar qualquer instabilidade do motor
           const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
           
-          // Adiciona 1MB de padding de segurança (bytes zero) ao final do buffer
-          // Isso resolve o erro "File read error" em arquivos com cabeçalhos malformados
-          const padding = 1024 * 1024; // 1MB
-          const cleanBuffer = new Uint8Array(uint8.length + padding);
-          cleanBuffer.set(uint8);
+          // Criamos um buffer totalmente novo e isolado, com padding
+          const padding = 1024 * 1024; // 1MB de segurança
+          const cleanBuffer = new ArrayBuffer(uint8.length + padding);
+          const view = new Uint8Array(cleanBuffer);
+          view.set(uint8);
           
           let currentWasm = wasmBinary;
           if (!currentWasm) {
@@ -504,7 +504,7 @@ export default function App() {
           }
 
           const options: any = { 
-            data: cleanBuffer, // Passando o Uint8Array diretamente
+            data: view, // Passando o Uint8Array isolado
             wasmBinary: currentWasm
           };
           const extractor = await createExtractorFromData(options);
