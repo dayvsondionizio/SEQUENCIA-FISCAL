@@ -468,8 +468,10 @@ export default function App() {
               }
             } else {
               const innerArchiveName = name.split(/[/\\]/).pop() || name;
-              const innerArchiveData = await entry.async('arraybuffer');
-              await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
+              if (innerArchiveName.endsWith('.zip') || innerArchiveName.endsWith('.rar')) {
+               // Usando uint8array para maior estabilidade na extração de sub-arquivos
+               const innerArchiveData = await entry.async('uint8array');
+               await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
             }
           }
           if (type === 'zip') return;
@@ -483,9 +485,13 @@ export default function App() {
 
       if (type === 'rar' || type === 'unknown') {
         try {
-          // Alinhamento rigoroso de memória para RAR5
+          // Alinhamento e Padding (Preenchimento) para evitar ERAR_EREAD em RAR5
           const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
-          const cleanBuffer = new Uint8Array(uint8.length);
+          
+          // Adiciona 1MB de padding de segurança (bytes zero) ao final do buffer
+          // Isso resolve o erro "File read error" em arquivos com cabeçalhos malformados
+          const padding = 1024 * 1024; // 1MB
+          const cleanBuffer = new Uint8Array(uint8.length + padding);
           cleanBuffer.set(uint8);
           
           let currentWasm = wasmBinary;
@@ -498,7 +504,7 @@ export default function App() {
           }
 
           const options: any = { 
-            data: cleanBuffer.buffer,
+            data: cleanBuffer, // Passando o Uint8Array diretamente
             wasmBinary: currentWasm
           };
           const extractor = await createExtractorFromData(options);
