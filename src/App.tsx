@@ -60,6 +60,7 @@ interface XmlData {
   emitNome?: string;
   destCnpj?: string;
   destNome?: string;
+  tpNF?: string; // 0=Entrada, 1=Saida
 }
 
 interface SourceMetadata {
@@ -199,6 +200,7 @@ function parseXML(xmlText: string, fileName: string): XmlData {
     const serie = getTextContent('serie');
     const modelo = getTextContent('mod');
     const tpEmis = getTextContent('tpEmis');
+    const tpNF = getTextContent('tpNF');
     
     // Extract Emitente and Destinatário
     const emit = doc.getElementsByTagName('emit')[0];
@@ -229,6 +231,7 @@ function parseXML(xmlText: string, fileName: string): XmlData {
         valor: getTextContent('vNF'),
         natureza: getTextContent('natOp'),
         protocolo: getTextContent('nProt'),
+        tpNF,
         fileName
       };
     }
@@ -401,7 +404,10 @@ export default function App() {
             const nameLower = name.toLowerCase();
             const uniqueName = `${currentPath}::${name}`;
             
-            if (nameLower.endsWith('.xml')) {
+            const baseName = name.split('/').pop() || name;
+            const isPotentialXml = nameLower.endsWith('.xml') || /^[0-9]{44}$/.test(baseName);
+
+            if (isPotentialXml) {
               if (updatedProcessedNames.has(uniqueName)) continue;
               updatedProcessedNames.add(uniqueName);
               results.localTotalCount++;
@@ -468,7 +474,10 @@ export default function App() {
             const nameLower = name.toLowerCase();
             const uniqueName = `${currentPath}::${name}`;
             
-            if (nameLower.endsWith('.xml')) {
+            const baseName = name.split('/').pop() || name;
+            const isPotentialXml = nameLower.endsWith('.xml') || /^[0-9]{44}$/.test(baseName);
+
+            if (isPotentialXml) {
               if (updatedProcessedNames.has(uniqueName)) continue;
               updatedProcessedNames.add(uniqueName);
               results.localTotalCount++;
@@ -630,7 +639,17 @@ export default function App() {
     let localEntradaCount = 0;
 
     xmlList.forEach(xml => {
-      const direcao = xml.emitCnpj === mainCnpj ? 'saida' : 'entrada';
+      // Prioridade: tpNF (1=saida, 0=entrada)
+      // Fallback: comparacao de CNPJ
+      let direcao: 'saida' | 'entrada' = 'entrada';
+      
+      if (xml.tpNF === '1') {
+        direcao = 'saida';
+      } else if (xml.tpNF === '0') {
+        direcao = 'entrada';
+      } else {
+        direcao = xml.emitCnpj === mainCnpj ? 'saida' : 'entrada';
+      }
       
       if (direcao === 'entrada') {
         localEntradaCount++;
@@ -935,8 +954,11 @@ export default function App() {
                       <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Fontes Anexadas</div>
                       <div className="flex flex-wrap gap-2">
                         {attachedSources.map((source, sIdx) => {
-                          // Classificar a fonte com base nos XMLs recebidos
-                          const sourceXmls = xmlList.filter(x => x.sourceName === source.name);
+                          // Somar todos os tipos de documentos fiscais identificados nesta fonte
+                          const countNfe = xmlList.filter(x => x.sourceName === source.name).length;
+                          const countInut = inutilizacoes.filter(x => x.sourceName === source.name).length;
+                          const countOther = otherXmlsList.filter(x => x.sourceName === source.name).length;
+                          const totalFiscalInSource = countNfe + countInut + countOther;
                           
                           // Identificar o CNPJ da empresa auditada no lote todo
                           const cnpjCounts: Record<string, number> = {};
@@ -946,9 +968,18 @@ export default function App() {
                           const topCnpj = Object.entries(cnpjCounts).sort((a,b) => b[1] - a[1])[0]?.[0];
 
                           let status: 'awaiting' | 'sales' | 'purchases' | 'mixed' = 'awaiting';
-                          if (sourceXmls.length > 0 && topCnpj) {
-                            const hasSaida = sourceXmls.some(x => x.emitCnpj === topCnpj);
-                            const hasEntrada = sourceXmls.some(x => x.destCnpj === topCnpj);
+                          if (countNfe > 0 && topCnpj) {
+                            const sourceXmls = xmlList.filter(x => x.sourceName === source.name);
+                            const hasSaida = sourceXmls.some(x => {
+                              if (x.tpNF === '1') return true;
+                              if (x.tpNF === '0') return false;
+                              return x.emitCnpj === topCnpj;
+                            });
+                            const hasEntrada = sourceXmls.some(x => {
+                              if (x.tpNF === '0') return true;
+                              if (x.tpNF === '1') return false;
+                              return x.destCnpj === topCnpj;
+                            });
                             
                             if (hasSaida && hasEntrada) status = 'mixed';
                             else if (hasSaida) status = 'sales';
@@ -968,7 +999,7 @@ export default function App() {
                               <span className="text-slate-700">{source.name}</span>
                               <div className="flex items-center gap-1.5 ml-1">
                                 <span className="bg-slate-50 text-slate-400 px-1.5 py-0.5 rounded text-[9px] border border-slate-100">
-                                  {sourceXmls.length} XMLs
+                                  {totalFiscalInSource} XMLs
                                 </span>
                                 
                                 {status === 'sales' && (
