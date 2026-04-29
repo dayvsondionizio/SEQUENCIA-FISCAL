@@ -397,11 +397,15 @@ export default function App() {
       return 'unknown';
     };
 
+    const [extractionStatus, setExtractionStatus] = React.useState<string | null>(null);
+
     const processArchiveRecursively = async (archiveData: ArrayBuffer | Uint8Array, results: any, containerName: string, archivePath: string = '') => {
       const type = checkMagicBytes(archiveData);
       const currentPath = archivePath ? `${archivePath}/${containerName}` : containerName;
-
-      if (type === 'zip' || type === 'unknown') {
+      
+      if (type === 'rar') {
+        setExtractionStatus(`Extraindo RAR5: ${containerName}...`);
+      }
         try {
           const zip = await JSZip.loadAsync(archiveData);
           let hasDirectXmls = false;
@@ -494,8 +498,10 @@ export default function App() {
               document.head.appendChild(script);
               await new Promise(r => script.onload = r);
               // @ts-ignore
-              Archive.init({ workerUrl: 'https://cdn.jsdelivr.net/npm/libarchive.js/dist/worker-bundle.js' });
+              Archive.init({ workerUrl: 'https://unpkg.com/libarchive.js/dist/worker-bundle.js' });
             }
+            
+            setExtractionStatus(`Extraindo RAR5: ${containerName}... (Análise Profunda)`);
             
             const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
             const blob = new Blob([uint8]);
@@ -541,6 +547,7 @@ export default function App() {
             if (hasXmls && !sourceMap.has(containerName)) {
                 sourceMap.set(containerName, { name: containerName, isZip: true, totalXmls: 0, saidaCount: 0, entradaCount: 0 });
             }
+            setExtractionStatus(null);
             return; // Sucesso com LibArchive
           } catch (libErr) {
             console.warn('LibArchive falhou, tentando node-unrar-js...', libErr);
@@ -1254,11 +1261,18 @@ export default function App() {
                       )}>
                         {stats.totalFiles === 0 ? "Arraste seus arquivos aqui" : "Deseja adicionar mais arquivos?"}
                       </h3>
-                      <p className="text-slate-500 text-sm mt-1">Suporta XMLs individuais, pastas ou arquivos ZIP</p>
-                    </div>
+                    <p className="text-slate-500 text-sm mt-1">Suporta XMLs individuais, pastas ou arquivos ZIP</p>
                   </div>
-                  
-                  <div className="flex flex-col items-center">
+                </div>
+
+                {extractionStatus && (
+                  <div className="flex items-center gap-3 text-emerald-600 bg-emerald-50 px-6 py-3 rounded-2xl border border-emerald-100 animate-pulse mb-6 shadow-sm">
+                    <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-bounce"></div>
+                    <span className="text-sm font-black uppercase tracking-wider">{extractionStatus}</span>
+                  </div>
+                )}
+                
+                <div className="flex flex-col items-center">
                     <button 
                       onClick={() => fileInputRef.current?.click()}
                       className="flex items-center gap-3 px-10 py-5 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all active:scale-95 shadow-xl shadow-slate-200/50 hover:scale-[1.02]"
