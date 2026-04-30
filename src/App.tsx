@@ -687,28 +687,20 @@ export default function App() {
     let localEntradaCount = 0;
 
     xmlList.forEach(xml => {
-      // Prioridade: tpNF (1=saida, 0=entrada)
-      // Fallback: comparacao de CNPJ
-      let direcao: 'saida' | 'entrada' = 'entrada';
-      
-      if (xml.tpNF === '1') {
-        direcao = 'saida';
-      } else if (xml.tpNF === '0') {
-        direcao = 'entrada';
-      } else {
-        direcao = xml.emitCnpj === mainCnpj ? 'saida' : 'entrada';
-      }
-      
-      if (direcao === 'entrada') {
+      // Ignora completamente notas emitidas por terceiros (fornecedores)
+      if (xml.emitCnpj !== mainCnpj) {
         localEntradaCount++;
-        return; // Ignore Entradas from audit
+        return;
       }
+      
+      // Como já filtramos tpNF === '0' no parse e garantimos que emitCnpj === mainCnpj
+      const direcao = 'saida';
 
-      const key = `${xml.emitCnpj || mainCnpj}_${direcao}_${xml.modelo}_${xml.serie}`;
+      const key = `${mainCnpj}_${direcao}_${xml.modelo}_${xml.serie}`;
       
       if (!groups[key]) {
         groups[key] = {
-          cnpj: xml.emitCnpj || mainCnpj || xml.cnpj!,
+          cnpj: mainCnpj || xml.cnpj!,
           ie: xml.ie || 'N/A',
           razaoSocial: xml.emitNome || 'Sua Empresa',
           partnerNome: xml.destNome,
