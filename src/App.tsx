@@ -213,6 +213,9 @@ function parseXML(xmlText: string, fileName: string): XmlData {
     const destNome = dest?.getElementsByTagName('xNome')[0]?.textContent || '';
 
     if (numero && serie && modelo) {
+      if (tpNF === '0') {
+        return { tipo: 'outro', fileName };
+      }
       return {
         tipo: 'nfe',
         cnpj: emitCnpj, // Default to issuer for legacy compatibility
@@ -701,11 +704,11 @@ export default function App() {
         return; // Ignore Entradas from audit
       }
 
-      const key = `${mainCnpj}_${direcao}_${xml.modelo}_${xml.serie}`;
+      const key = `${xml.emitCnpj || mainCnpj}_${direcao}_${xml.modelo}_${xml.serie}`;
       
       if (!groups[key]) {
         groups[key] = {
-          cnpj: mainCnpj || xml.cnpj!,
+          cnpj: xml.emitCnpj || mainCnpj || xml.cnpj!,
           ie: xml.ie || 'N/A',
           razaoSocial: xml.emitNome || 'Sua Empresa',
           partnerNome: xml.destNome,
