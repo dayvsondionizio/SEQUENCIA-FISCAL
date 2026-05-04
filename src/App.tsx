@@ -1118,13 +1118,18 @@ export default function App() {
                   
                   const items = e.dataTransfer.items;
                   if (items) {
-                    const allFiles: File[] = [];
+                    const entries: FileSystemEntry[] = [];
                     for (let i = 0; i < items.length; i++) {
                       const item = items[i].webkitGetAsEntry();
                       if (item) {
-                        const files = await traverseFileTree(item);
-                        allFiles.push(...files);
+                        entries.push(item);
                       }
+                    }
+                    
+                    const allFiles: File[] = [];
+                    for (const entry of entries) {
+                      const files = await traverseFileTree(entry);
+                      allFiles.push(...files);
                     }
                     handleFiles(allFiles);
                   } else {
