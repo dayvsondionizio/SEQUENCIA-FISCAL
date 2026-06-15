@@ -24,7 +24,8 @@ import {
   FileSearch,
   Check,
   User,
-  Printer
+  Printer,
+  Download
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -62,6 +63,7 @@ interface XmlData {
   destCnpj?: string;
   destNome?: string;
   tpNF?: string; // 0=Entrada, 1=Saida
+  rawXml?: string;
 }
 
 interface SourceMetadata {
@@ -153,7 +155,8 @@ function parseXML(xmlText: string, fileName: string): XmlData {
       isCancelamento: isCancel,
       cnpj: getTextContent('CNPJ'),
       chave: getTextContent('chNFe'),
-      fileName
+      fileName,
+      rawXml: xmlText
     };
   }
 
@@ -165,7 +168,8 @@ function parseXML(xmlText: string, fileName: string): XmlData {
       subTipo: xMotivos[0] || 'Consulta',
       isCancelamento: isCancel,
       chave: getTextContent('chNFe'),
-      fileName
+      fileName,
+      rawXml: xmlText
     };
   }
 
@@ -190,7 +194,9 @@ function parseXML(xmlText: string, fileName: string): XmlData {
         serie: serie,
         nNFIni: parseInt(nNFIni) || 0,
         nNFFin: parseInt(nNFFin) || 0,
-        fileName
+        data: getTextContent('dhRecbto') || getTextContent('dhEmi') || '',
+        fileName,
+        rawXml: xmlText
       };
     }
   }
@@ -237,7 +243,8 @@ function parseXML(xmlText: string, fileName: string): XmlData {
         natureza: getTextContent('natOp'),
         protocolo: getTextContent('nProt'),
         tpNF,
-        fileName
+        fileName,
+        rawXml: xmlText
       };
     }
   }
@@ -352,6 +359,71 @@ export default function App() {
 
   // Filters
   const [filterModelo, setFilterModelo] = useState('Todos');
+  const [filterMes, setFilterMes] = useState('Todos');
+
+  const mesesDisponiveis = useMemo(() => {
+    const months = new Set<string>();
+    xmlList.forEach(xml => {
+      const my = getMonthYear(xml.data);
+      if (my) months.add(my);
+    });
+    return Array.from(months).sort();
+  }, [xmlList]);
+
+  useEffect(() => {
+    if (analysis) {
+      runAnalysis();
+    }
+  }, [filterMes]);
+
+  const exportFilteredXmls = async () => {
+    let filteredXmls = xmlList;
+    if (filterMes !== 'Todos') {
+      filteredXmls = xmlList.filter(xml => getMonthYear(xml.data) === filterMes);
+    }
+
+    if (filteredXmls.length === 0) {
+      alert("Nenhum XML de nota fiscal encontrado para exportar.");
+      return;
+    }
+
+    const zip = new JSZip();
+    
+    filteredXmls.forEach(xml => {
+      const name = xml.fileName || `${xml.chave || xml.numero}.xml`;
+      const safeName = name.toLowerCase().endsWith('.xml') ? name : `${name}.xml`;
+      if (xml.rawXml) {
+        zip.file(safeName, xml.rawXml);
+      }
+    });
+
+    let filteredInuts = inutilizacoes;
+    if (filterMes !== 'Todos') {
+      filteredInuts = inutilizacoes.filter(inut => getMonthYear(inut.data) === filterMes);
+    }
+    
+    filteredInuts.forEach(inut => {
+      const name = inut.fileName || `inutilizacao_${inut.serie}_${inut.nNFIni}_${inut.nNFFin}.xml`;
+      const safeName = name.toLowerCase().endsWith('.xml') ? name : `${name}.xml`;
+      if (inut.rawXml) {
+        zip.file(`inutilizacoes/${safeName}`, inut.rawXml);
+      }
+    });
+
+    try {
+      const content = await zip.generateAsync({ type: 'blob' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(content);
+      const suffix = filterMes === 'Todos' ? 'todos_meses' : filterMes.replace('/', '_');
+      link.download = `xmls_filtrados_${suffix}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error("Erro ao gerar arquivo ZIP:", err);
+      alert("Erro ao exportar arquivos XML.");
+    }
+  };
 
   const [wasmBinary, setWasmBinary] = useState<ArrayBuffer | null>(null);
   const [extractionStatus, setExtractionStatus] = useState<string | null>(null);
@@ -721,9 +793,22 @@ export default function App() {
   const runAnalysis = () => {
     if (xmlList.length === 0) return;
 
+    let filteredXmlsList = xmlList;
+    let filteredInutsList = inutilizacoes;
+
+    if (filterMes !== 'Todos') {
+      filteredXmlsList = xmlList.filter(xml => getMonthYear(xml.data) === filterMes);
+      filteredInutsList = inutilizacoes.filter(inut => getMonthYear(inut.data) === filterMes);
+    }
+
+    if (filteredXmlsList.length === 0) {
+      setAnalysis([]);
+      return;
+    }
+
     // 1. Identify the Main Company (CNPJ focus)
     const cnpjCounts: { [cnpj: string]: number } = {};
-    xmlList.forEach(xml => {
+    filteredXmlsList.forEach(xml => {
       if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
       if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
     });
@@ -732,7 +817,7 @@ export default function App() {
     const groups: { [key: string]: SerieAnalysis } = {};
     let localEntradaCount = 0;
 
-    xmlList.forEach(xml => {
+    filteredXmlsList.forEach(xml => {
       // Ignora completamente notas emitidas por terceiros (fornecedores)
       if (xml.emitCnpj !== mainCnpj) {
         localEntradaCount++;
@@ -790,7 +875,7 @@ export default function App() {
         }
       }
 
-      const inutSerie = inutilizacoes.filter(inut => 
+      const inutSerie = filteredInutsList.filter(inut => 
         inut.cnpj === group.cnpj && 
         inut.modelo === group.modelo && 
         inut.serie === group.serie
@@ -889,6 +974,7 @@ export default function App() {
     setAttachedSources([]);
     setProcessedFileNames(new Set());
     setEntradaCount(0);
+    setFilterMes('Todos');
   };
 
   const filteredAnalysis = useMemo(() => {
@@ -1011,8 +1097,8 @@ export default function App() {
                 <span className="font-bold uppercase text-[10px] self-center" style={{color: 'rgba(255,255,255,0.4)'}}>IE:</span>
                 <span className="font-mono text-xs" style={{color: 'rgba(255,255,255,0.7)'}}>{analysis[0].ie}</span>
                 
-                <span className="font-bold uppercase text-[10px] self-center" style={{color: 'rgba(255,255,255,0.4)'}}>Mês:</span>
-                <span className="font-bold text-base leading-none" style={{color: '#F0B429'}}>{analysis[0].mesReferencia}</span>
+                <span className="font-bold uppercase text-[10px] self-center" style={{color: 'rgba(255,255,255,0.4)'}}>Meses:</span>
+                <span className="font-bold text-sm leading-none" style={{color: '#F0B429'}}>{mesesDisponiveis.join(', ') || 'N/A'}</span>
               </div>
             </motion.div>
           )}
@@ -1321,6 +1407,23 @@ export default function App() {
                   <option value="55">Modelo 55 (NF-e)</option>
                   <option value="65">Modelo 65 (NFC-e)</option>
                 </select>
+                <select 
+                  value={filterMes} 
+                  onChange={(e) => setFilterMes(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  <option value="Todos">Todos os Meses</option>
+                  {mesesDisponiveis.map(m => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={exportFilteredXmls}
+                  className="flex items-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  Exportar XMLs ({filterMes === 'Todos' ? 'Todos' : filterMes})
+                </button>
                 <div className="flex-1" />
                 
                 {analysis && (
