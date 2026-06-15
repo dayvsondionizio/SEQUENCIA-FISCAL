@@ -1271,7 +1271,7 @@ export default function App() {
               className="space-y-8"
             >
               {/* Dashboard Stats */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
                   <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Séries</div>
                   <div className="text-4xl font-black text-slate-900 mt-2">{analysis.length}</div>
@@ -1286,6 +1286,12 @@ export default function App() {
                   <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Total Faltantes</div>
                   <div className="text-4xl font-black text-rose-600 mt-2">
                     {analysis.reduce((acc, s) => acc + s.faltantes.length, 0)}
+                  </div>
+                </div>
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Total Recebidos</div>
+                  <div className="text-4xl font-black text-blue-600 mt-2">
+                    {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
                   </div>
                 </div>
               </div>
