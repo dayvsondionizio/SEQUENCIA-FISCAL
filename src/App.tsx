@@ -87,6 +87,7 @@ interface SerieAnalysis {
   recebidos: number;
   faltantes: number[];
   faltantesInutilizados: number[];
+  cancelados?: number[];
   situacao: string;
   mesReferencia: string;
 }
@@ -815,6 +816,14 @@ export default function App() {
           return acc;
         }, {} as Record<string, number>)).sort((a, b) => b[1] - a[1])[0][0] : 'Não identificado';
 
+      const canceladosSet = new Set<number>();
+      group.xmls.forEach(x => {
+        if (x.isCancelamento && x.numero) {
+          canceladosSet.add(parseInt(x.numero));
+        }
+      });
+      const cancelados = Array.from(canceladosSet).sort((a, b) => a - b);
+
       return {
         ...group,
         min,
@@ -823,6 +832,7 @@ export default function App() {
         recebidos,
         faltantes: faltantesReais,
         faltantesInutilizados,
+        cancelados,
         situacao,
         mesReferencia
       };
@@ -1419,6 +1429,16 @@ export default function App() {
                               Inutilizações Identificadas ({serie.faltantesInutilizados.length})
                             </div>
                             Números: {formatarFaixas(agruparFaixas(serie.faltantesInutilizados))}
+                          </div>
+                        )}
+
+                        {serie.cancelados && serie.cancelados.length > 0 && (
+                          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800 text-sm">
+                            <div className="font-bold flex items-center gap-2 mb-1">
+                              <AlertCircle className="w-4 h-4 text-amber-600" />
+                              Cancelamentos Identificados ({serie.cancelados.length})
+                            </div>
+                            Números: {formatarFaixas(agruparFaixas(serie.cancelados))}
                           </div>
                         )}
 
