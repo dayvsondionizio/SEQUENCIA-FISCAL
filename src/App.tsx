@@ -285,6 +285,42 @@ function getMonthYear(dateStr?: string) {
   return '';
 }
 
+function deduplicateXmls(list: XmlData[]): XmlData[] {
+  const seen = new Set<string>();
+  return list.filter(xml => {
+    const key = xml.chave || `${xml.cnpj || ''}_${xml.modelo || ''}_${xml.serie || ''}_${xml.numero || ''}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function deduplicateInutilizacoes(list: XmlData[]): XmlData[] {
+  const seen = new Set<string>();
+  return list.filter(inut => {
+    const key = `${inut.cnpj || ''}_${inut.modelo || ''}_${inut.serie || ''}_${inut.nNFIni || 0}_${inut.nNFFin || 0}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function deduplicateOthers(list: XmlData[]): XmlData[] {
+  const seen = new Set<string>();
+  return list.filter(item => {
+    const key = `${item.tipo}_${item.subTipo || ''}_${item.fileName}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 // --- Components ---
 
 export default function App() {
@@ -657,11 +693,20 @@ export default function App() {
         await new Promise(resolve => setTimeout(resolve, 0));
       }
 
+      const mergedXmls = deduplicateXmls([...xmlList, ...finalXmls]);
+      const mergedInuts = deduplicateInutilizacoes([...inutilizacoes, ...finalInuts]);
+      const mergedOthers = deduplicateOthers([...otherXmlsList, ...finalOthers]);
+
       setAttachedSources(Array.from(sourceMap.values()));
       setProcessedFileNames(updatedProcessedNames);
-      setXmlList(prev => [...prev, ...finalXmls]);
-      setInutilizacoes(prev => [...prev, ...finalInuts]);
-      setOtherXmlsList(prev => [...prev, ...finalOthers]);
+      setXmlList(mergedXmls);
+      setInutilizacoes(mergedInuts);
+      setOtherXmlsList(mergedOthers);
+
+      setStats(prev => ({
+        ...prev,
+        totalXmls: mergedXmls.length + mergedInuts.length + mergedOthers.length
+      }));
     } catch (error) {
       console.error('Erro geral no processamento:', error);
     } finally {
@@ -869,7 +914,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 relative">
+    <div className="min-h-screen font-sans text-slate-900 relative" style={{background: '#f0f4f8'}}>
       {/* Loading Overlay */}
       <AnimatePresence>
         {isProcessing && (
@@ -877,32 +922,36 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center text-white p-6"
+            className="fixed inset-0 z-[100] backdrop-blur-sm flex flex-col items-center justify-center text-white p-6"
+            style={{background: 'rgba(10,14,35,0.88)'}}
           >
             <div className="relative w-24 h-24 mb-8">
               <motion.div 
                 animate={{ rotate: 360 }}
                 transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                className="absolute inset-0 border-4 border-blue-500/30 border-t-blue-500 rounded-full"
+                className="absolute inset-0 rounded-full"
+                style={{border: '4px solid rgba(240,180,41,0.25)', borderTopColor: '#F0B429'}}
               />
               <motion.div 
                 animate={{ rotate: -360 }}
                 transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
-                className="absolute inset-4 border-4 border-emerald-500/30 border-t-emerald-500 rounded-full"
+                className="absolute inset-4 rounded-full"
+                style={{border: '4px solid rgba(255,255,255,0.1)', borderTopColor: 'rgba(255,255,255,0.6)'}}
               />
               <div className="absolute inset-0 flex items-center justify-center">
-                <FileSearch className="w-8 h-8 text-white animate-pulse" />
+                <img src="/simbolo.png" alt="" className="w-9 h-9 object-contain animate-pulse" />
               </div>
             </div>
             <h2 className="text-2xl font-bold mb-2">Processando Arquivos</h2>
-            <div className="w-64 h-2 bg-slate-700 rounded-full overflow-hidden mb-4">
+            <div className="w-64 h-2 rounded-full overflow-hidden mb-4" style={{background: 'rgba(255,255,255,0.1)'}}>
               <motion.div 
-                className="h-full bg-blue-500"
+                className="h-full"
+                style={{background: 'linear-gradient(90deg, #F0B429, #f5d060)'}}
                 initial={{ width: 0 }}
                 animate={{ width: `${(processingProgress.current / processingProgress.total) * 100}%` }}
               />
             </div>
-            <p className="text-slate-400 text-center max-w-md">
+            <p className="text-center max-w-md" style={{color: 'rgba(255,255,255,0.6)'}}>
               Lendo {processingProgress.current} de {processingProgress.total} arquivos...
             </p>
           </motion.div>
@@ -910,15 +959,24 @@ export default function App() {
       </AnimatePresence>
 
       {/* Header */}
-      <header className="bg-slate-900 text-white py-10 px-6 shadow-2xl border-b border-slate-800">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
-          <div className="flex items-center gap-6">
-            <div className="p-4 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl shadow-2xl shadow-blue-900/40 border border-blue-400/20">
-              <FileSearch className="w-10 h-10 text-white" />
+      <header className="text-white shadow-2xl" style={{background: 'linear-gradient(135deg, #0f1340 0%, #1a1e6b 60%, #0f1340 100%)'}}>
+        {/* Top brand bar */}
+        <div className="border-b" style={{borderColor: 'rgba(240,180,41,0.2)'}}>
+          <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+            <img src="/logo-sf.png" alt="Contador de Padarias" className="h-10 object-contain" />
+            <div className="text-xs font-bold uppercase tracking-widest" style={{color: 'rgba(240,180,41,0.7)'}}>Sistema de Auditoria Fiscal</div>
+          </div>
+        </div>
+
+        {/* Main header content */}
+        <div className="max-w-7xl mx-auto px-6 py-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+          <div className="flex items-center gap-5">
+            <div className="p-3 rounded-2xl shadow-xl" style={{background: 'rgba(240,180,41,0.15)', border: '1px solid rgba(240,180,41,0.3)'}}>
+              <img src="/simbolo.png" alt="" className="w-10 h-10 object-contain" />
             </div>
             <div>
-              <h1 className="text-4xl font-black tracking-tight text-white mb-1">Sequência Fiscal</h1>
-              <p className="text-slate-400 font-medium text-lg">Auditoria de Sequência de Vendas e Saídas</p>
+              <h1 className="text-3xl font-black tracking-tight text-white mb-0.5">Sequência Fiscal</h1>
+              <p className="font-medium" style={{color: 'rgba(240,180,41,0.8)', fontSize: '0.95rem'}}>Auditoria de Sequência de Vendas e Saídas</p>
             </div>
           </div>
 
@@ -926,24 +984,25 @@ export default function App() {
             <motion.div 
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
-              className="bg-slate-800/40 backdrop-blur-md border border-slate-700/50 rounded-2xl p-4 flex flex-col gap-1 min-w-[320px] shadow-2xl"
+              className="backdrop-blur-md rounded-2xl p-4 flex flex-col gap-1 min-w-[320px] shadow-2xl"
+              style={{background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(240,180,41,0.2)'}}
             >
-              <div className="flex items-center gap-2 text-[10px] font-black text-blue-400 uppercase tracking-[0.2em] mb-1">
-                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
+              <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] mb-1" style={{color: '#F0B429'}}>
+                <span className="w-2 h-2 rounded-full animate-pulse" style={{background: '#F0B429', boxShadow: '0 0 8px rgba(240,180,41,0.6)'}} />
                 Dados Identificados
               </div>
               <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-                <span className="text-slate-500 font-bold uppercase text-[10px] self-center">Empresa:</span>
+                <span className="font-bold uppercase text-[10px] self-center" style={{color: 'rgba(255,255,255,0.4)'}}>Empresa:</span>
                 <span className="text-white font-bold truncate max-w-[280px]">{analysis[0].razaoSocial}</span>
                 
-                <span className="text-slate-500 font-bold uppercase text-[10px] self-center">CNPJ:</span>
-                <span className="text-slate-300 font-mono text-xs">{analysis[0].cnpj}</span>
+                <span className="font-bold uppercase text-[10px] self-center" style={{color: 'rgba(255,255,255,0.4)'}}>CNPJ:</span>
+                <span className="font-mono text-xs" style={{color: 'rgba(255,255,255,0.7)'}}>{analysis[0].cnpj}</span>
                 
-                <span className="text-slate-500 font-bold uppercase text-[10px] self-center">IE:</span>
-                <span className="text-slate-300 font-mono text-xs">{analysis[0].ie}</span>
+                <span className="font-bold uppercase text-[10px] self-center" style={{color: 'rgba(255,255,255,0.4)'}}>IE:</span>
+                <span className="font-mono text-xs" style={{color: 'rgba(255,255,255,0.7)'}}>{analysis[0].ie}</span>
                 
-                <span className="text-slate-500 font-bold uppercase text-[10px] self-center">Mês:</span>
-                <span className="text-blue-400 font-bold text-base leading-none">{analysis[0].mesReferencia}</span>
+                <span className="font-bold uppercase text-[10px] self-center" style={{color: 'rgba(255,255,255,0.4)'}}>Mês:</span>
+                <span className="font-bold text-base leading-none" style={{color: '#F0B429'}}>{analysis[0].mesReferencia}</span>
               </div>
             </motion.div>
           )}
@@ -1086,7 +1145,8 @@ export default function App() {
                       <button 
                         onClick={runAnalysis}
                         disabled={xmlList.length === 0}
-                        className="flex items-center gap-2 px-10 py-5 bg-emerald-600 text-white rounded-2xl font-bold text-xl hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-900/40 disabled:opacity-50 disabled:grayscale scale-105 active:scale-100"
+                        className="flex items-center gap-2 px-10 py-5 text-white rounded-2xl font-bold text-xl transition-all shadow-lg disabled:opacity-50 disabled:grayscale scale-105 active:scale-100"
+                      style={{background: 'linear-gradient(135deg, #1a1e6b, #2a2fa0)', boxShadow: '0 8px 32px rgba(26,30,107,0.4)'}}
                       >
                         <CheckCircle2 className="w-7 h-7" />
                         Iniciar Auditoria Agora
@@ -1172,7 +1232,8 @@ export default function App() {
                 <div className="flex flex-col items-center">
                     <button 
                       onClick={() => fileInputRef.current?.click()}
-                      className="flex items-center gap-3 px-10 py-5 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all active:scale-95 shadow-xl shadow-slate-200/50 hover:scale-[1.02]"
+                      className="flex items-center gap-3 px-10 py-5 text-white rounded-2xl font-bold transition-all active:scale-95 hover:scale-[1.02] shadow-xl"
+                      style={{background: 'linear-gradient(135deg, #0f1340, #1a1e6b)'}}
                     >
                       <Upload className="w-6 h-6 text-blue-400" />
                       Anexar Arquivos (ZIP ou XMLs)
@@ -1250,7 +1311,8 @@ export default function App() {
                   <div className="flex flex-col items-end">
                     <button 
                       onClick={() => window.print()}
-                      className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-xl text-sm font-black transition-all shadow-lg shadow-emerald-900/20"
+                      className="flex items-center gap-2 text-white px-5 py-2 rounded-xl text-sm font-black transition-all shadow-lg"
+                      style={{background: 'linear-gradient(135deg, #1a1e6b, #2a2fa0)'}}
                     >
                       <Printer className="w-4 h-4" />
                       Imprimir Relatório
@@ -1438,12 +1500,15 @@ export default function App() {
       {analysis && (
         <div className="hidden print:block p-0">
           <div className="print-header flex justify-between items-end">
-            <div>
-              <div className="print-title text-slate-900">Relatório de Auditoria de Sequência (Vendas/Saídas)</div>
-              <div className="text-sm text-slate-500 font-bold mt-1 uppercase tracking-widest">Documentos Emitidos pela Empresa</div>
+            <div className="flex items-end gap-6">
+              <img src="/logo-cf.png" alt="Contador de Padarias" style={{height: '52px', objectFit: 'contain'}} />
+              <div>
+                <div className="print-title" style={{color: '#0f1340'}}>Relatório de Auditoria de Sequência (Vendas/Saídas)</div>
+                <div className="text-sm font-bold mt-1 uppercase tracking-widest" style={{color: '#888'}}>Documentos Emitidos pela Empresa</div>
+              </div>
             </div>
             <div className="text-right">
-              <div className="font-black text-slate-900 border-2 border-slate-900 px-3 py-1 uppercase text-sm">Cópia de Auditoria</div>
+              <div className="font-black border-2 px-3 py-1 uppercase text-sm" style={{color: '#0f1340', borderColor: '#0f1340'}}>Cópia de Auditoria</div>
             </div>
           </div>
 
@@ -1532,8 +1597,9 @@ export default function App() {
         </div>
       )}
 
-      <footer className="max-w-7xl mx-auto p-8 text-center text-slate-400 text-sm font-medium no-print">
-        Sequência Fiscal • v2.0 • Desenvolvido para conformidade tributária
+      <footer className="p-8 text-center text-sm font-medium no-print" style={{background: '#0f1340'}}>
+        <img src="/logo-sf.png" alt="Contador de Padarias" className="h-8 object-contain mx-auto mb-3 opacity-70" />
+        <p style={{color: 'rgba(255,255,255,0.35)'}}>Sequência Fiscal • v2.0 • Contador de Padarias</p>
       </footer>
     </div>
   );
