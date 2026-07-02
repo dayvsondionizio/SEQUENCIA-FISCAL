@@ -64,6 +64,9 @@ interface XmlData {
   destNome?: string;
   tpNF?: string; // 0=Entrada, 1=Saida
   rawXml?: string;
+  // Value of the note's items (vProd), grouped by CFOP — used to break down
+  // the total faturamento by natureza da operação (venda, devolução, etc.)
+  cfopValores?: Record<string, number>;
 }
 
 interface SourceMetadata {
@@ -222,6 +225,15 @@ function parseXML(xmlText: string, fileName: string): XmlData {
     const destCnpj = dest?.getElementsByTagName('CNPJ')[0]?.textContent || '';
     const destNome = dest?.getElementsByTagName('xNome')[0]?.textContent || '';
 
+    // Group each item's value (vProd) by its CFOP, so the note's total can later be
+    // split by natureza da operação even when a single note mixes more than one CFOP
+    const cfopValores: Record<string, number> = {};
+    Array.from(doc.getElementsByTagName('det')).forEach(det => {
+      const cfop = det.getElementsByTagName('CFOP')[0]?.textContent || '';
+      const vProd = parseFloat(det.getElementsByTagName('vProd')[0]?.textContent || '0') || 0;
+      if (cfop) cfopValores[cfop] = (cfopValores[cfop] || 0) + vProd;
+    });
+
     if (numero && serie && modelo) {
       if (tpNF === '0') {
         return { tipo: 'outro', fileName };
@@ -246,6 +258,7 @@ function parseXML(xmlText: string, fileName: string): XmlData {
         natureza: getTextContent('natOp'),
         protocolo: getTextContent('nProt'),
         tpNF,
+        cfopValores,
         fileName,
         rawXml: xmlText
       };
@@ -294,6 +307,122 @@ function getMonthYear(dateStr?: string) {
     return `${months[mIdx]}/${year}`;
   }
   return '';
+}
+
+// Standard CFOP descriptions (Ajuste SINIEF 07/2001), keyed by the last 3 digits.
+// The same 3-digit suffix has the same meaning for saída dentro do Estado (5xxx),
+// para outro Estado (6xxx) or para o exterior (7xxx), so one table covers all prefixes.
+const CFOP_DESCRICOES: Record<string, string> = {
+  '101': 'Venda de produção do estabelecimento',
+  '102': 'Venda de mercadoria adquirida ou recebida de terceiros',
+  '103': 'Venda de produção do estabelecimento, efetuada fora do estabelecimento',
+  '104': 'Venda de mercadoria adquirida ou recebida de terceiros, efetuada fora do estabelecimento',
+  '105': 'Venda de produção do estabelecimento, que não deva por ele transitar',
+  '106': 'Venda de mercadoria adquirida ou recebida de terceiros, que não deva por ele transitar',
+  '109': 'Venda de produção do estabelecimento, destinada à Zona Franca de Manaus ou Áreas de Livre Comércio',
+  '110': 'Venda de mercadoria adquirida ou recebida de terceiros, destinada à Zona Franca de Manaus ou Áreas de Livre Comércio',
+  '111': 'Venda de produção do estabelecimento, remetida anteriormente em consignação',
+  '112': 'Venda de mercadoria adquirida ou recebida de terceiros, remetida anteriormente em consignação',
+  '113': 'Venda de produção do estabelecimento, destinada a não contribuinte',
+  '114': 'Venda de mercadoria adquirida ou recebida de terceiros, destinada a não contribuinte',
+  '115': 'Venda de mercadoria adquirida ou recebida de terceiros, recebida anteriormente em consignação',
+  '116': 'Venda de produção do estabelecimento originada de encomenda para entrega futura',
+  '117': 'Venda de mercadoria adquirida ou recebida de terceiros, originada de encomenda para entrega futura',
+  '118': 'Venda de produção do estabelecimento entregue ao destinatário por conta e ordem do adquirente originário, em venda à ordem',
+  '119': 'Venda de mercadoria adquirida ou recebida de terceiros entregue ao destinatário por conta e ordem do adquirente originário, em venda à ordem',
+  '120': 'Venda de mercadoria adquirida ou recebida de terceiros entregue ao destinatário pelo vendedor remetente, em venda à ordem',
+  '122': 'Venda de produção do estabelecimento entregue ao destinatário no território nacional, em venda à ordem, quando a mercadoria não transitar pelo estabelecimento do adquirente originário',
+  '124': 'Industrialização efetuada para outra empresa',
+  '125': 'Industrialização efetuada para outra empresa quando a mercadoria remetida para utilização no processo tiver sido recebida de terceiros',
+  '151': 'Transferência de produção do estabelecimento',
+  '152': 'Transferência de mercadoria adquirida ou recebida de terceiros',
+  '153': 'Transferência de energia elétrica',
+  '155': 'Transferência de produção do estabelecimento, que não deva por ele transitar',
+  '156': 'Transferência de mercadoria adquirida ou recebida de terceiros, que não deva por ele transitar',
+  '159': 'Transferência de produção do estabelecimento, sujeita ao regime de substituição tributária',
+  '160': 'Transferência de mercadoria adquirida ou recebida de terceiros, sujeita ao regime de substituição tributária',
+  '201': 'Devolução de compra para industrialização ou produção rural',
+  '202': 'Devolução de compra para comercialização',
+  '205': 'Devolução de mercadoria recebida em transferência para industrialização ou produção rural',
+  '206': 'Devolução de mercadoria recebida em transferência para comercialização',
+  '207': 'Devolução de mercadoria recebida em transferência no comércio atacadista destinada a uso, consumo ou ativo imobilizado',
+  '208': 'Devolução de mercadoria recebida em doação para industrialização ou produção rural',
+  '209': 'Devolução de mercadoria recebida em doação para comercialização',
+  '210': 'Devolução de compra para utilização na prestação de serviço',
+  '251': 'Venda de energia elétrica para distribuição ou comercialização',
+  '252': 'Venda de mercadoria adquirida ou recebida de terceiros, destinada à Zona Franca de Manaus ou Áreas de Livre Comércio, remetida por conta e ordem',
+  '253': 'Venda de energia elétrica para consumo',
+  '301': 'Venda de produção do estabelecimento efetuada por sujeito passivo por substituição tributária, na condição de contribuinte substituído',
+  '302': 'Venda de mercadoria adquirida ou recebida de terceiros efetuada por sujeito passivo por substituição tributária, na condição de contribuinte substituído',
+  '303': 'Venda de mercadoria adquirida ou recebida de terceiros sujeita ao regime de substituição tributária, na condição de contribuinte substituto',
+  '304': 'Venda de produção do estabelecimento sujeita ao regime de substituição tributária, na condição de contribuinte substituto',
+  '401': 'Venda de produção do estabelecimento em operação com produto sujeito ao regime de substituição tributária, na condição de contribuinte substituto',
+  '403': 'Venda de mercadoria adquirida ou recebida de terceiros em operação com produto sujeito ao regime de substituição tributária, na condição de contribuinte substituto',
+  '405': 'Venda de mercadoria adquirida ou recebida de terceiros em operação com mercadoria sujeita ao regime de substituição tributária, na condição de contribuinte substituído',
+  '408': 'Transferência de produção do estabelecimento, em operação com produto sujeito ao regime de substituição tributária',
+  '409': 'Transferência de mercadoria adquirida ou recebida de terceiros, em operação com mercadoria sujeita ao regime de substituição tributária',
+  '410': 'Devolução de compra para industrialização, em operação com mercadoria sujeita ao regime de substituição tributária',
+  '411': 'Devolução de compra para comercialização, em operação com mercadoria sujeita ao regime de substituição tributária',
+  '412': 'Devolução de mercadoria recebida em transferência para industrialização, em operação com mercadoria sujeita ao regime de substituição tributária',
+  '413': 'Devolução de mercadoria recebida em transferência para comercialização, em operação com mercadoria sujeita ao regime de substituição tributária',
+  '414': 'Remessa de produção do estabelecimento para venda fora do estabelecimento, em operação com produto sujeito ao regime de substituição tributária',
+  '415': 'Remessa de mercadoria adquirida ou recebida de terceiros para venda fora do estabelecimento, em operação com mercadoria sujeita ao regime de substituição tributária',
+  '501': 'Remessa de produção do estabelecimento, com fim específico de exportação',
+  '502': 'Remessa de mercadoria adquirida ou recebida de terceiros, com fim específico de exportação',
+  '551': 'Venda de bem do ativo imobilizado',
+  '552': 'Transferência de bem do ativo imobilizado',
+  '553': 'Devolução de compra de bem para o ativo imobilizado',
+  '554': 'Remessa de bem do ativo imobilizado para uso fora do estabelecimento',
+  '555': 'Devolução de bem do ativo imobilizado de terceiro, recebido para uso fora do estabelecimento',
+  '556': 'Devolução de compra de material de uso ou consumo',
+  '601': 'Venda de produção do estabelecimento, remetida anteriormente com fim específico de exportação',
+  '602': 'Venda de mercadoria adquirida ou recebida de terceiros, remetida anteriormente com fim específico de exportação',
+  '651': 'Venda de combustível ou lubrificante de produção do estabelecimento destinada à industrialização subsequente',
+  '652': 'Venda de combustível ou lubrificante de produção do estabelecimento destinada a comercialização',
+  '653': 'Venda de combustível ou lubrificante adquirido ou recebido de terceiros destinado à industrialização subsequente',
+  '654': 'Venda de combustível ou lubrificante adquirido ou recebido de terceiros destinado a comercialização',
+  '655': 'Venda de combustível ou lubrificante adquirido ou recebido de terceiros destinado a consumidor ou usuário final',
+  '656': 'Venda de combustível ou lubrificante adquirido ou recebido de terceiros para venda a não contribuinte',
+  '701': 'Venda de produção do estabelecimento em operação com produto sujeito a regime de ICMS de partilha',
+  '901': 'Remessa para industrialização por encomenda',
+  '902': 'Retorno de mercadoria utilizada na industrialização por encomenda',
+  '903': 'Retorno de mercadoria recebida para industrialização e não aplicada no referido processo',
+  '904': 'Remessa para venda fora do estabelecimento',
+  '905': 'Remessa para depósito fechado ou armazém geral',
+  '906': 'Retorno de mercadoria depositada em depósito fechado ou armazém geral',
+  '907': 'Retorno simbólico de mercadoria depositada em depósito fechado ou armazém geral',
+  '908': 'Remessa de bem por conta de contrato de comodato',
+  '909': 'Retorno de bem recebido por conta de contrato de comodato',
+  '910': 'Remessa em bonificação, doação ou brinde',
+  '911': 'Remessa de amostra grátis',
+  '912': 'Remessa de mercadoria ou bem para demonstração',
+  '913': 'Retorno de mercadoria ou bem recebido para demonstração',
+  '914': 'Remessa de mercadoria ou bem para exposição ou feira',
+  '915': 'Remessa de mercadoria ou bem para conserto ou reparo',
+  '916': 'Retorno de mercadoria ou bem recebido para conserto ou reparo',
+  '917': 'Remessa de mercadoria em consignação mercantil ou industrial',
+  '918': 'Devolução de mercadoria recebida em consignação mercantil ou industrial',
+  '919': 'Devolução simbólica de mercadoria vendida ou utilizada em processo industrial, recebida em consignação mercantil ou industrial',
+  '920': 'Remessa de vasilhame ou sacaria',
+  '921': 'Devolução de vasilhame ou sacaria',
+  '922': 'Lançamento efetuado em decorrência de venda de vasilhame ou sacaria',
+  '923': 'Remessa de mercadoria ou bem para armazenagem',
+  '924': 'Retorno de mercadoria ou bem recebido para armazenagem',
+  '925': 'Retorno de armazenagem de produto agropecuário',
+  '926': 'Lançamento efetuado a título de reclassificação de mercadoria decorrente de formação de kit ou de sua desagregação',
+  '927': 'Lançamento efetuado a título de baixa de estoque decorrente de perda, roubo ou deterioração',
+  '928': 'Lançamento efetuado a título de baixa de estoque decorrente do encerramento da atividade da empresa',
+  '929': 'Lançamento efetuado a título de baixa de estoque decorrente de doação',
+  '931': 'Lançamento efetuado pelo tomador do serviço de transporte para complementar o ICMS retido, correspondente à diferença entre o preço praticado pelo transportador e o valor da base de cálculo da retenção',
+  '932': 'Prestação de serviço de transporte iniciada em unidade federada diversa daquela onde o contribuinte está inscrito',
+  '933': 'Prestação de serviço tributado pelo ISSQN',
+  '934': 'Remessa simbólica de mercadoria depositada em armazém geral ou depósito fechado',
+  '949': 'Outra saída de mercadoria ou prestação de serviço não especificado',
+};
+
+function descricaoCfop(cfop: string): string {
+  const suffix = cfop.slice(-3);
+  return CFOP_DESCRICOES[suffix] || `CFOP ${cfop} - Não classificado`;
 }
 
 function deduplicateXmls(list: XmlData[]): XmlData[] {
@@ -366,6 +495,7 @@ export default function App() {
   const [filterModelo, setFilterModelo] = useState('Todos');
   const [filterMes, setFilterMes] = useState('Todos');
   const [showDaysDetail, setShowDaysDetail] = useState(false);
+  const [showCfopBreakdown, setShowCfopBreakdown] = useState(false);
 
   const formatarMoeda = (valor: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -399,6 +529,53 @@ export default function App() {
         if (xml.chave && chavesCanceladas.has(xml.chave)) return acc;
         return acc + (parseFloat(xml.valor || '0') || 0);
       }, 0);
+  }, [xmlList]);
+
+  // Breaks faturamentoTotal down by natureza da operação (CFOP), mirroring the
+  // "Totais ICMS por Natureza" report from the fiscal system.
+  const breakdownPorCfop = useMemo(() => {
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!mainCnpj) return [];
+
+    const chavesCanceladas = new Set<string>(
+      xmlList
+        .filter(xml => xml.tipo === 'evento' && xml.isCancelamento && xml.chave)
+        .map(xml => xml.chave!)
+    );
+
+    const totalPorCfop: Record<string, number> = {};
+    xmlList
+      .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj)
+      .forEach(xml => {
+        if (xml.chave && chavesCanceladas.has(xml.chave)) return;
+        const valorNota = parseFloat(xml.valor || '0') || 0;
+        const itens: Record<string, number> = xml.cfopValores || {};
+        const totalItens = Object.values(itens).reduce((s, v) => s + v, 0);
+
+        if (totalItens > 0) {
+          // Split the note's total value across its CFOPs proportionally to each
+          // item's share, so multi-CFOP notes don't get double counted or dropped.
+          Object.entries(itens).forEach(([cfop, valorItem]) => {
+            totalPorCfop[cfop] = (totalPorCfop[cfop] || 0) + (valorNota * (valorItem / totalItens));
+          });
+        } else {
+          const fallbackCfop = xml.natureza || 'Não identificado';
+          totalPorCfop[fallbackCfop] = (totalPorCfop[fallbackCfop] || 0) + valorNota;
+        }
+      });
+
+    return Object.entries(totalPorCfop)
+      .map(([cfop, valor]) => ({
+        cfop,
+        descricao: /^\d{4}$/.test(cfop) ? descricaoCfop(cfop) : cfop,
+        valor
+      }))
+      .sort((a, b) => a.cfop.localeCompare(b.cfop));
   }, [xmlList]);
 
   const periodoAnalise = useMemo(() => {
@@ -1558,6 +1735,14 @@ export default function App() {
                   <div className="text-4xl font-black text-emerald-600 mt-2">
                     {formatarMoeda(faturamentoTotal)}
                   </div>
+                  {breakdownPorCfop.length > 0 && (
+                    <button
+                      onClick={() => setShowCfopBreakdown(!showCfopBreakdown)}
+                      className="text-blue-600 hover:text-blue-700 underline font-bold text-xs cursor-pointer transition-all mt-2 no-print"
+                    >
+                      {showCfopBreakdown ? 'Ocultar totais por natureza (CFOP)' : 'Ver totais por natureza (CFOP)'}
+                    </button>
+                  )}
                 </div>
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm transition-all">
                   <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Período Analisado</div>
@@ -1568,7 +1753,7 @@ export default function App() {
                     <div className="flex items-center justify-between text-xs font-semibold text-slate-400">
                       <span>{periodoAnalise.totalDias} dias com movimentação</span>
                       {periodoAnalise.diasDetalhados && periodoAnalise.diasDetalhados.length > 0 && (
-                        <button 
+                        <button
                           onClick={() => setShowDaysDetail(!showDaysDetail)}
                           className="text-blue-600 hover:text-blue-700 underline font-bold cursor-pointer transition-all"
                         >
@@ -1584,6 +1769,40 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {showCfopBreakdown && breakdownPorCfop.length > 0 && (
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm mb-6">
+                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Totais por Natureza da Operação (CFOP)</div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                          <th className="py-2 pr-4">CFOP</th>
+                          <th className="py-2 pr-4">Natureza</th>
+                          <th className="py-2 pr-4 text-right">Vlr Contábil</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {breakdownPorCfop.map(({ cfop, descricao, valor }) => (
+                          <tr key={cfop} className="border-b border-slate-100 last:border-0">
+                            <td className="py-2 pr-4 font-mono text-slate-500">{cfop}</td>
+                            <td className="py-2 pr-4 text-slate-700">{descricao}</td>
+                            <td className="py-2 pr-4 text-right font-semibold text-slate-900">{formatarMoeda(valor)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={2} className="py-3 pr-4 font-black text-slate-900 uppercase text-xs tracking-wider">Total de Saídas</td>
+                          <td className="py-3 pr-4 text-right font-black text-emerald-600">
+                            {formatarMoeda(breakdownPorCfop.reduce((acc, item) => acc + item.valor, 0))}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
