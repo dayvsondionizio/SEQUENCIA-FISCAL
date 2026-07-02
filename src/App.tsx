@@ -292,21 +292,32 @@ function formatarFaixas(faixas: number[][]) {
   ).join(', ');
 }
 
+const MESES = [
+  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+];
+
 function getMonthYear(dateStr?: string) {
   if (!dateStr || dateStr.length < 7) return '';
   const parts = dateStr.split('-');
   if (parts.length < 2) return '';
   const year = parts[0];
   const month = parts[1];
-  const months = [
-    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
-  ];
   const mIdx = parseInt(month) - 1;
   if (mIdx >= 0 && mIdx < 12) {
-    return `${months[mIdx]}/${year}`;
+    return `${MESES[mIdx]}/${year}`;
   }
   return '';
+}
+
+// Reverse of getMonthYear — turns "Maio/2026" back into an ISO date so a
+// manually-confirmed inutilização still matches the active month filter.
+function monthYearParaData(monthYear?: string): string | undefined {
+  if (!monthYear) return undefined;
+  const [nomeMes, ano] = monthYear.split('/');
+  const mIdx = MESES.indexOf(nomeMes?.trim());
+  if (mIdx < 0 || !ano) return undefined;
+  return `${ano}-${String(mIdx + 1).padStart(2, '0')}-01`;
 }
 
 // Standard CFOP descriptions (Ajuste SINIEF 07/2001), keyed by the last 3 digits.
@@ -482,6 +493,10 @@ export default function App() {
   const [isConfirmed, setIsConfirmed] = useState(false);
   const [analysis, setAnalysis] = useState<SerieAnalysis[] | null>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const [manualInutSerie, setManualInutSerie] = useState('');
+  const [manualInutIni, setManualInutIni] = useState('');
+  const [manualInutFim, setManualInutFim] = useState('');
+  const [portalConsultado, setPortalConsultado] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [analystName, setAnalystName] = useState('');
   const [attachedSources, setAttachedSources] = useState<SourceMetadata[]>([]);
@@ -500,6 +515,7 @@ export default function App() {
   const [filterNotaModelo, setFilterNotaModelo] = useState('Todos');
   const [filterNotaSituacao, setFilterNotaSituacao] = useState('Todas');
   const [downloadingDanfeChave, setDownloadingDanfeChave] = useState<string | null>(null);
+  const [copiedCnpjIdx, setCopiedCnpjIdx] = useState<number | null>(null);
 
   const formatarMoeda = (valor: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -698,7 +714,8 @@ export default function App() {
     if (analysis) {
       runAnalysis();
     }
-  }, [filterMes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterMes, inutilizacoes]);
 
   const exportFilteredXmls = async () => {
     let filteredXmls = xmlList;
@@ -1377,6 +1394,7 @@ export default function App() {
     setEntradaCount(0);
     setFilterMes('Todos');
     setShowDaysDetail(false);
+    setPortalConsultado(false);
   };
 
   const filteredAnalysis = useMemo(() => {
@@ -1428,6 +1446,65 @@ export default function App() {
     } finally {
       setDownloadingDanfeChave(null);
     }
+  };
+
+  // SEFAZ portals require a logged-in session/certificate to run this query — there's
+  // no public API to call from here, so we just copy the CNPJ and hand off to the portal.
+  const PORTAL_INUTILIZADAS_NFCE_PE = 'https://nfce.sefaz.pe.gov.br:444/nfce-web/consultarFaixaInut';
+
+  const consultarInutilizadasNoPortal = (cnpj: string, idx: number) => {
+    navigator.clipboard.writeText(cnpj);
+    setCopiedCnpjIdx(idx);
+    setPortalConsultado(true);
+    setTimeout(() => {
+      setCopiedCnpjIdx(null);
+      window.open(PORTAL_INUTILIZADAS_NFCE_PE, '_blank');
+    }, 2000);
+  };
+
+  // The analyst checks the SEFAZ portal manually and types in the range that
+  // came back as inutilizada; this reuses the same inutilizacoes pipeline
+  // that XML-parsed inutilizações already flow through, so faltantes/
+  // faltantesInutilizados and the consolidated message recompute for free.
+  const confirmarInutilizacaoManual = () => {
+    const ini = parseInt(manualInutIni);
+    const fim = parseInt(manualInutFim);
+    const serieNum = manualInutSerie.trim();
+    if (!serieNum || !ini || !fim || ini > fim) {
+      alert('Informe a série, o número inicial e o número final (inicial ≤ final).');
+      return;
+    }
+    const serieAlvo = analysis?.find(s => s.modelo === '65' && s.serie === serieNum);
+    if (!serieAlvo) {
+      alert(`Não encontrei a série NFC-e "${serieNum}" nesta análise. Confira o número digitado.`);
+      return;
+    }
+    const cobreAlgumFaltante = serieAlvo.faltantes.some(n => n >= ini && n <= fim);
+    if (!cobreAlgumFaltante) {
+      alert(`Essa faixa não cobre nenhum número faltante da série ${serieNum}. Confira os valores digitados.`);
+      return;
+    }
+
+    // Match whatever month filter is active so this manual entry doesn't get
+    // silently excluded by runAnalysis's month pre-filter.
+    const dataReferencia = filterMes !== 'Todos'
+      ? monthYearParaData(filterMes)
+      : monthYearParaData(serieAlvo.mesReferencia.split(',')[0].trim());
+
+    const novaInutilizacao: XmlData = {
+      tipo: 'inutilizacao',
+      cnpj: serieAlvo.cnpj,
+      modelo: serieAlvo.modelo,
+      serie: serieAlvo.serie,
+      nNFIni: ini,
+      nNFFin: fim,
+      data: dataReferencia,
+      fileName: 'Confirmado manualmente pelo analista (consulta no portal)'
+    };
+    setInutilizacoes(prev => deduplicateInutilizacoes([...prev, novaInutilizacao]));
+    setManualInutSerie('');
+    setManualInutIni('');
+    setManualInutFim('');
   };
 
   const generateConsolidatedMessage = () => {
@@ -2007,6 +2084,69 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {(() => {
+                // Only surface the portal button when the whole analysis found zero
+                // matching inutilizações — if any série already matched some, the
+                // per-série "Números Ausentes" boxes are enough, no panel-wide nudge.
+                const nenhumaInutilizacaoEncontrada = analysis.every(s => s.faltantesInutilizados.length === 0);
+                const seriePendente = analysis.find(s => s.modelo === '65' && s.faltantes.length > 0);
+                if (!nenhumaInutilizacaoEncontrada || !seriePendente) return null;
+                return (
+                  <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col gap-3 no-print">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-sm text-amber-800">
+                        <span className="font-bold">Números faltantes sem inutilização correspondente.</span> Pode valer a pena conferir no portal da SEFAZ antes de fechar a análise.
+                      </div>
+                      <button
+                        onClick={() => consultarInutilizadasNoPortal(seriePendente.cnpj, -1)}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        {copiedCnpjIdx === -1 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações no Portal'}
+                      </button>
+                    </div>
+                    {portalConsultado && (
+                      <div className="flex flex-wrap items-end gap-3 pt-3 border-t border-amber-200">
+                        <div>
+                          <label className="text-[10px] font-bold text-amber-700 uppercase tracking-widest block mb-1">Série</label>
+                          <input
+                            type="text"
+                            value={manualInutSerie}
+                            onChange={(e) => setManualInutSerie(e.target.value)}
+                            placeholder="Ex: 101"
+                            className="w-24 px-3 py-2 rounded-xl border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-amber-700 uppercase tracking-widest block mb-1">Nº Inicial</label>
+                          <input
+                            type="number"
+                            value={manualInutIni}
+                            onChange={(e) => setManualInutIni(e.target.value)}
+                            className="w-28 px-3 py-2 rounded-xl border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-amber-700 uppercase tracking-widest block mb-1">Nº Final</label>
+                          <input
+                            type="number"
+                            value={manualInutFim}
+                            onChange={(e) => setManualInutFim(e.target.value)}
+                            className="w-28 px-3 py-2 rounded-xl border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                          />
+                        </div>
+                        <button
+                          onClick={confirmarInutilizacaoManual}
+                          className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-700 transition-all"
+                        >
+                          Confirmar Inutilização
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Filters */}
               <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-4 no-print">
