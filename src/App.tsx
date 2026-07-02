@@ -496,6 +496,10 @@ export default function App() {
   const [filterMes, setFilterMes] = useState('Todos');
   const [showDaysDetail, setShowDaysDetail] = useState(false);
   const [showCfopBreakdown, setShowCfopBreakdown] = useState(false);
+  const [notaSearchQuery, setNotaSearchQuery] = useState('');
+  const [filterNotaModelo, setFilterNotaModelo] = useState('Todos');
+  const [filterNotaSituacao, setFilterNotaSituacao] = useState('Todas');
+  const [downloadingDanfeChave, setDownloadingDanfeChave] = useState<string | null>(null);
 
   const formatarMoeda = (valor: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -577,6 +581,52 @@ export default function App() {
       }))
       .sort((a, b) => a.cfop.localeCompare(b.cfop));
   }, [xmlList]);
+
+  // All saída notes of the main company, flagged with cancellation status,
+  // used as the searchable pool for "pesquisar notas de saída".
+  const notasSaida = useMemo(() => {
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!mainCnpj) return [];
+
+    const chavesCanceladas = new Set<string>(
+      xmlList
+        .filter(xml => xml.tipo === 'evento' && xml.isCancelamento && xml.chave)
+        .map(xml => xml.chave!)
+    );
+
+    return xmlList
+      .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj)
+      .map(xml => ({ ...xml, isCancelada: !!(xml.chave && chavesCanceladas.has(xml.chave)) }));
+  }, [xmlList]);
+
+  const modelosDisponiveis = useMemo(() => {
+    return Array.from(new Set(notasSaida.map(n => n.modelo).filter((m): m is string => !!m))).sort();
+  }, [notasSaida]);
+
+  const notasSaidaFiltradas = useMemo(() => {
+    const query = notaSearchQuery.trim().toLowerCase();
+    const temFiltroAtivo = query || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas';
+    if (!temFiltroAtivo) return [];
+
+    return notasSaida.filter(nota => {
+      if (filterNotaModelo !== 'Todos' && nota.modelo !== filterNotaModelo) return false;
+      if (filterNotaSituacao === 'Válidas' && nota.isCancelada) return false;
+      if (filterNotaSituacao === 'Canceladas' && !nota.isCancelada) return false;
+      if (!query) return true;
+
+      const campos = [
+        nota.chave, nota.numero, nota.serie, nota.modelo,
+        nota.destNome, nota.destCnpj, nota.valor, nota.data,
+        nota.natureza, nota.protocolo
+      ];
+      return campos.some(campo => campo && campo.toLowerCase().includes(query));
+    });
+  }, [notasSaida, notaSearchQuery, filterNotaModelo, filterNotaSituacao]);
 
   const periodoAnalise = useMemo(() => {
     // Identify the Main Client Company CNPJ (the most frequent overall)
@@ -1343,6 +1393,43 @@ export default function App() {
     setTimeout(() => setCopiedIdx(null), 2000);
   };
 
+  const baixarDanfe = async (nota: XmlData & { isCancelada?: boolean }) => {
+    if (!nota.rawXml) {
+      alert('XML original desta nota não está disponível para gerar o DANFE.');
+      return;
+    }
+    setDownloadingDanfeChave(nota.chave || null);
+    try {
+      const response = await fetch('/api/danfe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          xml: nota.rawXml,
+          cancelada: !!nota.isCancelada,
+          chave: nota.chave,
+          protocolo: nota.protocolo,
+          dataEmissao: nota.data
+        })
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || 'Falha ao gerar o DANFE');
+      }
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `DANFE_${nota.numero || 'nota'}_${nota.chave || ''}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error('Erro ao baixar DANFE:', err);
+      alert('Não foi possível gerar o DANFE desta nota. Tente novamente.');
+    } finally {
+      setDownloadingDanfeChave(null);
+    }
+  };
+
   const generateConsolidatedMessage = () => {
     if (!analysis) return '';
     const seriesComProblemas = analysis.filter(s => s.faltantes.length > 0);
@@ -1803,6 +1890,98 @@ export default function App() {
                   </div>
                 </div>
               )}
+
+              {/* Search notas de saída */}
+              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3">Pesquisar Notas de Saída</div>
+                <div className="flex flex-col md:flex-row gap-3">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={notaSearchQuery}
+                      onChange={(e) => setNotaSearchQuery(e.target.value)}
+                      placeholder="Buscar por número, chave, cliente, data, valor..."
+                      className="w-full pl-11 pr-4 py-3 rounded-2xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    />
+                  </div>
+                  <select
+                    value={filterNotaModelo}
+                    onChange={(e) => setFilterNotaModelo(e.target.value)}
+                    className="px-4 py-3 rounded-2xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                  >
+                    <option value="Todos">Todos os modelos</option>
+                    {modelosDisponiveis.map(modelo => (
+                      <option key={modelo} value={modelo}>
+                        {modelo === '55' ? 'NF-e (Modelo 55)' : modelo === '65' ? 'NFC-e (Modelo 65)' : `Modelo ${modelo}`}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={filterNotaSituacao}
+                    onChange={(e) => setFilterNotaSituacao(e.target.value)}
+                    className="px-4 py-3 rounded-2xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                  >
+                    <option value="Todas">Válidas e Canceladas</option>
+                    <option value="Válidas">Somente Válidas</option>
+                    <option value="Canceladas">Somente Canceladas</option>
+                  </select>
+                </div>
+                {(notaSearchQuery.trim() || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas') && (
+                  <div className="mt-4 overflow-x-auto">
+                    {notasSaidaFiltradas.length === 0 ? (
+                      <p className="text-sm text-slate-400 py-4 text-center">Nenhuma nota encontrada com os filtros atuais.</p>
+                    ) : (
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                            <th className="py-2 pr-4">Número</th>
+                            <th className="py-2 pr-4">Série/Modelo</th>
+                            <th className="py-2 pr-4">Cliente</th>
+                            <th className="py-2 pr-4">Data</th>
+                            <th className="py-2 pr-4 text-right">Valor</th>
+                            <th className="py-2 pr-4">Chave</th>
+                            <th className="py-2 pr-4">Situação</th>
+                            <th className="py-2 pr-4">DANFE</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {notasSaidaFiltradas.slice(0, 100).map((nota, idx) => (
+                            <tr key={nota.chave || idx} className="border-b border-slate-100 last:border-0">
+                              <td className="py-2 pr-4 font-semibold text-slate-900">{nota.numero}</td>
+                              <td className="py-2 pr-4 text-slate-500">{nota.serie}/{nota.modelo}</td>
+                              <td className="py-2 pr-4 text-slate-700">{nota.destNome || '—'}</td>
+                              <td className="py-2 pr-4 text-slate-500">{nota.data ? nota.data.substring(0, 10).split('-').reverse().join('/') : '—'}</td>
+                              <td className="py-2 pr-4 text-right font-semibold text-slate-900">{formatarMoeda(parseFloat(nota.valor || '0') || 0)}</td>
+                              <td className="py-2 pr-4 text-slate-400 font-mono text-xs">{nota.chave}</td>
+                              <td className="py-2 pr-4">
+                                {nota.isCancelada ? (
+                                  <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-xs font-bold">Cancelada</span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold">Válida</span>
+                                )}
+                              </td>
+                              <td className="py-2 pr-4">
+                                <button
+                                  onClick={() => baixarDanfe(nota)}
+                                  disabled={downloadingDanfeChave === nota.chave || !nota.rawXml}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 transition-all"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                  {downloadingDanfeChave === nota.chave ? 'Gerando...' : 'Baixar'}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    {notasSaidaFiltradas.length > 100 && (
+                      <p className="text-xs text-slate-400 mt-2">Mostrando 100 de {notasSaidaFiltradas.length} resultados. Refine a busca para ver menos notas.</p>
+                    )}
+                  </div>
+                )}
+              </div>
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
