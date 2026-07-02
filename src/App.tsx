@@ -885,11 +885,27 @@ export default function App() {
       // The main company CNPJ is the most frequent CNPJ overall (as emitter or receiver)
       const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
 
+      // Chaves (chNFe) of notes that belong to the main company, used to validate events below
+      const mainCnpjChaves = new Set<string>(
+        mergedXmls
+          .filter(xml => xml.tipo === 'nfe' && (xml.emitCnpj === mainCnpj || xml.destCnpj === mainCnpj) && xml.chave)
+          .map(xml => xml.chave!)
+      );
+
       // Identify XMLs that do not involve the main company (neither as emitter nor as receiver)
       const conflictingXmls: XmlData[] = [];
       if (mainCnpj) {
         mergedXmls.forEach(xml => {
-          const involvesMain = xml.emitCnpj === mainCnpj || xml.destCnpj === mainCnpj || xml.cnpj === mainCnpj;
+          let involvesMain: boolean;
+          if (xml.tipo === 'evento') {
+            // Events (cancelamento, manifestação do destinatário, etc.) can legitimately be
+            // authored by a third party (e.g. the customer manifesting receipt), so the event's
+            // own CNPJ isn't a reliable company match. What matters is whether it references
+            // (via chNFe) a note that already belongs to the main company.
+            involvesMain = (xml.chave ? mainCnpjChaves.has(xml.chave) : false) || xml.cnpj === mainCnpj;
+          } else {
+            involvesMain = xml.emitCnpj === mainCnpj || xml.destCnpj === mainCnpj || xml.cnpj === mainCnpj;
+          }
           if (!involvesMain) {
             conflictingXmls.push(xml);
           }
