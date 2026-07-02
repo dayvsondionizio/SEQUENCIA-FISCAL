@@ -1451,14 +1451,15 @@ export default function App() {
   // SEFAZ portals require a logged-in session/certificate to run this query — there's
   // no public API to call from here, so we just copy the CNPJ and hand off to the portal.
   const PORTAL_INUTILIZADAS_NFCE_PE = 'https://nfce.sefaz.pe.gov.br:444/nfce-web/consultarFaixaInut';
+  const PORTAL_INUTILIZADAS_NFE_PE = 'http://nfe.sefaz.pe.gov.br/nfe-web/consultarFaixaInut';
 
-  const consultarInutilizadasNoPortal = (cnpj: string, idx: number) => {
+  const consultarInutilizadasNoPortal = (cnpj: string, idx: number, url: string) => {
     navigator.clipboard.writeText(cnpj);
     setCopiedCnpjIdx(idx);
     setPortalConsultado(true);
     setTimeout(() => {
       setCopiedCnpjIdx(null);
-      window.open(PORTAL_INUTILIZADAS_NFCE_PE, '_blank');
+      window.open(url, '_blank');
     }, 2000);
   };
 
@@ -1474,9 +1475,9 @@ export default function App() {
       alert('Informe a série, o número inicial e o número final (inicial ≤ final).');
       return;
     }
-    const serieAlvo = analysis?.find(s => s.modelo === '65' && s.serie === serieNum);
+    const serieAlvo = analysis?.find(s => (s.modelo === '65' || s.modelo === '55') && s.serie === serieNum);
     if (!serieAlvo) {
-      alert(`Não encontrei a série NFC-e "${serieNum}" nesta análise. Confira o número digitado.`);
+      alert(`Não encontrei a série "${serieNum}" (NF-e ou NFC-e) nesta análise. Confira o número digitado.`);
       return;
     }
     const cobreAlgumFaltante = serieAlvo.faltantes.some(n => n >= ini && n <= fim);
@@ -2086,25 +2087,37 @@ export default function App() {
               </div>
 
               {(() => {
-                // Only surface the portal button when the whole analysis found zero
+                // Only surface the portal buttons when the whole analysis found zero
                 // matching inutilizações — if any série already matched some, the
                 // per-série "Números Ausentes" boxes are enough, no panel-wide nudge.
                 const nenhumaInutilizacaoEncontrada = analysis.every(s => s.faltantesInutilizados.length === 0);
-                const seriePendente = analysis.find(s => s.modelo === '65' && s.faltantes.length > 0);
-                if (!nenhumaInutilizacaoEncontrada || !seriePendente) return null;
+                const seriePendenteNfce = analysis.find(s => s.modelo === '65' && s.faltantes.length > 0);
+                const seriePendenteNfe = analysis.find(s => s.modelo === '55' && s.faltantes.length > 0);
+                if (!nenhumaInutilizacaoEncontrada || (!seriePendenteNfce && !seriePendenteNfe)) return null;
                 return (
                   <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col gap-3 no-print">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="text-sm text-amber-800">
-                        <span className="font-bold">Números faltantes sem inutilização correspondente.</span> Pode valer a pena conferir no portal da SEFAZ antes de fechar a análise.
-                      </div>
-                      <button
-                        onClick={() => consultarInutilizadasNoPortal(seriePendente.cnpj, -1)}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        {copiedCnpjIdx === -1 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações no Portal'}
-                      </button>
+                    <div className="text-sm text-amber-800">
+                      <span className="font-bold">Números faltantes sem inutilização correspondente.</span> Pode valer a pena conferir no portal da SEFAZ antes de fechar a análise.
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      {seriePendenteNfce && (
+                        <button
+                          onClick={() => consultarInutilizadasNoPortal(seriePendenteNfce.cnpj, -1, PORTAL_INUTILIZADAS_NFCE_PE)}
+                          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          {copiedCnpjIdx === -1 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações NFC-e no Portal'}
+                        </button>
+                      )}
+                      {seriePendenteNfe && (
+                        <button
+                          onClick={() => consultarInutilizadasNoPortal(seriePendenteNfe.cnpj, -2, PORTAL_INUTILIZADAS_NFE_PE)}
+                          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          {copiedCnpjIdx === -2 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações NF-e no Portal'}
+                        </button>
+                      )}
                     </div>
                     {portalConsultado && (
                       <div className="flex flex-wrap items-end gap-3 pt-3 border-t border-amber-200">
