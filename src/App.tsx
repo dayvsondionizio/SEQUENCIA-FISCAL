@@ -67,6 +67,10 @@ interface XmlData {
   // Value of the note's items (vProd), grouped by CFOP — used to break down
   // the total faturamento by natureza da operação (venda, devolução, etc.)
   cfopValores?: Record<string, number>;
+  // True only for inutilizações typed in by the analyst after checking the SEFAZ
+  // portal — distinguishes them from inutilizações that came from an XML the
+  // client actually sent.
+  origemManual?: boolean;
 }
 
 interface SourceMetadata {
@@ -92,6 +96,10 @@ interface SerieAnalysis {
   recebidos: number;
   faltantes: number[];
   faltantesInutilizados: number[];
+  // Subset of faltantesInutilizados that came from a manually-typed confirmation
+  // rather than an actual XML — these won't be resolved yet in the SEFAZ system
+  // (e.g. Questor), so they need to stay visibly flagged.
+  faltantesInutilizadosManual: number[];
   cancelados?: number[];
   situacao: string;
   mesReferencia: string;
@@ -310,16 +318,6 @@ function getMonthYear(dateStr?: string) {
   return '';
 }
 
-// Reverse of getMonthYear — turns "Maio/2026" back into an ISO date so a
-// manually-confirmed inutilização still matches the active month filter.
-function monthYearParaData(monthYear?: string): string | undefined {
-  if (!monthYear) return undefined;
-  const [nomeMes, ano] = monthYear.split('/');
-  const mIdx = MESES.indexOf(nomeMes?.trim());
-  if (mIdx < 0 || !ano) return undefined;
-  return `${ano}-${String(mIdx + 1).padStart(2, '0')}-01`;
-}
-
 // Standard CFOP descriptions (Ajuste SINIEF 07/2001), keyed by the last 3 digits.
 // The same 3-digit suffix has the same meaning for saída dentro do Estado (5xxx),
 // para outro Estado (6xxx) or para o exterior (7xxx), so one table covers all prefixes.
@@ -493,9 +491,11 @@ export default function App() {
   const [isConfirmed, setIsConfirmed] = useState(false);
   const [analysis, setAnalysis] = useState<SerieAnalysis[] | null>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const [manualInutModelo, setManualInutModelo] = useState('65');
   const [manualInutSerie, setManualInutSerie] = useState('');
   const [manualInutIni, setManualInutIni] = useState('');
   const [manualInutFim, setManualInutFim] = useState('');
+  const [manualInutData, setManualInutData] = useState('');
   const [portalConsultado, setPortalConsultado] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [analystName, setAnalystName] = useState('');
@@ -598,8 +598,9 @@ export default function App() {
       .sort((a, b) => a.cfop.localeCompare(b.cfop));
   }, [xmlList]);
 
-  // All saída notes of the main company, flagged with cancellation status,
-  // used as the searchable pool for "pesquisar notas de saída".
+  // All saída notes of the main company, plus inutilizações (XML-sourced or
+  // manually confirmed), flagged with cancellation status — the searchable
+  // pool for "pesquisar notas de saída".
   const notasSaida = useMemo(() => {
     const cnpjCounts: { [cnpj: string]: number } = {};
     xmlList.forEach(xml => {
@@ -615,10 +616,20 @@ export default function App() {
         .map(xml => xml.chave!)
     );
 
-    return xmlList
+    const notas = xmlList
       .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj)
       .map(xml => ({ ...xml, isCancelada: !!(xml.chave && chavesCanceladas.has(xml.chave)) }));
-  }, [xmlList]);
+
+    const inuts = inutilizacoes
+      .filter(inut => inut.cnpj === mainCnpj)
+      .map(inut => ({
+        ...inut,
+        numero: inut.nNFIni === inut.nNFFin ? String(inut.nNFIni) : `${inut.nNFIni} a ${inut.nNFFin}`,
+        isCancelada: false
+      }));
+
+    return [...notas, ...inuts];
+  }, [xmlList, inutilizacoes]);
 
   const modelosDisponiveis = useMemo(() => {
     return Array.from(new Set(notasSaida.map(n => n.modelo).filter((m): m is string => !!m))).sort();
@@ -631,8 +642,9 @@ export default function App() {
 
     return notasSaida.filter(nota => {
       if (filterNotaModelo !== 'Todos' && nota.modelo !== filterNotaModelo) return false;
-      if (filterNotaSituacao === 'Válidas' && nota.isCancelada) return false;
-      if (filterNotaSituacao === 'Canceladas' && !nota.isCancelada) return false;
+      if (filterNotaSituacao === 'Válidas' && (nota.isCancelada || nota.tipo === 'inutilizacao')) return false;
+      if (filterNotaSituacao === 'Canceladas' && (!nota.isCancelada || nota.tipo === 'inutilizacao')) return false;
+      if (filterNotaSituacao === 'Inutilizadas' && nota.tipo !== 'inutilizacao') return false;
       if (!query) return true;
 
       const campos = [
@@ -1264,6 +1276,7 @@ export default function App() {
           recebidos: 0,
           faltantes: [],
           faltantesInutilizados: [],
+          faltantesInutilizadosManual: [],
           situacao: 'Íntegra',
           mesReferencia: ''
         };
@@ -1301,14 +1314,17 @@ export default function App() {
       );
 
       const numerosInutilizadosSet = new Set<number>();
+      const numerosInutilizadosManualSet = new Set<number>();
       inutSerie.forEach(inut => {
         for (let i = inut.nNFIni!; i <= inut.nNFFin!; i++) {
           numerosInutilizadosSet.add(i);
+          if (inut.origemManual) numerosInutilizadosManualSet.add(i);
         }
       });
 
       const faltantesReais = faltantes.filter(num => !numerosInutilizadosSet.has(num));
       const faltantesInutilizados = faltantes.filter(num => numerosInutilizadosSet.has(num));
+      const faltantesInutilizadosManual = faltantesInutilizados.filter(num => numerosInutilizadosManualSet.has(num));
 
       let situacao = faltantesReais.length > 0 ? 'Quebra Identificada' : 'Íntegra';
       
@@ -1335,6 +1351,7 @@ export default function App() {
         recebidos,
         faltantes: faltantesReais,
         faltantesInutilizados,
+        faltantesInutilizadosManual,
         cancelados,
         situacao,
         mesReferencia
@@ -1453,10 +1470,11 @@ export default function App() {
   const PORTAL_INUTILIZADAS_NFCE_PE = 'https://nfce.sefaz.pe.gov.br:444/nfce-web/consultarFaixaInut';
   const PORTAL_INUTILIZADAS_NFE_PE = 'http://nfe.sefaz.pe.gov.br/nfe-web/consultarFaixaInut';
 
-  const consultarInutilizadasNoPortal = (cnpj: string, idx: number, url: string) => {
+  const consultarInutilizadasNoPortal = (cnpj: string, idx: number, url: string, modelo: string) => {
     navigator.clipboard.writeText(cnpj);
     setCopiedCnpjIdx(idx);
     setPortalConsultado(true);
+    setManualInutModelo(modelo);
     setTimeout(() => {
       setCopiedCnpjIdx(null);
       window.open(url, '_blank');
@@ -1475,22 +1493,36 @@ export default function App() {
       alert('Informe a série, o número inicial e o número final (inicial ≤ final).');
       return;
     }
-    const serieAlvo = analysis?.find(s => (s.modelo === '65' || s.modelo === '55') && s.serie === serieNum);
+    if (!manualInutData) {
+      alert('Informe a data da inutilização (a que aparece no portal da SEFAZ) — isso evita ambiguidade em análises com mais de um mês.');
+      return;
+    }
+    const rotuloModelo = manualInutModelo === '55' ? 'NF-e' : 'NFC-e';
+    const serieAlvo = analysis?.find(s => s.modelo === manualInutModelo && s.serie === serieNum);
     if (!serieAlvo) {
-      alert(`Não encontrei a série "${serieNum}" (NF-e ou NFC-e) nesta análise. Confira o número digitado.`);
+      alert(`Não encontrei a série ${rotuloModelo} "${serieNum}" nesta análise. Confira o modelo e o número digitados.`);
       return;
     }
     const cobreAlgumFaltante = serieAlvo.faltantes.some(n => n >= ini && n <= fim);
     if (!cobreAlgumFaltante) {
-      alert(`Essa faixa não cobre nenhum número faltante da série ${serieNum}. Confira os valores digitados.`);
+      alert(`Essa faixa não cobre nenhum número faltante da série ${rotuloModelo} ${serieNum}. Confira os valores digitados.`);
       return;
     }
 
-    // Match whatever month filter is active so this manual entry doesn't get
-    // silently excluded by runAnalysis's month pre-filter.
-    const dataReferencia = filterMes !== 'Todos'
-      ? monthYearParaData(filterMes)
-      : monthYearParaData(serieAlvo.mesReferencia.split(',')[0].trim());
+    // The analysis covers a specific period — reject a date typed outside the
+    // months this série actually spans, instead of silently accepting a typo.
+    if (serieAlvo.mesReferencia !== 'Não identificado') {
+      const mesesDaSerie = serieAlvo.mesReferencia.split(',').map(m => {
+        const [nomeMes, ano] = m.trim().split('/');
+        const mIdx = MESES.indexOf(nomeMes);
+        return mIdx >= 0 && ano ? `${ano}-${String(mIdx + 1).padStart(2, '0')}` : null;
+      }).filter(Boolean);
+      const mesDigitado = manualInutData.substring(0, 7);
+      if (mesesDaSerie.length > 0 && !mesesDaSerie.includes(mesDigitado)) {
+        alert(`Essa data está fora do período analisado desta série (${serieAlvo.mesReferencia}). Confira a data digitada.`);
+        return;
+      }
+    }
 
     const novaInutilizacao: XmlData = {
       tipo: 'inutilizacao',
@@ -1499,13 +1531,15 @@ export default function App() {
       serie: serieAlvo.serie,
       nNFIni: ini,
       nNFFin: fim,
-      data: dataReferencia,
+      data: manualInutData,
+      origemManual: true,
       fileName: 'Confirmado manualmente pelo analista (consulta no portal)'
     };
     setInutilizacoes(prev => deduplicateInutilizacoes([...prev, novaInutilizacao]));
     setManualInutSerie('');
     setManualInutIni('');
     setManualInutFim('');
+    setManualInutData('');
   };
 
   const generateConsolidatedMessage = () => {
@@ -2000,9 +2034,10 @@ export default function App() {
                     onChange={(e) => setFilterNotaSituacao(e.target.value)}
                     className="px-4 py-3 rounded-2xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
                   >
-                    <option value="Todas">Válidas e Canceladas</option>
+                    <option value="Todas">Todas as Situações</option>
                     <option value="Válidas">Somente Válidas</option>
                     <option value="Canceladas">Somente Canceladas</option>
+                    <option value="Inutilizadas">Somente Inutilizadas</option>
                   </select>
                 </div>
                 {(notaSearchQuery.trim() || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas') && (
@@ -2024,33 +2059,44 @@ export default function App() {
                           </tr>
                         </thead>
                         <tbody>
-                          {notasSaidaFiltradas.slice(0, 100).map((nota, idx) => (
-                            <tr key={nota.chave || idx} className="border-b border-slate-100 last:border-0">
-                              <td className="py-2 pr-4 font-semibold text-slate-900">{nota.numero}</td>
-                              <td className="py-2 pr-4 text-slate-500">{nota.serie}/{nota.modelo}</td>
-                              <td className="py-2 pr-4 text-slate-700">{nota.destNome || '—'}</td>
-                              <td className="py-2 pr-4 text-slate-500">{nota.data ? nota.data.substring(0, 10).split('-').reverse().join('/') : '—'}</td>
-                              <td className="py-2 pr-4 text-right font-semibold text-slate-900">{formatarMoeda(parseFloat(nota.valor || '0') || 0)}</td>
-                              <td className="py-2 pr-4 text-slate-400 font-mono text-xs">{nota.chave}</td>
-                              <td className="py-2 pr-4">
-                                {nota.isCancelada ? (
-                                  <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-xs font-bold">Cancelada</span>
-                                ) : (
-                                  <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold">Válida</span>
-                                )}
-                              </td>
-                              <td className="py-2 pr-4">
-                                <button
-                                  onClick={() => baixarDanfe(nota)}
-                                  disabled={downloadingDanfeChave === nota.chave || !nota.rawXml}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 transition-all"
-                                >
-                                  <Download className="w-3.5 h-3.5" />
-                                  {downloadingDanfeChave === nota.chave ? 'Gerando...' : 'Baixar'}
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
+                          {notasSaidaFiltradas.slice(0, 100).map((nota, idx) => {
+                            const isInutilizacao = nota.tipo === 'inutilizacao';
+                            return (
+                              <tr key={nota.chave || `${nota.cnpj}-${nota.modelo}-${nota.serie}-${nota.nNFIni}-${idx}`} className="border-b border-slate-100 last:border-0">
+                                <td className="py-2 pr-4 font-semibold text-slate-900">{nota.numero}</td>
+                                <td className="py-2 pr-4 text-slate-500">{nota.serie}/{nota.modelo}</td>
+                                <td className="py-2 pr-4 text-slate-700">{isInutilizacao ? '—' : (nota.destNome || '—')}</td>
+                                <td className="py-2 pr-4 text-slate-500">{nota.data ? nota.data.substring(0, 10).split('-').reverse().join('/') : '—'}</td>
+                                <td className="py-2 pr-4 text-right font-semibold text-slate-900">{isInutilizacao ? '—' : formatarMoeda(parseFloat(nota.valor || '0') || 0)}</td>
+                                <td className="py-2 pr-4 text-slate-400 font-mono text-xs">{isInutilizacao ? '—' : nota.chave}</td>
+                                <td className="py-2 pr-4">
+                                  {isInutilizacao ? (
+                                    nota.origemManual ? (
+                                      <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-bold">Inutilizada (Manual)</span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 text-xs font-bold">Inutilizada (XML)</span>
+                                    )
+                                  ) : nota.isCancelada ? (
+                                    <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-xs font-bold">Cancelada</span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold">Válida</span>
+                                  )}
+                                </td>
+                                <td className="py-2 pr-4">
+                                  {!isInutilizacao && (
+                                    <button
+                                      onClick={() => baixarDanfe(nota)}
+                                      disabled={downloadingDanfeChave === nota.chave || !nota.rawXml}
+                                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 transition-all"
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                      {downloadingDanfeChave === nota.chave ? 'Gerando...' : 'Baixar'}
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     )}
@@ -2061,66 +2107,108 @@ export default function App() {
                 )}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Séries</div>
-                  <div className="text-4xl font-black text-slate-900 mt-2">{analysis.length}</div>
-                </div>
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Com Quebra</div>
-                  <div className="text-4xl font-black text-amber-500 mt-2">
-                    {analysis.filter(s => s.faltantes.length > 0).length}
+              {(() => {
+                const faltantesLiquidos = analysis.reduce((acc, s) => acc + s.faltantes.length, 0);
+                const totalManual = analysis.reduce((acc, s) => acc + s.faltantesInutilizadosManual.length, 0);
+                const faltantesBrutos = faltantesLiquidos + totalManual;
+
+                return (
+                  <div className={cn("grid grid-cols-1 gap-4", totalManual > 0 ? "md:grid-cols-5" : "md:grid-cols-4")}>
+                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                      <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Séries</div>
+                      <div className="text-4xl font-black text-slate-900 mt-2">{analysis.length}</div>
+                    </div>
+                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                      <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Com Quebra</div>
+                      <div className="text-4xl font-black text-amber-500 mt-2">
+                        {analysis.filter(s => s.faltantes.length > 0).length}
+                      </div>
+                    </div>
+                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                      <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">
+                        {totalManual > 0 ? 'Faltantes Líquidos' : 'Total Faltantes'}
+                      </div>
+                      <div className="text-4xl font-black text-rose-600 mt-2">{faltantesLiquidos}</div>
+                      {totalManual > 0 && (
+                        <div className="text-sm text-slate-500 font-bold mt-1">Bruto (bate com Questor): {faltantesBrutos}</div>
+                      )}
+                    </div>
+                    {totalManual > 0 && (
+                      <div className="bg-white p-6 rounded-3xl border border-amber-200 shadow-sm no-print">
+                        <div className="text-sm font-bold text-amber-600 uppercase tracking-widest">Inutilizadas Sem XML</div>
+                        <div className="text-4xl font-black text-amber-600 mt-2">{totalManual}</div>
+                        <div className="text-[11px] text-slate-400 font-semibold mt-1">Confirmadas manualmente, ainda sem XML do cliente</div>
+                      </div>
+                    )}
+                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                      <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Total Recebidos</div>
+                      <div className="text-4xl font-black text-blue-600 mt-2">
+                        {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Total Faltantes</div>
-                  <div className="text-4xl font-black text-rose-600 mt-2">
-                    {analysis.reduce((acc, s) => acc + s.faltantes.length, 0)}
-                  </div>
-                </div>
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Total Recebidos</div>
-                  <div className="text-4xl font-black text-blue-600 mt-2">
-                    {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
-                  </div>
-                </div>
-              </div>
+                );
+              })()}
 
               {(() => {
-                // Only surface the portal buttons when the whole analysis found zero
-                // matching inutilizações — if any série already matched some, the
-                // per-série "Números Ausentes" boxes are enough, no panel-wide nudge.
+                // Portal buttons only show up while the whole analysis found zero
+                // matching inutilizações (once any is found, XML or manual, the
+                // per-série boxes already cover it). The manual form, though, must
+                // stay available as long as ANY série still has real faltantes —
+                // otherwise confirming just one hides the panel and blocks the rest.
                 const nenhumaInutilizacaoEncontrada = analysis.every(s => s.faltantesInutilizados.length === 0);
                 const seriePendenteNfce = analysis.find(s => s.modelo === '65' && s.faltantes.length > 0);
                 const seriePendenteNfe = analysis.find(s => s.modelo === '55' && s.faltantes.length > 0);
-                if (!nenhumaInutilizacaoEncontrada || (!seriePendenteNfce && !seriePendenteNfe)) return null;
+                const mostrarBotoes = nenhumaInutilizacaoEncontrada && (seriePendenteNfce || seriePendenteNfe);
+                const aindaHaFaltantes = analysis.some(s => s.faltantes.length > 0);
+                const mostrarFormulario = portalConsultado && aindaHaFaltantes;
+                if (!mostrarBotoes && !mostrarFormulario) return null;
+
+                const modelosComFaltante = Array.from(new Set(analysis.filter(s => s.faltantes.length > 0).map(s => s.modelo)));
+
                 return (
                   <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col gap-3 no-print">
-                    <div className="text-sm text-amber-800">
-                      <span className="font-bold">Números faltantes sem inutilização correspondente.</span> Pode valer a pena conferir no portal da SEFAZ antes de fechar a análise.
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3">
-                      {seriePendenteNfce && (
-                        <button
-                          onClick={() => consultarInutilizadasNoPortal(seriePendenteNfce.cnpj, -1, PORTAL_INUTILIZADAS_NFCE_PE)}
-                          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
-                        >
-                          <Copy className="w-3.5 h-3.5" />
-                          {copiedCnpjIdx === -1 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações NFC-e no Portal'}
-                        </button>
-                      )}
-                      {seriePendenteNfe && (
-                        <button
-                          onClick={() => consultarInutilizadasNoPortal(seriePendenteNfe.cnpj, -2, PORTAL_INUTILIZADAS_NFE_PE)}
-                          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
-                        >
-                          <Copy className="w-3.5 h-3.5" />
-                          {copiedCnpjIdx === -2 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações NF-e no Portal'}
-                        </button>
-                      )}
-                    </div>
-                    {portalConsultado && (
-                      <div className="flex flex-wrap items-end gap-3 pt-3 border-t border-amber-200">
+                    {mostrarBotoes && (
+                      <>
+                        <div className="text-sm text-amber-800">
+                          <span className="font-bold">Números faltantes sem inutilização correspondente.</span> Pode valer a pena conferir no portal da SEFAZ antes de fechar a análise.
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3">
+                          {seriePendenteNfce && (
+                            <button
+                              onClick={() => consultarInutilizadasNoPortal(seriePendenteNfce.cnpj, -1, PORTAL_INUTILIZADAS_NFCE_PE, '65')}
+                              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                              {copiedCnpjIdx === -1 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações NFC-e no Portal'}
+                            </button>
+                          )}
+                          {seriePendenteNfe && (
+                            <button
+                              onClick={() => consultarInutilizadasNoPortal(seriePendenteNfe.cnpj, -2, PORTAL_INUTILIZADAS_NFE_PE, '55')}
+                              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                              {copiedCnpjIdx === -2 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações NF-e no Portal'}
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                    {mostrarFormulario && (
+                      <div className={cn("flex flex-wrap items-end gap-3", mostrarBotoes && "pt-3 border-t border-amber-200")}>
+                        <div>
+                          <label className="text-[10px] font-bold text-amber-700 uppercase tracking-widest block mb-1">Modelo</label>
+                          <select
+                            value={manualInutModelo}
+                            onChange={(e) => setManualInutModelo(e.target.value)}
+                            className="px-3 py-2 rounded-xl border border-amber-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                          >
+                            {(modelosComFaltante.length > 0 ? modelosComFaltante : ['65', '55']).map(m => (
+                              <option key={m} value={m}>{m === '55' ? 'NF-e (55)' : 'NFC-e (65)'}</option>
+                            ))}
+                          </select>
+                        </div>
                         <div>
                           <label className="text-[10px] font-bold text-amber-700 uppercase tracking-widest block mb-1">Série</label>
                           <input
@@ -2147,6 +2235,15 @@ export default function App() {
                             value={manualInutFim}
                             onChange={(e) => setManualInutFim(e.target.value)}
                             className="w-28 px-3 py-2 rounded-xl border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-amber-700 uppercase tracking-widest block mb-1">Data (no portal)</label>
+                          <input
+                            type="date"
+                            value={manualInutData}
+                            onChange={(e) => setManualInutData(e.target.value)}
+                            className="px-3 py-2 rounded-xl border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
                           />
                         </div>
                         <button
@@ -2295,12 +2392,29 @@ export default function App() {
                         </div>
 
                         {serie.faltantesInutilizados.length > 0 && (
-                          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-emerald-800 text-sm">
-                            <div className="font-bold flex items-center gap-2 mb-1">
+                          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-emerald-800 text-sm space-y-2">
+                            <div className="font-bold flex items-center gap-2">
                               <Check className="w-4 h-4" />
                               Inutilizações Identificadas ({serie.faltantesInutilizados.length})
                             </div>
-                            Números: {formatarFaixas(agruparFaixas(serie.faltantesInutilizados))}
+                            {(() => {
+                              const doXml = serie.faltantesInutilizados.filter(n => !serie.faltantesInutilizadosManual.includes(n));
+                              return (
+                                <>
+                                  {doXml.length > 0 && (
+                                    <div>Da XML: {formatarFaixas(agruparFaixas(doXml))}</div>
+                                  )}
+                                  {serie.faltantesInutilizadosManual.length > 0 && (
+                                    <div className="flex items-start gap-2 bg-white/60 border border-emerald-300 rounded-lg p-2 no-print">
+                                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                                      <span>
+                                        <strong>Confirmadas manualmente, sem XML ({serie.faltantesInutilizadosManual.length}):</strong> {formatarFaixas(agruparFaixas(serie.faltantesInutilizadosManual))}
+                                      </span>
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            })()}
                           </div>
                         )}
 
