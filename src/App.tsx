@@ -149,10 +149,13 @@ function parseXML(xmlText: string, fileName: string): XmlData {
   // Check for Events (like Cancellation)
   const isEvento = doc.getElementsByTagName('procEventoNFe').length > 0 || doc.getElementsByTagName('eventoNFe').length > 0;
   if (isEvento) {
+    // tpEvento: 110111 = Cancelamento; outros = carta de correção, etc.
+    const tpEvento = getTextContent('tpEvento');
+    const isCancelamentoEvento = tpEvento === '110111';
     return {
       tipo: 'evento',
-      subTipo: descEventos[0] || 'Evento',
-      isCancelamento: isCancel,
+      subTipo: tpEvento || descEventos[0] || 'Evento',
+      isCancelamento: isCancelamentoEvento,
       cnpj: getTextContent('CNPJ'),
       chave: getTextContent('chNFe'),
       fileName,
@@ -296,7 +299,9 @@ function getMonthYear(dateStr?: string) {
 function deduplicateXmls(list: XmlData[]): XmlData[] {
   const seen = new Set<string>();
   return list.filter(xml => {
-    const key = xml.chave || `${xml.cnpj || ''}_${xml.modelo || ''}_${xml.serie || ''}_${xml.numero || ''}`;
+    // Include tipo in the key so an 'evento' and an 'nfe' with the same chave are NOT considered duplicates
+    const baseKey = xml.chave || `${xml.cnpj || ''}_${xml.modelo || ''}_${xml.serie || ''}_${xml.numero || ''}`;
+    const key = `${xml.tipo}::${baseKey}`;
     if (seen.has(key)) {
       return false;
     }
@@ -380,9 +385,20 @@ export default function App() {
     const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     if (!mainCnpj) return 0;
 
+    // Build a set of note keys that have a genuine cancellation event (tpEvento === '110111')
+    const chavesCanceladas = new Set<string>(
+      xmlList
+        .filter(xml => xml.tipo === 'evento' && xml.isCancelamento && xml.chave)
+        .map(xml => xml.chave!)
+    );
+
     return xmlList
-      .filter(xml => xml.tipo === 'nfe' && !xml.isCancelamento && xml.emitCnpj === mainCnpj)
-      .reduce((acc, xml) => acc + (parseFloat(xml.valor || '0') || 0), 0);
+      .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj)
+      .reduce((acc, xml) => {
+        // If the note's key appears in cancellation events set, treat its value as R$ 0,00
+        if (xml.chave && chavesCanceladas.has(xml.chave)) return acc;
+        return acc + (parseFloat(xml.valor || '0') || 0);
+      }, 0);
   }, [xmlList]);
 
   const periodoAnalise = useMemo(() => {
@@ -642,8 +658,9 @@ export default function App() {
                     if (data.isCancelamento) results.localCancellations++;
                     if (data.tipo === 'inutilizacao') {
                       results.localInuts.push(data); results.localInutsCount++;
-                    } else if (data.tipo === 'nfe') {
-                      results.localXmls.push(data); results.localValidNfCount++;
+                    } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
+                      results.localXmls.push(data);
+                      if (data.tipo === 'nfe') results.localValidNfCount++;
                     } else {
                       results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
                     }
@@ -697,8 +714,9 @@ export default function App() {
                   if (data.isCancelamento) results.localCancellations++;
                   if (data.tipo === 'inutilizacao') {
                     results.localInuts.push(data); results.localInutsCount++;
-                  } else if (data.tipo === 'nfe') {
-                    results.localXmls.push(data); results.localValidNfCount++;
+                  } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
+                    results.localXmls.push(data);
+                    if (data.tipo === 'nfe') results.localValidNfCount++;
                   } else {
                     results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
                   }
@@ -736,8 +754,9 @@ export default function App() {
                     if (data.isCancelamento) results.localCancellations++;
                     if (data.tipo === 'inutilizacao') {
                       results.localInuts.push(data); results.localInutsCount++;
-                    } else if (data.tipo === 'nfe') {
-                      results.localXmls.push(data); results.localValidNfCount++;
+                    } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
+                      results.localXmls.push(data);
+                      if (data.tipo === 'nfe') results.localValidNfCount++;
                     } else {
                       results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
                     }
@@ -794,9 +813,11 @@ export default function App() {
               if (data.tipo === 'inutilizacao') {
                 res.localInuts.push(data);
                 res.localInutsCount++;
-              } else if (data.tipo === 'nfe') {
+              } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
+                // Keep both NF-e notes and cancellation events in the same list so
+                // faturamentoTotal can cross-reference them by chave
                 res.localXmls.push(data);
-                res.localValidNfCount++;
+                if (data.tipo === 'nfe') res.localValidNfCount++;
               } else {
                 res.localOthers.push({ fileName: file.name, subTipo: data.subTipo, tipo: data.tipo } as any);
               }
