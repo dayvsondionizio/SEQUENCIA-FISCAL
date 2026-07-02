@@ -360,6 +360,87 @@ export default function App() {
   // Filters
   const [filterModelo, setFilterModelo] = useState('Todos');
   const [filterMes, setFilterMes] = useState('Todos');
+  const [showDaysDetail, setShowDaysDetail] = useState(false);
+
+  const formatarMoeda = (valor: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL'
+    }).format(valor);
+  };
+
+  const faturamentoTotal = useMemo(() => {
+    // Identify the Main Client Company CNPJ (the most frequent overall)
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+
+    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!mainCnpj) return 0;
+
+    return xmlList
+      .filter(xml => xml.tipo === 'nfe' && !xml.isCancelamento && xml.emitCnpj === mainCnpj)
+      .reduce((acc, xml) => acc + (parseFloat(xml.valor || '0') || 0), 0);
+  }, [xmlList]);
+
+  const periodoAnalise = useMemo(() => {
+    // Identify the Main Client Company CNPJ (the most frequent overall)
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+
+    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+
+    const datas = xmlList
+      .filter(xml => !mainCnpj || xml.emitCnpj === mainCnpj) // Only count client's sales/saídas
+      .map(xml => xml.data ? xml.data.substring(0, 10) : '')
+      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+      .sort();
+    
+    if (datas.length === 0) return { inicio: '', fim: '', totalDias: 0, diasDetalhados: [] };
+    
+    const formatarDataBR = (dateStr: string) => {
+      const parts = dateStr.split('-');
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    };
+
+    const getEpochDay = (dateStr: string) => {
+      const parts = dateStr.split('-');
+      const date = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
+      return Math.floor(date.getTime() / (24 * 60 * 60 * 1000));
+    };
+
+    const fromEpochDay = (epochDay: number) => {
+      const date = new Date(epochDay * 24 * 60 * 60 * 1000);
+      const day = String(date.getUTCDate()).padStart(2, '0');
+      const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const year = date.getUTCFullYear();
+      return `${day}/${month}/${year}`;
+    };
+
+    const uniqueDays = Array.from(new Set(datas));
+    const epochDays = uniqueDays.map(getEpochDay).sort((a, b) => a - b);
+    const groupedEpochs = agruparFaixas(epochDays);
+    
+    const diasDetalhados = groupedEpochs.map(faixa => {
+      if (faixa.length === 1) {
+        return fromEpochDay(faixa[0]);
+      } else {
+        return `${fromEpochDay(faixa[0])} a ${fromEpochDay(faixa[faixa.length - 1])}`;
+      }
+    });
+    
+    return {
+      inicio: formatarDataBR(datas[0]),
+      fim: formatarDataBR(datas[datas.length - 1]),
+      totalDias: uniqueDays.length,
+      diasDetalhados
+    };
+  }, [xmlList]);
 
   const mesesDisponiveis = useMemo(() => {
     const months = new Set<string>();
@@ -770,6 +851,63 @@ export default function App() {
       const mergedInuts = deduplicateInutilizacoes([...inutilizacoes, ...finalInuts]);
       const mergedOthers = deduplicateOthers([...otherXmlsList, ...finalOthers]);
 
+      // Check CNPJ consistency (prevent loading different clients, but allow multiple suppliers on purchases/entradas)
+      const cnpjCounts: Record<string, number> = {};
+      mergedXmls.forEach(xml => {
+        if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+        if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+      });
+      mergedInuts.forEach(inut => {
+        if (inut.cnpj) cnpjCounts[inut.cnpj] = (cnpjCounts[inut.cnpj] || 0) + 1;
+      });
+
+      // The main company CNPJ is the most frequent CNPJ overall (as emitter or receiver)
+      const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+
+      // Identify XMLs that do not involve the main company (neither as emitter nor as receiver)
+      const conflictingXmls: XmlData[] = [];
+      if (mainCnpj) {
+        mergedXmls.forEach(xml => {
+          const involvesMain = xml.emitCnpj === mainCnpj || xml.destCnpj === mainCnpj || xml.cnpj === mainCnpj;
+          if (!involvesMain) {
+            conflictingXmls.push(xml);
+          }
+        });
+        mergedInuts.forEach(inut => {
+          if (inut.cnpj !== mainCnpj) {
+            conflictingXmls.push(inut);
+          }
+        });
+      }
+
+      if (conflictingXmls.length > 0) {
+        const distinctConflicting = new Set<string>();
+        const cnpjNames: Record<string, string> = {};
+        
+        conflictingXmls.forEach(xml => {
+          const otherCnpj = xml.emitCnpj || xml.cnpj;
+          if (otherCnpj) {
+            distinctConflicting.add(otherCnpj);
+            if (xml.razaoSocial || xml.emitNome) {
+              cnpjNames[otherCnpj] = xml.razaoSocial || xml.emitNome || '';
+            }
+          }
+        });
+        
+        if (distinctConflicting.size > 0) {
+          const conflictList = Array.from(distinctConflicting).map(cnpj => {
+            return `- CNPJ: ${cnpj}${cnpjNames[cnpj] ? ` (${cnpjNames[cnpj]})` : ''}`;
+          });
+          
+          alert(`⚠️ Erro de Importação: Múltiplas Empresas Detectadas!\n\nForam encontrados XMLs de outra empresa que não pertencem à empresa principal sob auditoria:\n${conflictList.join('\n')}\n\nPara evitar inconsistências, envie apenas arquivos de uma única empresa por vez.`);
+          
+          setIsProcessing(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          if (folderInputRef.current) folderInputRef.current.value = '';
+          return;
+        }
+      }
+
       setAttachedSources(Array.from(sourceMap.values()));
       setProcessedFileNames(updatedProcessedNames);
       setXmlList(mergedXmls);
@@ -893,13 +1031,12 @@ export default function App() {
 
       let situacao = faltantesReais.length > 0 ? 'Quebra Identificada' : 'Íntegra';
       
-      // Identificar o mês de referência (o mais frequente na série)
-      const months = group.xmls.map(x => getMonthYear(x.data)).filter(m => m !== '');
-      const mesReferencia = months.length > 0 ? 
-        Object.entries(months.reduce((acc, m) => {
-          acc[m] = (acc[m] || 0) + 1;
-          return acc;
-        }, {} as Record<string, number>)).sort((a, b) => b[1] - a[1])[0][0] : 'Não identificado';
+      // Identificar os meses de referência presentes na série (ordenados cronologicamente por data do XML)
+      const sortedXmlsForMonths = [...group.xmls].sort((a, b) => (a.data || '').localeCompare(b.data || ''));
+      const uniqueMonths = Array.from(new Set(
+        sortedXmlsForMonths.map(x => getMonthYear(x.data)).filter(m => m !== '')
+      ));
+      const mesReferencia = uniqueMonths.length > 0 ? uniqueMonths.join(', ') : 'Não identificado';
 
       const canceladosSet = new Set<number>();
       group.xmls.forEach(x => {
@@ -975,6 +1112,7 @@ export default function App() {
     setProcessedFileNames(new Set());
     setEntradaCount(0);
     setFilterMes('Todos');
+    setShowDaysDetail(false);
   };
 
   const filteredAnalysis = useMemo(() => {
@@ -1133,7 +1271,7 @@ export default function App() {
                       </span>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 lg:grid-cols-2 divide-x divide-slate-100">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-slate-100">
                     <div className="p-6 text-center">
                       <div className="text-3xl font-bold text-slate-900">{stats.totalXmls}</div>
                       <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Total XMLs Anexados</div>
@@ -1141,6 +1279,16 @@ export default function App() {
                     <div className="p-6 text-center bg-slate-50/30">
                       <div className="text-3xl font-bold text-slate-400">{stats.nonXmlCount}</div>
                       <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Não-XML</div>
+                    </div>
+                    <div className="p-6 text-center">
+                      <div className="text-xl font-bold text-emerald-600 truncate">{formatarMoeda(faturamentoTotal)}</div>
+                      <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Faturamento Estimado</div>
+                    </div>
+                    <div className="p-6 text-center bg-slate-50/30">
+                      <div className="text-sm font-bold text-slate-900 truncate">
+                        {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
+                      </div>
+                      <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Período Detectado</div>
                     </div>
                   </div>
 
@@ -1367,6 +1515,39 @@ export default function App() {
               className="space-y-8"
             >
               {/* Dashboard Stats */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm md:col-span-2">
+                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Faturamento Auditado (Saídas Válidas)</div>
+                  <div className="text-4xl font-black text-emerald-600 mt-2">
+                    {formatarMoeda(faturamentoTotal)}
+                  </div>
+                </div>
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm transition-all">
+                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Período Analisado</div>
+                  <div className="text-xl font-black text-slate-900 mt-2">
+                    {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
+                  </div>
+                  <div className="flex flex-col gap-1 mt-1">
+                    <div className="flex items-center justify-between text-xs font-semibold text-slate-400">
+                      <span>{periodoAnalise.totalDias} dias com movimentação</span>
+                      {periodoAnalise.diasDetalhados && periodoAnalise.diasDetalhados.length > 0 && (
+                        <button 
+                          onClick={() => setShowDaysDetail(!showDaysDetail)}
+                          className="text-blue-600 hover:text-blue-700 underline font-bold cursor-pointer transition-all"
+                        >
+                          {showDaysDetail ? 'Ocultar' : 'Ver detalhes'}
+                        </button>
+                      )}
+                    </div>
+                    {showDaysDetail && periodoAnalise.diasDetalhados && (
+                      <div className="mt-2 text-[11px] text-slate-600 max-h-24 overflow-y-auto bg-slate-50 p-2 rounded-xl border border-slate-100 font-mono leading-relaxed">
+                        {periodoAnalise.diasDetalhados.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
                   <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Séries</div>
