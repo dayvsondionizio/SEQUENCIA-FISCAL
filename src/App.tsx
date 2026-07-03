@@ -25,7 +25,8 @@ import {
   Check,
   User,
   Printer,
-  Download
+  Download,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -497,6 +498,7 @@ export default function App() {
   const [manualInutFim, setManualInutFim] = useState('');
   const [manualInutData, setManualInutData] = useState('');
   const [portalConsultado, setPortalConsultado] = useState(false);
+  const [forcarPainelInutilizacao, setForcarPainelInutilizacao] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [copiedHeaderField, setCopiedHeaderField] = useState<string | null>(null);
 
@@ -522,6 +524,9 @@ export default function App() {
   const [filterNotaModelo, setFilterNotaModelo] = useState('Todos');
   const [filterNotaSituacao, setFilterNotaSituacao] = useState('Todas');
   const [downloadingDanfeChave, setDownloadingDanfeChave] = useState<string | null>(null);
+  const [notasSelecionadas, setNotasSelecionadas] = useState<Set<string>>(new Set());
+  const [showSelecionadas, setShowSelecionadas] = useState(false);
+  const [baixandoLote, setBaixandoLote] = useState<{ tipo: 'danfe' | 'xml'; atual: number; total: number } | null>(null);
   const [copiedCnpjIdx, setCopiedCnpjIdx] = useState<number | null>(null);
 
   const formatarMoeda = (valor: number) => {
@@ -1419,6 +1424,7 @@ export default function App() {
     setFilterMes('Todos');
     setShowDaysDetail(false);
     setPortalConsultado(false);
+    setForcarPainelInutilizacao(false);
   };
 
   const filteredAnalysis = useMemo(() => {
@@ -1469,6 +1475,86 @@ export default function App() {
       alert('Não foi possível gerar o DANFE desta nota. Tente novamente.');
     } finally {
       setDownloadingDanfeChave(null);
+    }
+  };
+
+  const toggleSelecaoNota = (chave: string) => {
+    setNotasSelecionadas(prev => {
+      const next = new Set(prev);
+      if (next.has(chave)) next.delete(chave);
+      else next.add(chave);
+      return next;
+    });
+  };
+
+  const baixarDanfesSelecionados = async () => {
+    // Look up against the full notasSaida pool (not the current search results),
+    // since selections made across earlier searches must still be found here.
+    const selecionadas = notasSaida.filter(n => n.chave && notasSelecionadas.has(n.chave) && n.rawXml);
+    if (selecionadas.length === 0) {
+      alert('Nenhuma nota selecionada tem XML disponível para gerar DANFE.');
+      return;
+    }
+    setBaixandoLote({ tipo: 'danfe', atual: 0, total: selecionadas.length });
+    try {
+      const zip = new JSZip();
+      for (let i = 0; i < selecionadas.length; i++) {
+        const nota = selecionadas[i];
+        setBaixandoLote({ tipo: 'danfe', atual: i + 1, total: selecionadas.length });
+        try {
+          const response = await fetch('/api/danfe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              xml: nota.rawXml,
+              cancelada: !!nota.isCancelada,
+              chave: nota.chave,
+              protocolo: nota.protocolo,
+              dataEmissao: nota.data
+            })
+          });
+          if (!response.ok) continue;
+          const blob = await response.blob();
+          zip.file(`DANFE_${nota.numero || 'nota'}_${nota.chave || i}.pdf`, blob);
+        } catch (err) {
+          console.error('Erro ao gerar DANFE em lote:', nota.chave, err);
+        }
+      }
+      const content = await zip.generateAsync({ type: 'blob' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(content);
+      link.download = `DANFEs_selecionados_${selecionadas.length}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      setBaixandoLote(null);
+    }
+  };
+
+  const baixarXmlsSelecionados = async () => {
+    const selecionadas = notasSaida.filter(n => n.chave && notasSelecionadas.has(n.chave) && n.rawXml);
+    if (selecionadas.length === 0) {
+      alert('Nenhuma nota selecionada tem XML disponível para baixar.');
+      return;
+    }
+    const zip = new JSZip();
+    selecionadas.forEach(nota => {
+      const name = nota.fileName || `${nota.chave}.xml`;
+      const safeName = name.toLowerCase().endsWith('.xml') ? name : `${name}.xml`;
+      zip.file(safeName, nota.rawXml!);
+    });
+    try {
+      const content = await zip.generateAsync({ type: 'blob' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(content);
+      link.download = `XMLs_selecionados_${selecionadas.length}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error('Erro ao exportar XMLs selecionados:', err);
+      alert('Erro ao gerar o arquivo ZIP dos XMLs selecionados.');
     }
   };
 
@@ -2031,6 +2117,63 @@ export default function App() {
 
               {/* Main content */}
               <div className="flex-1 min-w-0 space-y-8">
+              {/* Selection bar — always visible regardless of the current search/filter, since
+                  selections made across earlier searches must stay reachable and downloadable. */}
+              {notasSelecionadas.size > 0 && (
+                <div className="bg-white p-4 rounded-3xl border border-slate-200 shadow-sm no-print">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={() => setShowSelecionadas(!showSelecionadas)}
+                      className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-900 transition-all"
+                    >
+                      {notasSelecionadas.size} selecionada{notasSelecionadas.size > 1 ? 's' : ''}
+                      <ChevronRight className={cn("w-3.5 h-3.5 transition-transform duration-300", showSelecionadas && "rotate-90")} />
+                    </button>
+                    <button
+                      onClick={() => baixarDanfesSelecionados()}
+                      disabled={!!baixandoLote}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold disabled:opacity-40 hover:bg-slate-700 transition-all"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      {baixandoLote?.tipo === 'danfe' ? `Gerando ${baixandoLote.atual}/${baixandoLote.total}...` : 'Baixar DANFEs (.zip)'}
+                    </button>
+                    <button
+                      onClick={() => baixarXmlsSelecionados()}
+                      disabled={!!baixandoLote}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold disabled:opacity-40 hover:bg-slate-50 transition-all"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Baixar XMLs (.zip)
+                    </button>
+                    <button
+                      onClick={() => setNotasSelecionadas(new Set())}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-slate-500 text-xs font-bold hover:text-slate-700 transition-all ml-auto"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      Limpar seleção
+                    </button>
+                  </div>
+                  {showSelecionadas && (
+                    <div className="mt-3 pt-3 border-t border-slate-100 max-h-64 overflow-y-auto custom-scrollbar space-y-1.5">
+                      {notasSaida.filter(n => n.chave && notasSelecionadas.has(n.chave)).map(nota => (
+                        <div key={nota.chave} className="flex items-center justify-between gap-3 text-xs bg-slate-50 rounded-lg px-3 py-2">
+                          <span className="font-semibold text-slate-900">Nº {nota.numero}</span>
+                          <span className="text-slate-500 truncate flex-1">{nota.destNome || '—'}</span>
+                          <span className="font-semibold text-slate-700">{formatarMoeda(parseFloat(nota.valor || '0') || 0)}</span>
+                          <button
+                            onClick={() => toggleSelecaoNota(nota.chave!)}
+                            className="text-slate-400 hover:text-rose-600 transition-all shrink-0"
+                            title="Remover da seleção"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Search results — opens here in the main area as soon as the sidebar search has a query/filter active */}
               {(notaSearchQuery.trim() || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas') && (
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
@@ -2041,6 +2184,7 @@ export default function App() {
                       <table className="w-full text-sm">
                         <thead className="sticky top-0 bg-white z-10">
                           <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                            <th className="py-2 pr-2 w-8"></th>
                             <th className="py-2 pr-4">Número</th>
                             <th className="py-2 pr-4">Série/Modelo</th>
                             <th className="py-2 pr-4">Cliente</th>
@@ -2054,8 +2198,19 @@ export default function App() {
                         <tbody>
                           {notasSaidaFiltradas.slice(0, 100).map((nota, idx) => {
                             const isInutilizacao = nota.tipo === 'inutilizacao';
+                            const podeSelecionar = !isInutilizacao && !!nota.chave && !!nota.rawXml;
                             return (
                               <tr key={nota.chave || `${nota.cnpj}-${nota.modelo}-${nota.serie}-${nota.nNFIni}-${idx}`} className="border-b border-slate-100 last:border-0">
+                                <td className="py-2 pr-2">
+                                  {podeSelecionar && (
+                                    <input
+                                      type="checkbox"
+                                      checked={notasSelecionadas.has(nota.chave!)}
+                                      onChange={() => toggleSelecaoNota(nota.chave!)}
+                                      className="w-4 h-4 rounded border-slate-300 accent-slate-900 cursor-pointer"
+                                    />
+                                  )}
+                                </td>
                                 <td className="py-2 pr-4 font-semibold text-slate-900">{nota.numero}</td>
                                 <td className="py-2 pr-4 text-slate-500">{nota.serie}/{nota.modelo}</td>
                                 <td className="py-2 pr-4 text-slate-700">{isInutilizacao ? '—' : (nota.destNome || '—')}</td>
@@ -2196,24 +2351,41 @@ export default function App() {
               })()}
 
               {(() => {
-                // Portal buttons only show up while the whole analysis found zero
-                // matching inutilizações (once any is found, XML or manual, the
-                // per-série boxes already cover it). The manual form, though, must
+                // Portal buttons only show up automatically while the whole analysis found
+                // zero matching inutilizações (once any is found, XML or manual, the
+                // per-série boxes already cover it). The manual form, likewise, must
                 // stay available as long as ANY série still has real faltantes —
                 // otherwise confirming just one hides the panel and blocks the rest.
+                // forcarPainelInutilizacao lets the analyst override both rules and pull
+                // up the panel anyway, e.g. to double-check a série that already matched
+                // some inutilizações elsewhere.
                 const nenhumaInutilizacaoEncontrada = analysis.every(s => s.faltantesInutilizados.length === 0);
                 const seriePendenteNfce = analysis.find(s => s.modelo === '65' && s.faltantes.length > 0);
                 const seriePendenteNfe = analysis.find(s => s.modelo === '55' && s.faltantes.length > 0);
-                const mostrarBotoes = nenhumaInutilizacaoEncontrada && (seriePendenteNfce || seriePendenteNfe);
+                const mostrarBotoesAuto = nenhumaInutilizacaoEncontrada && (seriePendenteNfce || seriePendenteNfe);
                 const aindaHaFaltantes = analysis.some(s => s.faltantes.length > 0);
-                const mostrarFormulario = portalConsultado && aindaHaFaltantes;
-                if (!mostrarBotoes && !mostrarFormulario) return null;
+                const mostrarFormularioAuto = portalConsultado && aindaHaFaltantes;
+
+                const exibirBotoes = mostrarBotoesAuto || (forcarPainelInutilizacao && !!(seriePendenteNfce || seriePendenteNfe));
+                const exibirFormulario = mostrarFormularioAuto || (forcarPainelInutilizacao && aindaHaFaltantes);
+
+                if (!exibirBotoes && !exibirFormulario) {
+                  if (!aindaHaFaltantes) return null;
+                  return (
+                    <button
+                      onClick={() => setForcarPainelInutilizacao(true)}
+                      className="text-xs font-bold text-amber-700 hover:text-amber-900 underline transition-all no-print"
+                    >
+                      Consultar/confirmar inutilização manualmente
+                    </button>
+                  );
+                }
 
                 const modelosComFaltante = Array.from(new Set(analysis.filter(s => s.faltantes.length > 0).map(s => s.modelo)));
 
                 return (
                   <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col gap-3 no-print">
-                    {mostrarBotoes && (
+                    {exibirBotoes && (
                       <>
                         <div className="text-sm text-amber-800">
                           <span className="font-bold">Números faltantes sem inutilização correspondente.</span> Pode valer a pena conferir no portal da SEFAZ antes de fechar a análise.
@@ -2240,8 +2412,8 @@ export default function App() {
                         </div>
                       </>
                     )}
-                    {mostrarFormulario && (
-                      <div className={cn("flex flex-wrap items-end gap-3", mostrarBotoes && "pt-3 border-t border-amber-200")}>
+                    {exibirFormulario && (
+                      <div className={cn("flex flex-wrap items-end gap-3", exibirBotoes && "pt-3 border-t border-amber-200")}>
                         <div>
                           <label className="text-[10px] font-bold text-amber-700 uppercase tracking-widest block mb-1">Modelo</label>
                           <select
