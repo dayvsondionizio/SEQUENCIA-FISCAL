@@ -1422,9 +1422,19 @@ export default function App() {
     setProcessedFileNames(new Set());
     setEntradaCount(0);
     setFilterMes('Todos');
+    setFilterModelo('Todos');
     setShowDaysDetail(false);
     setPortalConsultado(false);
     setForcarPainelInutilizacao(false);
+    setNotaSearchQuery('');
+    setFilterNotaModelo('Todos');
+    setFilterNotaSituacao('Todas');
+    setNotasSelecionadas(new Set());
+    setShowSelecionadas(false);
+    setManualInutSerie('');
+    setManualInutIni('');
+    setManualInutFim('');
+    setManualInutData('');
   };
 
   const filteredAnalysis = useMemo(() => {
@@ -2374,8 +2384,9 @@ export default function App() {
                   return (
                     <button
                       onClick={() => setForcarPainelInutilizacao(true)}
-                      className="text-xs font-bold text-amber-700 hover:text-amber-900 underline transition-all no-print"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-100 hover:bg-amber-100 text-xs font-bold transition-all no-print w-fit"
                     >
+                      <Search className="w-3.5 h-3.5" />
                       Consultar/confirmar inutilização manualmente
                     </button>
                   );
