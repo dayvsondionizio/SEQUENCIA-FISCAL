@@ -498,6 +498,13 @@ export default function App() {
   const [manualInutData, setManualInutData] = useState('');
   const [portalConsultado, setPortalConsultado] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [copiedHeaderField, setCopiedHeaderField] = useState<string | null>(null);
+
+  const copiarCampoHeader = (campo: string, valor: string) => {
+    navigator.clipboard.writeText(valor);
+    setCopiedHeaderField(campo);
+    setTimeout(() => setCopiedHeaderField(null), 1500);
+  };
   const [analystName, setAnalystName] = useState('');
   const [attachedSources, setAttachedSources] = useState<SourceMetadata[]>([]);
   const [processedFileNames, setProcessedFileNames] = useState<Set<string>>(new Set());
@@ -1561,7 +1568,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen font-sans text-slate-900 relative" style={{background: '#f0f4f8'}}>
+    <div className="min-h-screen flex flex-col font-sans text-slate-900 relative" style={{background: '#f0f4f8'}}>
       {/* Loading Overlay */}
       <AnimatePresence>
         {isProcessing && (
@@ -1606,21 +1613,11 @@ export default function App() {
       </AnimatePresence>
 
       {/* Header */}
-      <header className="text-white shadow-2xl" style={{background: 'linear-gradient(135deg, #0f1340 0%, #1a1e6b 60%, #0f1340 100%)'}}>
-        {/* Top brand bar */}
-        <div className="border-b" style={{borderColor: 'rgba(240,180,41,0.2)'}}>
-          <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
-            <img src="/logo-sf.png" alt="Contador de Padarias" className="h-10 object-contain" />
-            <div className="text-xs font-bold uppercase tracking-widest" style={{color: 'rgba(240,180,41,0.7)'}}>Sistema de Auditoria Fiscal</div>
-          </div>
-        </div>
-
-        {/* Main header content */}
-        <div className="max-w-7xl mx-auto px-6 py-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+      <header className="text-white shadow-2xl" style={{background: '#020D2F'}}>
+        <div className="max-w-[1650px] mx-auto px-6 py-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div className="flex items-center gap-5">
-            <div className="p-3 rounded-2xl shadow-xl" style={{background: 'rgba(240,180,41,0.15)', border: '1px solid rgba(240,180,41,0.3)'}}>
-              <img src="/simbolo.png" alt="" className="w-10 h-10 object-contain" />
-            </div>
+            <img src="/logo-sf.png" alt="Contador de Padarias" className="h-16 object-contain" />
+            <div className="hidden md:block w-px h-12 bg-white/15" />
             <div>
               <h1 className="text-3xl font-black tracking-tight text-white mb-0.5">Sequência Fiscal</h1>
               <p className="font-medium" style={{color: 'rgba(240,180,41,0.8)', fontSize: '0.95rem'}}>Auditoria de Sequência de Vendas e Saídas</p>
@@ -1631,32 +1628,62 @@ export default function App() {
             <motion.div 
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
-              className="backdrop-blur-md rounded-2xl p-4 flex flex-col gap-1 min-w-[320px] shadow-2xl"
+              className="backdrop-blur-md rounded-2xl p-5 flex flex-col gap-1 min-w-[360px] shadow-2xl"
               style={{background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(240,180,41,0.2)'}}
             >
-              <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] mb-1" style={{color: '#F0B429'}}>
-                <span className="w-2 h-2 rounded-full animate-pulse" style={{background: '#F0B429', boxShadow: '0 0 8px rgba(240,180,41,0.6)'}} />
-                Dados Identificados
-              </div>
-              <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-                <span className="font-bold uppercase text-[10px] self-center" style={{color: 'rgba(255,255,255,0.4)'}}>Empresa:</span>
-                <span className="text-white font-bold truncate max-w-[280px]">{analysis[0].razaoSocial}</span>
-                
-                <span className="font-bold uppercase text-[10px] self-center" style={{color: 'rgba(255,255,255,0.4)'}}>CNPJ:</span>
-                <span className="font-mono text-xs" style={{color: 'rgba(255,255,255,0.7)'}}>{analysis[0].cnpj}</span>
-                
-                <span className="font-bold uppercase text-[10px] self-center" style={{color: 'rgba(255,255,255,0.4)'}}>IE:</span>
-                <span className="font-mono text-xs" style={{color: 'rgba(255,255,255,0.7)'}}>{analysis[0].ie}</span>
-                
-                <span className="font-bold uppercase text-[10px] self-center" style={{color: 'rgba(255,255,255,0.4)'}}>Meses:</span>
-                <span className="font-bold text-sm leading-none" style={{color: '#F0B429'}}>{mesesDisponiveis.join(', ') || 'N/A'}</span>
+              <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+                <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Empresa:</span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-white font-bold text-base truncate min-w-0">{analysis[0].razaoSocial}</span>
+                  <button
+                    onClick={() => copiarCampoHeader('empresa', analysis[0].razaoSocial)}
+                    className="shrink-0 transition-colors"
+                    style={{color: copiedHeaderField === 'empresa' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
+                    title="Copiar nome completo da empresa"
+                  >
+                    {copiedHeaderField === 'empresa' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+
+                <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>CNPJ:</span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-mono text-base" style={{color: 'rgba(255,255,255,0.85)'}}>{analysis[0].cnpj}</span>
+                  <button
+                    onClick={() => copiarCampoHeader('cnpj', analysis[0].cnpj)}
+                    className="shrink-0 transition-colors"
+                    style={{color: copiedHeaderField === 'cnpj' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
+                    title="Copiar CNPJ"
+                  >
+                    {copiedHeaderField === 'cnpj' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+
+                <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>IE:</span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-mono text-base" style={{color: 'rgba(255,255,255,0.85)'}}>{analysis[0].ie}</span>
+                  <button
+                    onClick={() => copiarCampoHeader('ie', analysis[0].ie)}
+                    className="shrink-0 transition-colors"
+                    style={{color: copiedHeaderField === 'ie' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
+                    title="Copiar Inscrição Estadual"
+                  >
+                    {copiedHeaderField === 'ie' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+
+                <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Meses:</span>
+                <span className="font-bold text-sm leading-snug" style={{color: '#F0B429'}}>
+                  {mesesDisponiveis.length === 0 && 'N/A'}
+                  {mesesDisponiveis.length > 0 && mesesDisponiveis.length <= 3 && mesesDisponiveis.join(', ')}
+                  {mesesDisponiveis.length > 3 && `${mesesDisponiveis.slice(0, 3).join(', ')} +${mesesDisponiveis.length - 3}`}
+                </span>
               </div>
             </motion.div>
           )}
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-6 lg:p-8 no-print">
+      <main className="max-w-[1650px] mx-auto p-6 lg:p-8 no-print flex-1 w-full">
         <AnimatePresence mode="wait">
           {!analysis ? (
             <motion.div 
@@ -1695,7 +1722,7 @@ export default function App() {
                     </div>
                     <div className="p-6 text-center">
                       <div className="text-xl font-bold text-emerald-600 truncate">{formatarMoeda(faturamentoTotal)}</div>
-                      <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Faturamento Estimado</div>
+                      <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Total de Saídas Estimado</div>
                     </div>
                     <div className="p-6 text-center bg-slate-50/30">
                       <div className="text-sm font-bold text-slate-900 truncate">
@@ -1707,8 +1734,8 @@ export default function App() {
 
                   {attachedSources.length > 0 && (
                     <div className="p-6 border-t border-slate-100/50">
-                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Fontes Anexadas</div>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Fontes Anexadas ({attachedSources.length})</div>
+                      <div className="flex flex-wrap gap-2 max-h-[360px] overflow-y-auto custom-scrollbar pr-1">
                         {attachedSources.map((source, sIdx) => {
                           // Somar todos os tipos de documentos fiscais identificados nesta fonte
                           const countNfe = xmlList.filter(x => x.sourceName === source.name).length;
@@ -1803,7 +1830,7 @@ export default function App() {
                         onClick={runAnalysis}
                         disabled={xmlList.length === 0}
                         className="flex items-center gap-2 px-10 py-5 text-white rounded-2xl font-bold text-xl transition-all shadow-lg disabled:opacity-50 disabled:grayscale scale-105 active:scale-100"
-                      style={{background: 'linear-gradient(135deg, #1a1e6b, #2a2fa0)', boxShadow: '0 8px 32px rgba(26,30,107,0.4)'}}
+                      style={{background: '#020D2F', boxShadow: '0 8px 32px rgba(2,13,47,0.4)'}}
                       >
                         <CheckCircle2 className="w-7 h-7" />
                         Iniciar Auditoria Agora
@@ -1890,7 +1917,7 @@ export default function App() {
                     <button 
                       onClick={() => fileInputRef.current?.click()}
                       className="flex items-center gap-3 px-10 py-5 text-white rounded-2xl font-bold transition-all active:scale-95 hover:scale-[1.02] shadow-xl"
-                      style={{background: 'linear-gradient(135deg, #0f1340, #1a1e6b)'}}
+                      style={{background: '#020D2F'}}
                     >
                       <Upload className="w-6 h-6 text-blue-400" />
                       Anexar Arquivos (ZIP ou XMLs)
@@ -1921,25 +1948,26 @@ export default function App() {
               </div>
             </motion.div>
           ) : (
-            <motion.div 
+            <motion.div
               key="results"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="space-y-8"
+              className="flex flex-col lg:flex-row gap-8 items-start"
             >
-              {/* Dashboard Stats */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm md:col-span-2">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Faturamento Auditado (Saídas Válidas)</div>
-                  <div className="text-4xl font-black text-emerald-600 mt-2">
+              {/* Sidebar — summary + search, stays in view while the main content scrolls */}
+              <aside className="w-full lg:w-80 shrink-0 lg:sticky lg:top-6 space-y-6">
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Total de Saídas Auditadas (Válidas)</div>
+                  <div className="text-3xl font-black text-emerald-600 mt-2">
                     {formatarMoeda(faturamentoTotal)}
                   </div>
                   {breakdownPorCfop.length > 0 && (
                     <button
                       onClick={() => setShowCfopBreakdown(!showCfopBreakdown)}
-                      className="text-blue-600 hover:text-blue-700 underline font-bold text-xs cursor-pointer transition-all mt-2 no-print"
+                      title="Ver totais por natureza (CFOP)"
+                      className="inline-flex items-center justify-center cursor-pointer mt-3 no-print"
                     >
-                      {showCfopBreakdown ? 'Ocultar totais por natureza (CFOP)' : 'Ver totais por natureza (CFOP)'}
+                      <ChevronRight className={cn("w-6 h-6 text-slate-300 hover:text-slate-500 transition-all duration-300", showCfopBreakdown && "rotate-90")} />
                     </button>
                   )}
                 </div>
@@ -1948,105 +1976,70 @@ export default function App() {
                   <div className="text-xl font-black text-slate-900 mt-2">
                     {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
                   </div>
-                  <div className="flex flex-col gap-1 mt-1">
-                    <div className="flex items-center justify-between text-xs font-semibold text-slate-400">
-                      <span>{periodoAnalise.totalDias} dias com movimentação</span>
-                      {periodoAnalise.diasDetalhados && periodoAnalise.diasDetalhados.length > 0 && (
-                        <button
-                          onClick={() => setShowDaysDetail(!showDaysDetail)}
-                          className="text-blue-600 hover:text-blue-700 underline font-bold cursor-pointer transition-all"
-                        >
-                          {showDaysDetail ? 'Ocultar' : 'Ver detalhes'}
-                        </button>
-                      )}
-                    </div>
-                    {showDaysDetail && periodoAnalise.diasDetalhados && (
-                      <div className="mt-2 text-[11px] text-slate-600 max-h-24 overflow-y-auto bg-slate-50 p-2 rounded-xl border border-slate-100 font-mono leading-relaxed">
-                        {periodoAnalise.diasDetalhados.join(', ')}
-                      </div>
+                  <div className="flex items-center justify-between text-xs font-semibold text-slate-400 mt-2">
+                    <span>{periodoAnalise.totalDias} dias com movimentação</span>
+                    {periodoAnalise.diasDetalhados && periodoAnalise.diasDetalhados.length > 0 && (
+                      <button
+                        onClick={() => setShowDaysDetail(!showDaysDetail)}
+                        title="Ver detalhes"
+                        className="inline-flex items-center justify-center cursor-pointer shrink-0"
+                      >
+                        <ChevronRight className={cn("w-6 h-6 text-slate-300 hover:text-slate-500 transition-all duration-300", showDaysDetail && "rotate-90")} />
+                      </button>
                     )}
                   </div>
                 </div>
-              </div>
 
-              {showCfopBreakdown && breakdownPorCfop.length > 0 && (
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm mb-6">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Totais por Natureza da Operação (CFOP)</div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
-                          <th className="py-2 pr-4">CFOP</th>
-                          <th className="py-2 pr-4">Natureza</th>
-                          <th className="py-2 pr-4 text-right">Vlr Contábil</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {breakdownPorCfop.map(({ cfop, descricao, valor }) => (
-                          <tr key={cfop} className="border-b border-slate-100 last:border-0">
-                            <td className="py-2 pr-4 font-mono text-slate-500">{cfop}</td>
-                            <td className="py-2 pr-4 text-slate-700">{descricao}</td>
-                            <td className="py-2 pr-4 text-right font-semibold text-slate-900">{formatarMoeda(valor)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot>
-                        <tr>
-                          <td colSpan={2} className="py-3 pr-4 font-black text-slate-900 uppercase text-xs tracking-wider">Total de Saídas</td>
-                          <td className="py-3 pr-4 text-right font-black text-emerald-600">
-                            {formatarMoeda(breakdownPorCfop.reduce((acc, item) => acc + item.valor, 0))}
-                          </td>
-                        </tr>
-                      </tfoot>
-                    </table>
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3">Pesquisar Notas de Saída</div>
+                  <div className="flex flex-col gap-2">
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={notaSearchQuery}
+                        onChange={(e) => setNotaSearchQuery(e.target.value)}
+                        placeholder="Número, chave, cliente, data, valor..."
+                        className="w-full pl-11 pr-4 py-3 rounded-2xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      />
+                    </div>
+                    <select
+                      value={filterNotaModelo}
+                      onChange={(e) => setFilterNotaModelo(e.target.value)}
+                      className="px-3 py-2.5 rounded-2xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="Todos">Todos os modelos</option>
+                      {modelosDisponiveis.map(modelo => (
+                        <option key={modelo} value={modelo}>
+                          {modelo === '55' ? 'NF-e (55)' : modelo === '65' ? 'NFC-e (65)' : `Modelo ${modelo}`}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={filterNotaSituacao}
+                      onChange={(e) => setFilterNotaSituacao(e.target.value)}
+                      className="px-3 py-2.5 rounded-2xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="Todas">Todas as situações</option>
+                      <option value="Válidas">Somente válidas</option>
+                      <option value="Canceladas">Somente canceladas</option>
+                      <option value="Inutilizadas">Somente inutilizadas</option>
+                    </select>
                   </div>
                 </div>
-              )}
+              </aside>
 
-              {/* Search notas de saída */}
-              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3">Pesquisar Notas de Saída</div>
-                <div className="flex flex-col md:flex-row gap-3">
-                  <div className="relative flex-1">
-                    <Search className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={notaSearchQuery}
-                      onChange={(e) => setNotaSearchQuery(e.target.value)}
-                      placeholder="Buscar por número, chave, cliente, data, valor..."
-                      className="w-full pl-11 pr-4 py-3 rounded-2xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                    />
-                  </div>
-                  <select
-                    value={filterNotaModelo}
-                    onChange={(e) => setFilterNotaModelo(e.target.value)}
-                    className="px-4 py-3 rounded-2xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
-                  >
-                    <option value="Todos">Todos os modelos</option>
-                    {modelosDisponiveis.map(modelo => (
-                      <option key={modelo} value={modelo}>
-                        {modelo === '55' ? 'NF-e (Modelo 55)' : modelo === '65' ? 'NFC-e (Modelo 65)' : `Modelo ${modelo}`}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    value={filterNotaSituacao}
-                    onChange={(e) => setFilterNotaSituacao(e.target.value)}
-                    className="px-4 py-3 rounded-2xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
-                  >
-                    <option value="Todas">Todas as Situações</option>
-                    <option value="Válidas">Somente Válidas</option>
-                    <option value="Canceladas">Somente Canceladas</option>
-                    <option value="Inutilizadas">Somente Inutilizadas</option>
-                  </select>
-                </div>
-                {(notaSearchQuery.trim() || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas') && (
-                  <div className="mt-4 overflow-x-auto">
+              {/* Main content */}
+              <div className="flex-1 min-w-0 space-y-8">
+              {/* Search results — opens here in the main area as soon as the sidebar search has a query/filter active */}
+              {(notaSearchQuery.trim() || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas') && (
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                  <div className="overflow-x-auto overflow-y-auto max-h-[520px] custom-scrollbar">
                     {notasSaidaFiltradas.length === 0 ? (
                       <p className="text-sm text-slate-400 py-4 text-center">Nenhuma nota encontrada com os filtros atuais.</p>
                     ) : (
                       <table className="w-full text-sm">
-                        <thead>
+                        <thead className="sticky top-0 bg-white z-10">
                           <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
                             <th className="py-2 pr-4">Número</th>
                             <th className="py-2 pr-4">Série/Modelo</th>
@@ -2104,8 +2097,55 @@ export default function App() {
                       <p className="text-xs text-slate-400 mt-2">Mostrando 100 de {notasSaidaFiltradas.length} resultados. Refine a busca para ver menos notas.</p>
                     )}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
+
+              {showDaysDetail && periodoAnalise.diasDetalhados && periodoAnalise.diasDetalhados.length > 0 && (
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Dias com Movimentação Detalhados</div>
+                  <div className="flex flex-wrap gap-2">
+                    {periodoAnalise.diasDetalhados.map((dia, idx) => (
+                      <span key={idx} className="font-mono text-xs text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
+                        {dia}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {showCfopBreakdown && breakdownPorCfop.length > 0 && (
+                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm mb-6">
+                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Totais por Natureza da Operação (CFOP)</div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                          <th className="py-2 pr-4">CFOP</th>
+                          <th className="py-2 pr-4">Natureza</th>
+                          <th className="py-2 pr-4 text-right whitespace-nowrap">Vlr Contábil</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {breakdownPorCfop.map(({ cfop, descricao, valor }) => (
+                          <tr key={cfop} className="border-b border-slate-100 last:border-0">
+                            <td className="py-2 pr-4 font-mono text-slate-500">{cfop}</td>
+                            <td className="py-2 pr-4 text-slate-700">{descricao}</td>
+                            <td className="py-2 pr-4 text-right font-semibold text-slate-900">{formatarMoeda(valor)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={2} className="py-3 pr-4 font-black text-slate-900 uppercase text-xs tracking-wider">Total de Saídas</td>
+                          <td className="py-3 pr-4 text-right font-black text-emerald-600">
+                            {formatarMoeda(breakdownPorCfop.reduce((acc, item) => acc + item.valor, 0))}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {(() => {
                 const faltantesLiquidos = analysis.reduce((acc, s) => acc + s.faltantes.length, 0);
@@ -2113,7 +2153,7 @@ export default function App() {
                 const faltantesBrutos = faltantesLiquidos + totalManual;
 
                 return (
-                  <div className={cn("grid grid-cols-1 gap-4", totalManual > 0 ? "md:grid-cols-5" : "md:grid-cols-4")}>
+                  <div className={cn("grid grid-cols-2 gap-4", totalManual > 0 ? "md:grid-cols-3 lg:grid-cols-6" : "md:grid-cols-4")}>
                     <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
                       <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Séries</div>
                       <div className="text-4xl font-black text-slate-900 mt-2">{analysis.length}</div>
@@ -2124,20 +2164,25 @@ export default function App() {
                         {analysis.filter(s => s.faltantes.length > 0).length}
                       </div>
                     </div>
-                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                      <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">
-                        {totalManual > 0 ? 'Faltantes Líquidos' : 'Total Faltantes'}
-                      </div>
-                      <div className="text-4xl font-black text-rose-600 mt-2">{faltantesLiquidos}</div>
-                      {totalManual > 0 && (
-                        <div className="text-sm text-slate-500 font-bold mt-1">Bruto (bate com Questor): {faltantesBrutos}</div>
-                      )}
-                    </div>
-                    {totalManual > 0 && (
-                      <div className="bg-white p-6 rounded-3xl border border-amber-200 shadow-sm no-print">
-                        <div className="text-sm font-bold text-amber-600 uppercase tracking-widest">Inutilizadas Sem XML</div>
-                        <div className="text-4xl font-black text-amber-600 mt-2">{totalManual}</div>
-                        <div className="text-[11px] text-slate-400 font-semibold mt-1">Confirmadas manualmente, ainda sem XML do cliente</div>
+                    {totalManual > 0 ? (
+                      <>
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm no-print">
+                          <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Faltante Bruto (XML)</div>
+                          <div className="text-4xl font-black text-rose-600 mt-2">{faltantesBrutos}</div>
+                        </div>
+                        <div className="bg-white p-6 rounded-3xl border border-amber-200 shadow-sm no-print">
+                          <div className="text-sm font-bold text-amber-600 uppercase tracking-widest">Inutilizadas Sem XML</div>
+                          <div className="text-4xl font-black text-amber-600 mt-2">{totalManual}</div>
+                        </div>
+                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                          <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Faltante Líquido</div>
+                          <div className="text-4xl font-black text-slate-500 mt-2">{faltantesLiquidos}</div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                        <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Total Faltantes</div>
+                        <div className="text-4xl font-black text-rose-600 mt-2">{faltantesLiquidos}</div>
                       </div>
                     )}
                     <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
@@ -2297,7 +2342,7 @@ export default function App() {
                     <button 
                       onClick={() => window.print()}
                       className="flex items-center gap-2 text-white px-5 py-2 rounded-xl text-sm font-black transition-all shadow-lg"
-                      style={{background: 'linear-gradient(135deg, #1a1e6b, #2a2fa0)'}}
+                      style={{background: '#020D2F'}}
                     >
                       <Printer className="w-4 h-4" />
                       Imprimir Relatório
@@ -2503,6 +2548,7 @@ export default function App() {
                   </p>
                 </div>
               )}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -2515,12 +2561,12 @@ export default function App() {
             <div className="flex items-end gap-6">
               <img src="/logo-cf.png" alt="Contador de Padarias" style={{height: '52px', objectFit: 'contain'}} />
               <div>
-                <div className="print-title" style={{color: '#0f1340'}}>Relatório de Auditoria de Sequência (Vendas/Saídas)</div>
+                <div className="print-title" style={{color: '#020D2F'}}>Relatório de Auditoria de Sequência (Vendas/Saídas)</div>
                 <div className="text-sm font-bold mt-1 uppercase tracking-widest" style={{color: '#888'}}>Documentos Emitidos pela Empresa</div>
               </div>
             </div>
             <div className="text-right">
-              <div className="font-black border-2 px-3 py-1 uppercase text-sm" style={{color: '#0f1340', borderColor: '#0f1340'}}>Cópia de Auditoria</div>
+              <div className="font-black border-2 px-3 py-1 uppercase text-sm" style={{color: '#020D2F', borderColor: '#020D2F'}}>Cópia de Auditoria</div>
             </div>
           </div>
 
@@ -2609,9 +2655,8 @@ export default function App() {
         </div>
       )}
 
-      <footer className="p-8 text-center text-sm font-medium no-print" style={{background: '#0f1340'}}>
-        <img src="/logo-sf.png" alt="Contador de Padarias" className="h-8 object-contain mx-auto mb-3 opacity-70" />
-        <p style={{color: 'rgba(255,255,255,0.35)'}}>Sequência Fiscal • v2.0 • Contador de Padarias</p>
+      <footer className="p-8 text-center no-print" style={{background: '#020D2F'}}>
+        <img src="/simbolo.png" alt="Contador de Padarias" className="h-8 object-contain mx-auto opacity-70" />
       </footer>
     </div>
   );
