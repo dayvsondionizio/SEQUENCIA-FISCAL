@@ -14,7 +14,7 @@
   }
   
   @page {
-    margin: 2cm;
+    margin: 0;
     size: A4;
   }
 
@@ -37,9 +37,9 @@
   }
 
   .print-header {
-    margin-bottom: 25px !important;
-    border-bottom: 3px solid #1e293b !important;
-    padding-bottom: 15px !important;
+    margin-bottom: 18px !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    padding-bottom: 12px !important;
   }
 
   .print-section {
@@ -48,9 +48,10 @@
   }
 
   .print-title {
-    font-size: 18pt !important;
-    font-weight: 800 !important;
+    font-size: 16pt !important;
+    font-weight: 700 !important;
     color: #1e293b !important;
+    letter-spacing: -0.01em !important;
   }
 }
 

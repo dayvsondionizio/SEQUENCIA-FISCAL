@@ -69,8 +69,8 @@ interface XmlData {
   destNome?: string;
   tpNF?: string; // 0=Entrada, 1=Saida
   rawXml?: string;
-  // Value of the note's items (vProd), grouped by CFOP — used to break down
-  // the total faturamento by natureza da operação (venda, devolução, etc.)
+  // Net value of the note's items (vProd - vDesc + vOutro/vFrete/vSeg), grouped by CFOP —
+  // used to break down the total faturamento by natureza da operação (venda, devolução, etc.)
   cfopValores?: Record<string, number>;
   // True only for inutilizações typed in by the analyst after checking the SEFAZ
   // portal — distinguishes them from inutilizações that came from an XML the
@@ -258,13 +258,16 @@ function parseXML(xmlText: string, fileName: string): XmlData {
     const destCnpj = dest?.getElementsByTagName('CNPJ')[0]?.textContent || '';
     const destNome = dest?.getElementsByTagName('xNome')[0]?.textContent || '';
 
-    // Group each item's value (vProd) by its CFOP, so the note's total can later be
-    // split by natureza da operação even when a single note mixes more than one CFOP
+    // Group each item's NET value (vProd - vDesc + vOutro/vFrete/vSeg) by its CFOP, so the
+    // note's vNF (already net of discount) can later be split by natureza da operação even
+    // when a single note mixes more than one CFOP. Using gross vProd as the weight here would
+    // misallocate vNF whenever items in different CFOPs carry different desconto amounts.
     const cfopValores: Record<string, number> = {};
     Array.from(doc.getElementsByTagName('det')).forEach(det => {
       const cfop = det.getElementsByTagName('CFOP')[0]?.textContent || '';
-      const vProd = parseFloat(det.getElementsByTagName('vProd')[0]?.textContent || '0') || 0;
-      if (cfop) cfopValores[cfop] = (cfopValores[cfop] || 0) + vProd;
+      const num = (tag: string) => parseFloat(det.getElementsByTagName(tag)[0]?.textContent || '0') || 0;
+      const valorNetoItem = num('vProd') - num('vDesc') + num('vOutro') + num('vFrete') + num('vSeg');
+      if (cfop) cfopValores[cfop] = (cfopValores[cfop] || 0) + valorNetoItem;
     });
 
     if (numero && serie && modelo) {
@@ -571,6 +574,18 @@ export default function App() {
     }).format(valor);
   };
 
+  // Nome de arquivo padrão pra qualquer export: tipo + empresa + período, sem
+  // acento/espaço/caractere especial, pra identificar o arquivo sem precisar abrir.
+  const sanitizarNomeArquivo = (v: string) =>
+    v.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+  const nomeArquivoExport = (tipo: string, extensao: string) => {
+    const empresaBruta = analysis?.[0]?.razaoSocial || notasSaida[0]?.razaoSocial || '';
+    const periodoBruto = filterMes === 'Todos' ? 'Todos os Meses' : filterMes;
+    const partes = [tipo, sanitizarNomeArquivo(empresaBruta), sanitizarNomeArquivo(periodoBruto)].filter(Boolean);
+    return `${partes.join('_')}.${extensao}`;
+  };
+
   const faturamentoTotal = useMemo(() => {
     // Identify the Main Client Company CNPJ (the most frequent overall)
     const cnpjCounts: { [cnpj: string]: number } = {};
@@ -838,8 +853,7 @@ export default function App() {
       const content = await zip.generateAsync({ type: 'blob' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(content);
-      const suffix = filterMes === 'Todos' ? 'todos_meses' : filterMes.replace('/', '_');
-      link.download = `xmls_filtrados_${suffix}.zip`;
+      link.download = nomeArquivoExport('xmls_filtrados', 'zip');
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -1126,8 +1140,7 @@ export default function App() {
       adicionarAba(t, auditoriaResultado.filter(d => d.tipo === t));
     });
 
-    const suffix = filterMes === 'Todos' ? 'todos_meses' : filterMes.replace('/', '_');
-    XLSX.writeFile(wb, `auditoria_xml_divergencias_${suffix}.xlsx`);
+    XLSX.writeFile(wb, nomeArquivoExport('auditoria_xml_divergencias', 'xlsx'));
   };
 
   // Simplified confronto: just Natureza/NCM/Item/Valor Contábil, plus the
@@ -1208,8 +1221,7 @@ export default function App() {
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Confronto Simples');
-    const suffix = filterMes === 'Todos' ? 'todos_meses' : filterMes.replace('/', '_');
-    XLSX.writeFile(wb, `planilha_confronto_simples_${suffix}.xlsx`);
+    XLSX.writeFile(wb, nomeArquivoExport('planilha_confronto_simples', 'xlsx'));
   };
 
   // Mirrors Questor's "detalhada" export layout (46 columns, same order/formats).
@@ -1348,8 +1360,7 @@ export default function App() {
     ws['!cols'] = header.map((h, i) => ({ wch: i === 13 ? 40 : Math.max(12, h.length + 2) }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Detalhada');
-    const suffix = filterMes === 'Todos' ? 'todos_meses' : filterMes.replace('/', '_');
-    XLSX.writeFile(wb, `planilha_detalhada_${suffix}.xlsx`);
+    XLSX.writeFile(wb, nomeArquivoExport('planilha_detalhada', 'xlsx'));
   };
 
   const [wasmBinary, setWasmBinary] = useState<ArrayBuffer | null>(null);
@@ -2275,13 +2286,13 @@ export default function App() {
 
       {/* Header */}
       <header className="text-white shadow-2xl" style={{background: '#020D2F'}}>
-        <div className="max-w-[1650px] mx-auto px-6 py-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-          <div className="flex items-center gap-5">
-            <img src="/logo-sf.png" alt="Contador de Padarias" className="h-16 object-contain" />
-            <div className="hidden md:block w-px h-12 bg-white/15" />
+        <div className="max-w-[1650px] mx-auto px-6 py-8 print:px-3 print:py-3 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+          <div className="flex items-center gap-5 print:gap-3">
+            <img src="/logo-sf.png" alt="Contador de Padarias" className="h-16 print:h-9 object-contain" />
+            <div className="hidden md:block w-px h-12 print:h-7 bg-white/15" />
             <div>
-              <h1 className="text-3xl font-black tracking-tight text-white mb-0.5">Sequência Fiscal</h1>
-              <p className="font-medium" style={{color: 'rgba(240,180,41,0.8)', fontSize: '0.95rem'}}>Auditoria de Sequência de Vendas e Saídas</p>
+              <h1 className="text-3xl print:text-lg font-black tracking-tight text-white mb-0.5 print:mb-0">Sequência Fiscal</h1>
+              <p className="font-medium text-[0.95rem] print:text-[10px]" style={{color: 'rgba(240,180,41,0.8)'}}>Auditoria de Sequência de Vendas e Saídas</p>
             </div>
           </div>
 
@@ -3500,18 +3511,32 @@ export default function App() {
       </main>
 
       {/* Formal Audit Report - Visible only during printing */}
-      {analysis && (
-        <div className="hidden print:block p-0">
-          <div className="print-header flex justify-between items-end">
-            <div className="flex items-end gap-6">
-              <img src="/logo-cf.png" alt="Contador de Padarias" style={{height: '52px', objectFit: 'contain'}} />
-              <div>
-                <div className="print-title" style={{color: '#020D2F'}}>Relatório de Auditoria de Sequência (Vendas/Saídas)</div>
-                <div className="text-sm font-bold mt-1 uppercase tracking-widest" style={{color: '#888'}}>Documentos Emitidos pela Empresa</div>
-              </div>
+      {analysis && (() => {
+        const empresaPrincipal = analysis[0]?.razaoSocial || 'N/A';
+        const cnpjPrincipal = analysis[0]?.cnpj || 'N/A';
+        const periodosUnicos = Array.from(new Set(analysis.map(a => a.mesReferencia).filter(Boolean)));
+        const periodoLabel = periodosUnicos.length <= 1 ? (periodosUnicos[0] || 'N/A') : periodosUnicos.join(', ');
+
+        return (
+        <div className="hidden print:block print:px-3">
+          <div className="print-header">
+            <div className="flex items-baseline justify-between gap-6">
+              <div className="print-title" style={{color: '#020D2F'}}>Relatório de Auditoria de Sequência (Vendas/Saídas)</div>
+              <span className="shrink-0 text-[9px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full whitespace-nowrap" style={{background: '#f1f5f9', color: '#475569'}}>Cópia de Auditoria</span>
             </div>
-            <div className="text-right">
-              <div className="font-black border-2 px-3 py-1 uppercase text-sm" style={{color: '#020D2F', borderColor: '#020D2F'}}>Cópia de Auditoria</div>
+            <div className="mt-2 flex flex-wrap items-baseline gap-x-8 gap-y-1 text-[11px]">
+              <span>
+                <span className="font-bold uppercase tracking-widest" style={{color: '#94a3b8'}}>Empresa </span>
+                <span className="font-bold" style={{color: '#1e293b'}}>{empresaPrincipal}</span>
+              </span>
+              <span>
+                <span className="font-bold uppercase tracking-widest" style={{color: '#94a3b8'}}>CNPJ </span>
+                <span className="font-mono font-bold" style={{color: '#1e293b'}}>{cnpjPrincipal}</span>
+              </span>
+              <span>
+                <span className="font-bold uppercase tracking-widest" style={{color: '#94a3b8'}}>Período </span>
+                <span className="font-bold" style={{color: '#1e293b'}}>{periodoLabel}</span>
+              </span>
             </div>
           </div>
 
@@ -3598,7 +3623,8 @@ export default function App() {
             <div>Página 1 de 1</div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       <footer className="p-8 text-center no-print" style={{background: '#020D2F'}}>
         <img src="/simbolo.png" alt="Contador de Padarias" className="h-8 object-contain mx-auto opacity-70" />
