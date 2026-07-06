@@ -5,6 +5,7 @@
 
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import JSZip from 'jszip';
+import * as XLSX from 'xlsx';
 import { createExtractorFromData } from 'node-unrar-js';
 // @ts-ignore
 // Usando CDN para garantir que o motor WASM seja carregado corretamente em qualquer ambiente
@@ -26,7 +27,10 @@ import {
   User,
   Printer,
   Download,
-  X
+  X,
+  GitCompare,
+  Loader2,
+  XCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -113,6 +117,23 @@ interface Stats {
   inutilizations: number;
   cancellations: number;
   nonXmlCount: number;
+}
+
+type TipoDiferencaAuditoria = 'NCM' | 'Nome' | 'Nome e NCM' | 'Sequência' | 'Planilha';
+
+interface DiferencaAuditoria {
+  tipo: TipoDiferencaAuditoria;
+  itemSequencia: string;
+  itemPlanilha: string;
+  ncmSequencia: string;
+  ncmPlanilha: string;
+  // Chaves cruas "serie::numero" (não formatadas ainda) — formatação e o
+  // cruzamento entre categorias acontecem depois de montar todas as diferenças.
+  notasSequencia: string[];
+  notasPlanilha: string[];
+  ocorrencias: number;
+  valor: number;
+  outrosTipos?: string;
 }
 
 // --- Helpers ---
@@ -520,7 +541,9 @@ export default function App() {
   const [filterMes, setFilterMes] = useState('Todos');
   const [showDaysDetail, setShowDaysDetail] = useState(false);
   const [showCfopBreakdown, setShowCfopBreakdown] = useState(false);
+  const [showExportOptions, setShowExportOptions] = useState(false);
   const [notaSearchQuery, setNotaSearchQuery] = useState('');
+  const [notaSearchCampo, setNotaSearchCampo] = useState<'Tudo' | 'Numero' | 'Chave' | 'Cliente' | 'Item' | 'Data' | 'Valor'>('Tudo');
   const [filterNotaModelo, setFilterNotaModelo] = useState('Todos');
   const [filterNotaSituacao, setFilterNotaSituacao] = useState('Todas');
   const [downloadingDanfeChave, setDownloadingDanfeChave] = useState<string | null>(null);
@@ -528,6 +551,14 @@ export default function App() {
   const [showSelecionadas, setShowSelecionadas] = useState(false);
   const [baixandoLote, setBaixandoLote] = useState<{ tipo: 'danfe' | 'xml'; atual: number; total: number } | null>(null);
   const [copiedCnpjIdx, setCopiedCnpjIdx] = useState<number | null>(null);
+
+  // Auditoria de XML (confronto com planilha detalhada do Questor)
+  const auditoriaInputRef = useRef<HTMLInputElement>(null);
+  const [auditoriaLoading, setAuditoriaLoading] = useState(false);
+  const [auditoriaErro, setAuditoriaErro] = useState<string | null>(null);
+  const [auditoriaResultado, setAuditoriaResultado] = useState<DiferencaAuditoria[] | null>(null);
+  const [auditoriaNomeArquivo, setAuditoriaNomeArquivo] = useState('');
+  const [auditoriaFiltroTipo, setAuditoriaFiltroTipo] = useState<'Todas' | TipoDiferencaAuditoria>('Todas');
 
   const formatarMoeda = (valor: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -659,14 +690,31 @@ export default function App() {
       if (filterNotaSituacao === 'Inutilizadas' && nota.tipo !== 'inutilizacao') return false;
       if (!query) return true;
 
+      const buscaItem = () => {
+        if (!nota.rawXml || nota.tipo !== 'nfe') return false;
+        const doc = parser.parseFromString(nota.rawXml, 'text/xml');
+        return Array.from(doc.getElementsByTagName('xProd')).some(el => (el.textContent || '').toLowerCase().includes(query));
+      };
+
+      // Campo específico selecionado: busca só ali, pra não trazer resultado de
+      // outro campo que por acaso tem o mesmo número/trecho (ex: valor == número da nota).
+      if (notaSearchCampo === 'Numero') return (nota.numero || '').toLowerCase().includes(query);
+      if (notaSearchCampo === 'Chave') return (nota.chave || '').toLowerCase().includes(query);
+      if (notaSearchCampo === 'Cliente') return [nota.destNome, nota.destCnpj].some(c => c && c.toLowerCase().includes(query));
+      if (notaSearchCampo === 'Data') return (nota.data || '').toLowerCase().includes(query);
+      if (notaSearchCampo === 'Valor') return (nota.valor || '').toLowerCase().includes(query);
+      if (notaSearchCampo === 'Item') return buscaItem();
+
+      // "Tudo": mantém o comportamento combinado de antes.
       const campos = [
         nota.chave, nota.numero, nota.serie, nota.modelo,
         nota.destNome, nota.destCnpj, nota.valor, nota.data,
         nota.natureza, nota.protocolo
       ];
-      return campos.some(campo => campo && campo.toLowerCase().includes(query));
+      if (campos.some(campo => campo && campo.toLowerCase().includes(query))) return true;
+      return buscaItem();
     });
-  }, [notasSaida, notaSearchQuery, filterNotaModelo, filterNotaSituacao]);
+  }, [notasSaida, notaSearchQuery, notaSearchCampo, filterNotaModelo, filterNotaSituacao]);
 
   const periodoAnalise = useMemo(() => {
     // Identify the Main Client Company CNPJ (the most frequent overall)
@@ -788,6 +836,509 @@ export default function App() {
       console.error("Erro ao gerar arquivo ZIP:", err);
       alert("Erro ao exportar arquivos XML.");
     }
+  };
+
+  // Auditoria de XML: confronta os itens lidos direto do XML (fonte fiscal) contra
+  // uma planilha detalhada exportada de outro sistema (ex: Questor), item a item,
+  // pra flagrar NCM ou nome de produto que o outro sistema mostra diferente do XML.
+  const normalizarTextoHeader = (v: string) =>
+    v.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+  const normalizarNcmAuditoria = (v: string) => v.replace(/\D/g, '').replace(/^0+(?=\d)/, '');
+
+  // Agrupa as chaves cruas "serie::numero" por série, pra não repetir "Série X Nº"
+  // na frente de cada número — ex: "Série 100: 86175, 86183, 86200 +127".
+  const formatarNotasAgrupadas = (chaves: string[], truncar = true) => {
+    const porSerie = new Map<string, string[]>();
+    chaves.forEach(chave => {
+      const [serie, numero] = chave.split('::');
+      if (!porSerie.has(serie)) porSerie.set(serie, []);
+      porSerie.get(serie)!.push(numero);
+    });
+    return Array.from(porSerie.entries()).map(([serie, numeros]) => {
+      const ordenados = numeros.sort((a, b) => (Number(a) || 0) - (Number(b) || 0));
+      const visiveis = truncar && ordenados.length > 10 ? `${ordenados.slice(0, 10).join(', ')} +${ordenados.length - 10}` : ordenados.join(', ');
+      return `Série ${serie}: ${visiveis}`;
+    });
+  };
+
+  const agruparItensAuditoria = (linhas: { natureza: string; ncm: string; item: string; valor: number; notaRef?: string }[]) => {
+    const grupos = new Map<string, { item: string; ncmsRaw: Set<string>; ncmsNorm: Set<string>; naturezas: Set<string>; notas: Set<string>; count: number; total: number }>();
+    linhas.forEach(l => {
+      const item = l.item.trim();
+      if (!item) return;
+      const key = item.toUpperCase();
+      let g = grupos.get(key);
+      if (!g) {
+        g = { item, ncmsRaw: new Set(), ncmsNorm: new Set(), naturezas: new Set(), notas: new Set(), count: 0, total: 0 };
+        grupos.set(key, g);
+      }
+      g.ncmsRaw.add(l.ncm);
+      g.ncmsNorm.add(normalizarNcmAuditoria(l.ncm));
+      g.naturezas.add((l.natureza || '').slice(0, 4));
+      if (l.notaRef) g.notas.add(l.notaRef);
+      g.count += 1;
+      g.total += l.valor;
+    });
+    return grupos;
+  };
+
+  const runAuditoriaXml = async (file: File) => {
+    setAuditoriaLoading(true);
+    setAuditoriaErro(null);
+    setAuditoriaResultado(null);
+    setAuditoriaNomeArquivo(file.name);
+    try {
+      let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && n.rawXml);
+      if (filterMes !== 'Todos') {
+        notas = notas.filter(n => getMonthYear(n.data) === filterMes);
+      }
+      if (notas.length === 0) {
+        throw new Error('Nenhuma nota de saída válida encontrada no período selecionado.');
+      }
+
+      const linhasApp: { natureza: string; ncm: string; item: string; valor: number; notaRef: string }[] = [];
+      notas.forEach(nota => {
+        const doc = parser.parseFromString(nota.rawXml!, 'text/xml');
+        const notaRef = `${nota.serie || '?'}::${nota.numero || '?'}`;
+        Array.from(doc.getElementsByTagName('det')).forEach(det => {
+          const get = (tag: string) => det.getElementsByTagName(tag)[0]?.textContent || '';
+          linhasApp.push({
+            natureza: get('CFOP'),
+            ncm: get('NCM'),
+            item: get('xProd'),
+            valor: parseFloat(get('vProd')) || 0,
+            notaRef,
+          });
+        });
+      });
+
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true }) as unknown[][];
+      if (rows.length < 2) {
+        throw new Error('A planilha anexada está vazia.');
+      }
+
+      // Encontra a coluna certa: exige igualdade exata primeiro (senão "Código Item"
+      // "ganha" de "Item" por conter a mesma palavra), só cai pra substring se não achar.
+      const acharColuna = (header: string[], chaves: string[]) => {
+        for (const c of chaves) {
+          const idx = header.findIndex(h => h === c);
+          if (idx >= 0) return idx;
+        }
+        for (const c of chaves) {
+          const idx = header.findIndex(h => h.includes(c));
+          if (idx >= 0) return idx;
+        }
+        return -1;
+      };
+
+      // A linha de cabeçalho nem sempre é a primeira (algumas exportações têm uma
+      // linha de título/branco antes) — varre as primeiras linhas até achar uma
+      // que tenha as 3 colunas essenciais.
+      let headerRowIdx = -1;
+      let colNatureza = -1, colNcm = -1, colItem = -1, colValor = -1, colDocumento = -1, colSerie = -1;
+      for (let i = 0; i < Math.min(10, rows.length); i++) {
+        const header = (rows[i] as unknown[]).map(h => normalizarTextoHeader(String(h ?? '')));
+        const ncm = acharColuna(header, ['ncm']);
+        const item = acharColuna(header, ['item', 'produto', 'descricao', 'mercadoria']);
+        const valor = acharColuna(header, ['valor contabil', 'valor cont', 'valor']);
+        if (ncm >= 0 && item >= 0 && valor >= 0) {
+          headerRowIdx = i;
+          colNcm = ncm;
+          colItem = item;
+          colValor = valor;
+          colNatureza = acharColuna(header, ['natureza', 'cfop']);
+          colDocumento = acharColuna(header, ['documento', 'numero da nota', 'nnf']);
+          colSerie = acharColuna(header, ['serie']);
+          break;
+        }
+      }
+      if (headerRowIdx === -1) {
+        throw new Error('Não encontrei as colunas de NCM, Item e Valor Contábil nessa planilha. Confira se é a exportação detalhada correta.');
+      }
+
+      const linhasPlanilha: { natureza: string; ncm: string; item: string; valor: number; notaRef?: string }[] = rows
+        .slice(headerRowIdx + 1)
+        .filter(r => r && r[colItem] != null && String(r[colItem]).trim() !== '')
+        .map(r => {
+          const documento = colDocumento >= 0 ? String(r[colDocumento] ?? '').trim() : '';
+          const serie = colSerie >= 0 ? String(r[colSerie] ?? '').trim() : '';
+          return {
+            natureza: colNatureza >= 0 ? String(r[colNatureza] ?? '').trim() : '',
+            ncm: String(r[colNcm] ?? '').trim(),
+            item: String(r[colItem] ?? '').trim(),
+            valor: parseFloat(String(r[colValor] ?? '0').replace(',', '.')) || 0,
+            notaRef: documento ? `${serie || '?'}::${documento}` : undefined,
+          };
+        });
+
+      if (linhasPlanilha.length === 0) {
+        throw new Error('Não encontrei linhas de item válidas nessa planilha.');
+      }
+
+      const gruposApp = agruparItensAuditoria(linhasApp);
+      const gruposPlanilha = agruparItensAuditoria(linhasPlanilha);
+
+      const diferencas: DiferencaAuditoria[] = [];
+      const usadosPlanilha = new Set<string>();
+
+      gruposApp.forEach((grupoA, key) => {
+        const grupoP = gruposPlanilha.get(key);
+        if (!grupoP) return;
+        usadosPlanilha.add(key);
+        const ncmA = Array.from(grupoA.ncmsNorm).sort().join(',');
+        const ncmP = Array.from(grupoP.ncmsNorm).sort().join(',');
+        if (ncmA !== ncmP) {
+          diferencas.push({
+            tipo: 'NCM',
+            itemSequencia: grupoA.item,
+            itemPlanilha: grupoP.item,
+            ncmSequencia: Array.from(grupoA.ncmsRaw).join(', '),
+            ncmPlanilha: Array.from(grupoP.ncmsRaw).join(', '),
+            notasSequencia: Array.from(grupoA.notas),
+            notasPlanilha: Array.from(grupoP.notas),
+            ocorrencias: grupoA.count,
+            valor: grupoA.total,
+          });
+        }
+      });
+
+      const restantesApp = Array.from(gruposApp.entries()).filter(([key]) => !gruposPlanilha.has(key));
+      const restantesPlanilha = Array.from(gruposPlanilha.entries()).filter(([key]) => !usadosPlanilha.has(key) && !gruposApp.has(key));
+      const usadosPlanilha2 = new Set<string>();
+
+      restantesApp.forEach(([, grupoA]) => {
+        const idxMatch = restantesPlanilha.findIndex(([keyP, grupoP]) =>
+          !usadosPlanilha2.has(keyP) &&
+          grupoA.count === grupoP.count &&
+          Math.abs(grupoA.total - grupoP.total) < 0.02 &&
+          Array.from(grupoA.naturezas).some(n => grupoP.naturezas.has(n))
+        );
+        if (idxMatch >= 0) {
+          const [keyP, grupoP] = restantesPlanilha[idxMatch];
+          usadosPlanilha2.add(keyP);
+          const ncmA = Array.from(grupoA.ncmsNorm).sort().join(',');
+          const ncmP = Array.from(grupoP.ncmsNorm).sort().join(',');
+          diferencas.push({
+            tipo: ncmA !== ncmP ? 'Nome e NCM' : 'Nome',
+            itemSequencia: grupoA.item,
+            itemPlanilha: grupoP.item,
+            ncmSequencia: Array.from(grupoA.ncmsRaw).join(', '),
+            ncmPlanilha: Array.from(grupoP.ncmsRaw).join(', '),
+            notasSequencia: Array.from(grupoA.notas),
+            notasPlanilha: Array.from(grupoP.notas),
+            ocorrencias: grupoA.count,
+            valor: grupoA.total,
+          });
+        } else {
+          diferencas.push({
+            tipo: 'Sequência',
+            itemSequencia: grupoA.item,
+            itemPlanilha: '',
+            ncmSequencia: Array.from(grupoA.ncmsRaw).join(', '),
+            ncmPlanilha: '',
+            notasSequencia: Array.from(grupoA.notas),
+            notasPlanilha: [],
+            ocorrencias: grupoA.count,
+            valor: grupoA.total,
+          });
+        }
+      });
+
+      restantesPlanilha.forEach(([keyP, grupoP]) => {
+        if (usadosPlanilha2.has(keyP)) return;
+        diferencas.push({
+          tipo: 'Planilha',
+          itemSequencia: '',
+          itemPlanilha: grupoP.item,
+          ncmSequencia: '',
+          ncmPlanilha: Array.from(grupoP.ncmsRaw).join(', '),
+          notasSequencia: [],
+          notasPlanilha: Array.from(grupoP.notas),
+          ocorrencias: grupoP.count,
+          valor: grupoP.total,
+        });
+      });
+
+      // Cruza notas entre categorias: se a mesma nota (por outro item nela) já
+      // aparece em outro tipo de divergência, destaca isso pro analista notar
+      // que aquela nota tem mais de um ponto pra conferir.
+      const notaParaTipos = new Map<string, Set<TipoDiferencaAuditoria>>();
+      diferencas.forEach(d => {
+        [...d.notasSequencia, ...d.notasPlanilha].forEach(n => {
+          if (!notaParaTipos.has(n)) notaParaTipos.set(n, new Set());
+          notaParaTipos.get(n)!.add(d.tipo);
+        });
+      });
+      diferencas.forEach(d => {
+        const outros = new Set<TipoDiferencaAuditoria>();
+        [...d.notasSequencia, ...d.notasPlanilha].forEach(n => {
+          notaParaTipos.get(n)?.forEach(t => { if (t !== d.tipo) outros.add(t); });
+        });
+        if (outros.size > 0) d.outrosTipos = Array.from(outros).join(', ');
+      });
+
+      diferencas.sort((a, b) => b.valor - a.valor);
+      setAuditoriaResultado(diferencas);
+    } catch (err) {
+      setAuditoriaErro(err instanceof Error ? err.message : 'Erro ao processar a planilha.');
+    } finally {
+      setAuditoriaLoading(false);
+    }
+  };
+
+  const exportarAuditoriaXml = () => {
+    if (!auditoriaResultado || auditoriaResultado.length === 0) return;
+    const header = ['Tipo', 'Item (Sequência Fiscal)', 'Item (Planilha)', 'NCM (Sequência Fiscal)', 'NCM (Planilha)', 'Notas (Sequência Fiscal)', 'Notas (Planilha)', 'Também aparece em', 'Ocorrências', 'Valor Total'];
+    const linhaDe = (d: DiferencaAuditoria): (string | number)[] => [
+      d.tipo, d.itemSequencia, d.itemPlanilha, d.ncmSequencia, d.ncmPlanilha,
+      formatarNotasAgrupadas(d.notasSequencia, false).join('; '),
+      formatarNotasAgrupadas(d.notasPlanilha, false).join('; '),
+      d.outrosTipos || '',
+      d.ocorrencias, d.valor,
+    ];
+    const wb = XLSX.utils.book_new();
+    const adicionarAba = (nome: string, linhas: DiferencaAuditoria[]) => {
+      if (linhas.length === 0) return;
+      const aoa: (string | number)[][] = [header, ...linhas.map(linhaDe)];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [
+        { wch: 16 }, { wch: 32 }, { wch: 32 }, { wch: 16 }, { wch: 16 }, { wch: 30 }, { wch: 30 }, { wch: 18 }, { wch: 11 }, { wch: 13 },
+      ];
+      XLSX.utils.book_append_sheet(wb, ws, nome.slice(0, 31));
+    };
+
+    adicionarAba('Todas', auditoriaResultado);
+    (['NCM', 'Nome', 'Nome e NCM', 'Sequência', 'Planilha'] as TipoDiferencaAuditoria[]).forEach(t => {
+      adicionarAba(t, auditoriaResultado.filter(d => d.tipo === t));
+    });
+
+    const suffix = filterMes === 'Todos' ? 'todos_meses' : filterMes.replace('/', '_');
+    XLSX.writeFile(wb, `auditoria_xml_divergencias_${suffix}.xlsx`);
+  };
+
+  // Simplified confronto: just Natureza/NCM/Item/Valor Contábil, plus the
+  // Desconto-onward columns — each included only if some row actually has a value.
+  const exportarPlanilhaDetalhadaSimples = () => {
+    let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && n.rawXml);
+    if (filterMes !== 'Todos') {
+      notas = notas.filter(n => getMonthYear(n.data) === filterMes);
+    }
+    if (notas.length === 0) {
+      alert('Nenhuma nota de saída válida encontrada para exportar.');
+      return;
+    }
+
+    interface LinhaItem {
+      natureza: string;
+      ncm: string;
+      item: string;
+      valorContabil: number;
+      desconto: number;
+      despesas: number;
+      frete: number;
+      seguro: number;
+    }
+
+    const linhas: LinhaItem[] = [];
+    notas.forEach(nota => {
+      const doc = parser.parseFromString(nota.rawXml!, 'text/xml');
+      Array.from(doc.getElementsByTagName('det')).forEach(det => {
+        const get = (tag: string) => det.getElementsByTagName(tag)[0]?.textContent || '';
+        const num = (tag: string) => parseFloat(get(tag)) || 0;
+        linhas.push({
+          natureza: get('CFOP'),
+          ncm: get('NCM'),
+          item: get('xProd'),
+          valorContabil: num('vProd'),
+          desconto: num('vDesc'),
+          despesas: num('vOutro'),
+          frete: num('vFrete'),
+          seguro: num('vSeg'),
+        });
+      });
+    });
+
+    if (linhas.length === 0) {
+      alert('Nenhum item encontrado nos XMLs das notas válidas.');
+      return;
+    }
+
+    const temDesconto = linhas.some(l => l.desconto > 0);
+    const temDespesas = linhas.some(l => l.despesas > 0);
+    const temFrete = linhas.some(l => l.frete > 0);
+    const temSeguro = linhas.some(l => l.seguro > 0);
+
+    const header = ['Natureza', 'NCM', 'Item', 'Valor Contábil'];
+    if (temDesconto) header.push('Desconto');
+    if (temDespesas) header.push('Despesas Acessórias');
+    if (temFrete) header.push('Frete');
+    if (temSeguro) header.push('Seguro');
+
+    const aoa: (string | number)[][] = [header];
+    linhas.forEach(l => {
+      const row: (string | number)[] = [l.natureza, l.ncm, l.item, l.valorContabil];
+      if (temDesconto) row.push(l.desconto);
+      if (temDespesas) row.push(l.despesas);
+      if (temFrete) row.push(l.frete);
+      if (temSeguro) row.push(l.seguro);
+      aoa.push(row);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [
+      { wch: 10 },
+      { wch: 12 },
+      { wch: 40 },
+      { wch: 14 },
+      ...header.slice(4).map(() => ({ wch: 14 }))
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Confronto Simples');
+    const suffix = filterMes === 'Todos' ? 'todos_meses' : filterMes.replace('/', '_');
+    XLSX.writeFile(wb, `planilha_confronto_simples_${suffix}.xlsx`);
+  };
+
+  // Mirrors Questor's "detalhada" export layout (46 columns, same order/formats).
+  // Content comes from the XMLs (the fiscal source of truth), so item names/NCMs
+  // follow the notes rather than Questor's internal cadastro. When a note's item
+  // sum doesn't reconcile to its vNF (note-level acréscimo/rounding), a synthetic
+  // "Produto Padrão" adjustment row is emitted — exactly like Questor does.
+  const exportarPlanilhaDetalhadaCompleta = () => {
+    let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && n.rawXml);
+    if (filterMes !== 'Todos') {
+      notas = notas.filter(n => getMonthYear(n.data) === filterMes);
+    }
+    if (notas.length === 0) {
+      alert('Nenhuma nota de saída válida encontrada para exportar.');
+      return;
+    }
+
+    const fmtCnpj = (v: string) =>
+      /^\d{14}$/.test(v) ? `${v.slice(0,2)}.${v.slice(2,5)}.${v.slice(5,8)}/${v.slice(8,12)}-${v.slice(12)}` : v;
+    const fmtCpf = (v: string) =>
+      /^\d{11}$/.test(v) ? `${v.slice(0,3)}.${v.slice(3,6)}.${v.slice(6,9)}-${v.slice(9)}` : v;
+    const fmtNcm = (v: string) =>
+      /^\d{8}$/.test(v) ? `${v.slice(0,4)}.${v.slice(4,6)}.${v.slice(6)}` : v;
+    const fmtData = (iso?: string) => {
+      if (!iso) return '';
+      const d = iso.substring(0, 10).split('-');
+      return d.length === 3 ? `${d[2]}/${d[1]}/${d[0]}` : '';
+    };
+
+    const header = [
+      'CNPJ (Matriz/Filial)', 'Nome Filial', 'Chave do Lançamento', 'Documento', 'Espécie', 'Série',
+      'Data Entrada/Saída', 'Data Emissão', 'Natureza', 'Nome', 'CNPJ (Cliente/Fornecedor)',
+      'NCM', 'Código Item', 'Item', 'Unidade', 'Quantidade', 'Valor Contábil',
+      'CST ICMS', 'Base Cálculo ICMS', 'Alíquota ICMS', 'Valor ICMS', 'Isentas ICMS', 'Outras ICMS',
+      'CST IPI', 'Base Cálculo IPI', 'Alíquota IPI', 'Valor IPI', 'Isentas IPI', 'Outras IPI',
+      'CST ISS', 'Base Cálculo ISS', 'Alíquota ISS', 'Valor ISS', 'Isentas ISS', 'Outras ISS',
+      'CST ST', 'Base Cálculo ST', 'Alíquota ST', 'Valor ST', 'Isentas ST', 'Outras ST',
+      'Desconto', 'Despesas Acessórias', 'Frete', 'Seguro', 'Abatimento Não Tributado'
+    ];
+    const aoa: (string | number)[][] = [header];
+
+    notas.forEach(nota => {
+      const doc = parser.parseFromString(nota.rawXml!, 'text/xml');
+      const emitCnpj = fmtCnpj(nota.emitCnpj || '');
+      const nomeFilial = (nota.emitCnpj || '').slice(8, 12) === '0001' ? 'Matriz' : 'Filial';
+      const especie = nota.modelo === '65' ? 'NFCE' : 'NFE';
+      const dataFmt = fmtData(nota.data);
+      const nomeCliente = nota.destNome || 'Diversos';
+      const destDoc = nota.destCnpj
+        ? fmtCnpj(nota.destCnpj)
+        : (() => {
+            const dest = doc.getElementsByTagName('dest')[0];
+            const cpf = dest?.getElementsByTagName('CPF')[0]?.textContent || '';
+            return cpf ? fmtCpf(cpf) : '000.000.000-00';
+          })();
+      const docNum = parseInt(nota.numero || '') || nota.numero || '';
+      const serieNum = parseInt(nota.serie || '') || nota.serie || '';
+
+      let somaItens = 0;
+      let cfopPredominante = '';
+
+      Array.from(doc.getElementsByTagName('det')).forEach(det => {
+        const get = (tag: string) => det.getElementsByTagName(tag)[0]?.textContent || '';
+        const num = (tag: string) => parseFloat(get(tag)) || 0;
+
+        const vProd = num('vProd');
+        const vDesc = num('vDesc');
+        const vFreteI = num('vFrete');
+        const vSegI = num('vSeg');
+        const vOutroI = num('vOutro');
+        somaItens += vProd - vDesc + vFreteI + vSegI + vOutroI;
+
+        const cfop = get('CFOP');
+        if (!cfopPredominante) cfopPredominante = cfop;
+
+        // CST/CSOSN and ICMS values from whichever ICMSxx/ICMSSNxxx block is present
+        const icms = det.getElementsByTagName('ICMS')[0];
+        const cst = icms?.getElementsByTagName('CSOSN')[0]?.textContent
+          || icms?.getElementsByTagName('CST')[0]?.textContent || '';
+        const vBC = parseFloat(icms?.getElementsByTagName('vBC')[0]?.textContent || '0') || 0;
+        const pICMS = parseFloat(icms?.getElementsByTagName('pICMS')[0]?.textContent || '0') || 0;
+        const vICMS = parseFloat(icms?.getElementsByTagName('vICMS')[0]?.textContent || '0') || 0;
+        const vBCST = parseFloat(icms?.getElementsByTagName('vBCST')[0]?.textContent || '0') || 0;
+        const pICMSST = parseFloat(icms?.getElementsByTagName('pICMSST')[0]?.textContent || '0') || 0;
+        const vICMSST = parseFloat(icms?.getElementsByTagName('vICMSST')[0]?.textContent || '0') || 0;
+
+        // Livro-fiscal classification as observed in Questor's export:
+        // CSOSN 102/103/300/400 → full item value in "Outras"; CST 40/41 → "Isentas";
+        // CSOSN 500 / CST 60 (ST já retido) → all zeros.
+        const isentas = (cst === '40' || cst === '41') ? vProd : 0;
+        const outras = (cst === '102' || cst === '103' || cst === '300' || cst === '400' || cst === '90') ? vProd : 0;
+
+        const ipi = det.getElementsByTagName('IPI')[0];
+        const cstIpi = ipi?.getElementsByTagName('CST')[0]?.textContent || '';
+        const vBCIpi = parseFloat(ipi?.getElementsByTagName('vBC')[0]?.textContent || '0') || 0;
+        const pIpi = parseFloat(ipi?.getElementsByTagName('pIPI')[0]?.textContent || '0') || 0;
+        const vIpi = parseFloat(ipi?.getElementsByTagName('vIPI')[0]?.textContent || '0') || 0;
+
+        aoa.push([
+          emitCnpj, nomeFilial, '', docNum, especie, serieNum,
+          dataFmt, dataFmt, cfop, nomeCliente, destDoc,
+          fmtNcm(get('NCM')), parseInt(get('cProd')) || get('cProd'), get('xProd'), get('uCom'), num('qCom'), vProd,
+          parseInt(cst) || cst, vBC, pICMS, vICMS, isentas, outras,
+          parseInt(cstIpi) || 0, vBCIpi, pIpi, vIpi, 0, 0,
+          0, 0, 0, 0, 0, 0,
+          0, vBCST, pICMSST, vICMSST, 0, 0,
+          vDesc, vOutroI, vFreteI, vSegI, 0
+        ]);
+      });
+
+      // Note-level reconciliation: if the items don't sum to the note's vNF
+      // (acréscimo/rounding recorded only in the totals block), emit the same
+      // "Produto Padrão" adjustment row Questor generates.
+      const vNF = parseFloat(nota.valor || '0') || 0;
+      const ajuste = Math.round((vNF - somaItens) * 100) / 100;
+      if (Math.abs(ajuste) >= 0.01) {
+        aoa.push([
+          emitCnpj, nomeFilial, '', docNum, especie, serieNum,
+          dataFmt, dataFmt, cfopPredominante, nomeCliente, destDoc,
+          '9999.99.99', 0, 'Produto Padrão', '', 0, ajuste,
+          0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0
+        ]);
+      }
+    });
+
+    if (aoa.length === 1) {
+      alert('Nenhum item encontrado nos XMLs das notas válidas.');
+      return;
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = header.map((h, i) => ({ wch: i === 13 ? 40 : Math.max(12, h.length + 2) }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Detalhada');
+    const suffix = filterMes === 'Todos' ? 'todos_meses' : filterMes.replace('/', '_');
+    XLSX.writeFile(wb, `planilha_detalhada_${suffix}.xlsx`);
   };
 
   const [wasmBinary, setWasmBinary] = useState<ArrayBuffer | null>(null);
@@ -1721,60 +2272,70 @@ export default function App() {
           </div>
 
           {analysis && analysis.length > 0 && (
-            <motion.div 
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="backdrop-blur-md rounded-2xl p-5 flex flex-col gap-1 min-w-[360px] shadow-2xl"
-              style={{background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(240,180,41,0.2)'}}
-            >
-              <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-                <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Empresa:</span>
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-white font-bold text-base truncate min-w-0">{analysis[0].razaoSocial}</span>
-                  <button
-                    onClick={() => copiarCampoHeader('empresa', analysis[0].razaoSocial)}
-                    className="shrink-0 transition-colors"
-                    style={{color: copiedHeaderField === 'empresa' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
-                    title="Copiar nome completo da empresa"
-                  >
-                    {copiedHeaderField === 'empresa' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
+            <div className="flex flex-col items-end gap-3 no-print">
+              <button
+                onClick={reset}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-bold transition-all shrink-0"
+                style={{background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(240,180,41,0.35)'}}
+              >
+                <FileSearch className="w-4 h-4" />
+                Nova Análise
+              </button>
+              <motion.div
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="backdrop-blur-md rounded-2xl p-5 flex flex-col gap-1 min-w-[360px] shadow-2xl"
+                style={{background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(240,180,41,0.2)'}}
+              >
+                <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+                  <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Empresa:</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-white font-bold text-base truncate min-w-0">{analysis[0].razaoSocial}</span>
+                    <button
+                      onClick={() => copiarCampoHeader('empresa', analysis[0].razaoSocial)}
+                      className="shrink-0 transition-colors"
+                      style={{color: copiedHeaderField === 'empresa' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
+                      title="Copiar nome completo da empresa"
+                    >
+                      {copiedHeaderField === 'empresa' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
 
-                <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>CNPJ:</span>
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-mono text-base" style={{color: 'rgba(255,255,255,0.85)'}}>{analysis[0].cnpj}</span>
-                  <button
-                    onClick={() => copiarCampoHeader('cnpj', analysis[0].cnpj)}
-                    className="shrink-0 transition-colors"
-                    style={{color: copiedHeaderField === 'cnpj' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
-                    title="Copiar CNPJ"
-                  >
-                    {copiedHeaderField === 'cnpj' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
+                  <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>CNPJ:</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-mono text-base" style={{color: 'rgba(255,255,255,0.85)'}}>{analysis[0].cnpj}</span>
+                    <button
+                      onClick={() => copiarCampoHeader('cnpj', analysis[0].cnpj)}
+                      className="shrink-0 transition-colors"
+                      style={{color: copiedHeaderField === 'cnpj' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
+                      title="Copiar CNPJ"
+                    >
+                      {copiedHeaderField === 'cnpj' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
 
-                <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>IE:</span>
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-mono text-base" style={{color: 'rgba(255,255,255,0.85)'}}>{analysis[0].ie}</span>
-                  <button
-                    onClick={() => copiarCampoHeader('ie', analysis[0].ie)}
-                    className="shrink-0 transition-colors"
-                    style={{color: copiedHeaderField === 'ie' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
-                    title="Copiar Inscrição Estadual"
-                  >
-                    {copiedHeaderField === 'ie' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
+                  <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>IE:</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-mono text-base" style={{color: 'rgba(255,255,255,0.85)'}}>{analysis[0].ie}</span>
+                    <button
+                      onClick={() => copiarCampoHeader('ie', analysis[0].ie)}
+                      className="shrink-0 transition-colors"
+                      style={{color: copiedHeaderField === 'ie' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
+                      title="Copiar Inscrição Estadual"
+                    >
+                      {copiedHeaderField === 'ie' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
 
-                <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Meses:</span>
-                <span className="font-bold text-sm leading-snug" style={{color: '#F0B429'}}>
-                  {mesesDisponiveis.length === 0 && 'N/A'}
-                  {mesesDisponiveis.length > 0 && mesesDisponiveis.length <= 3 && mesesDisponiveis.join(', ')}
-                  {mesesDisponiveis.length > 3 && `${mesesDisponiveis.slice(0, 3).join(', ')} +${mesesDisponiveis.length - 3}`}
-                </span>
-              </div>
-            </motion.div>
+                  <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Meses:</span>
+                  <span className="font-bold text-sm leading-snug" style={{color: '#F0B429'}}>
+                    {mesesDisponiveis.length === 0 && 'N/A'}
+                    {mesesDisponiveis.length > 0 && mesesDisponiveis.length <= 3 && mesesDisponiveis.join(', ')}
+                    {mesesDisponiveis.length > 3 && `${mesesDisponiveis.slice(0, 3).join(', ')} +${mesesDisponiveis.length - 3}`}
+                  </span>
+                </div>
+              </motion.div>
+            </div>
           )}
         </div>
       </header>
@@ -2095,10 +2656,23 @@ export default function App() {
                         type="text"
                         value={notaSearchQuery}
                         onChange={(e) => setNotaSearchQuery(e.target.value)}
-                        placeholder="Número, chave, cliente, data, valor..."
+                        placeholder={notaSearchCampo === 'Tudo' ? 'Número, chave, cliente, item, data, valor...' : `Buscar por ${notaSearchCampo.toLowerCase()}...`}
                         className="w-full pl-11 pr-4 py-3 rounded-2xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                       />
                     </div>
+                    <select
+                      value={notaSearchCampo}
+                      onChange={(e) => setNotaSearchCampo(e.target.value as typeof notaSearchCampo)}
+                      className="px-3 py-2.5 rounded-2xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="Tudo">Buscar em: Tudo</option>
+                      <option value="Numero">Só Número</option>
+                      <option value="Chave">Só Chave</option>
+                      <option value="Cliente">Só Cliente</option>
+                      <option value="Item">Só Item</option>
+                      <option value="Data">Só Data</option>
+                      <option value="Valor">Só Valor</option>
+                    </select>
                     <select
                       value={filterNotaModelo}
                       onChange={(e) => setFilterNotaModelo(e.target.value)}
@@ -2518,33 +3092,205 @@ export default function App() {
                   <Download className="w-4 h-4" />
                   Exportar XMLs ({filterMes === 'Todos' ? 'Todos' : filterMes})
                 </button>
-                <div className="flex-1" />
-                
+                <div className="relative">
+                  <button
+                    onClick={() => setShowExportOptions(!showExportOptions)}
+                    className="flex items-center gap-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer"
+                  >
+                    <FileText className="w-4 h-4" />
+                    Exportar Planilha Detalhada
+                    <ChevronRight className={cn("w-3.5 h-3.5 transition-transform duration-300", showExportOptions && "rotate-90")} />
+                  </button>
+                  {showExportOptions && (
+                    <div className="absolute left-0 top-full mt-2 z-20 w-72 bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden">
+                      <button
+                        onClick={() => { exportarPlanilhaDetalhadaCompleta(); setShowExportOptions(false); }}
+                        className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all border-b border-slate-100"
+                      >
+                        <div className="text-sm font-bold text-slate-900">Completo</div>
+                        <div className="text-xs text-slate-500 mt-0.5">Layout igual ao Questor, com todas as 46 colunas (ICMS, IPI, ISS, ST, etc).</div>
+                      </button>
+                      <button
+                        onClick={() => { exportarPlanilhaDetalhadaSimples(); setShowExportOptions(false); }}
+                        className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all"
+                      >
+                        <div className="text-sm font-bold text-slate-900">Confronto Simples</div>
+                        <div className="text-xs text-slate-500 mt-0.5">Só Natureza, NCM, Item e Valor Contábil, mais Desconto em diante quando tiver valor.</div>
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <input
+                  ref={auditoriaInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) runAuditoriaXml(file);
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  onClick={() => auditoriaInputRef.current?.click()}
+                  disabled={auditoriaLoading}
+                  className="flex items-center gap-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer disabled:opacity-60"
+                >
+                  {auditoriaLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <GitCompare className="w-4 h-4" />}
+                  {auditoriaLoading ? 'Comparando...' : 'Auditoria de XML'}
+                </button>
                 {analysis && (
-                  <div className="flex flex-col items-end">
-                    <button 
-                      onClick={() => window.print()}
-                      className="flex items-center gap-2 text-white px-5 py-2 rounded-xl text-sm font-black transition-all shadow-lg"
-                      style={{background: '#020D2F'}}
-                    >
-                      <Printer className="w-4 h-4" />
-                      Imprimir Relatório
-                    </button>
-                    {window.self !== window.top && (
-                      <span className="text-[9px] text-slate-400 mt-1 font-bold">
-                        Dica: Se não abrir, use o ícone "Abrir em nova aba" no topo.
-                      </span>
+                  <button
+                    onClick={() => window.print()}
+                    className="flex items-center justify-center text-white p-2.5 rounded-lg transition-all shadow-sm shrink-0"
+                    style={{background: '#020D2F'}}
+                    title={window.self !== window.top
+                      ? 'Imprimir Relatório / Exportar PDF — se não abrir, use o ícone "Abrir em nova aba" no topo.'
+                      : 'Imprimir Relatório / Exportar PDF'}
+                  >
+                    <Printer className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Auditoria de XML — resultado do confronto */}
+              {auditoriaErro && (
+                <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3 no-print">
+                  <XCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
+                  <div className="flex-1 text-sm text-rose-700 font-medium">{auditoriaErro}</div>
+                  <button onClick={() => setAuditoriaErro(null)} className="text-rose-400 hover:text-rose-600">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {auditoriaResultado && (() => {
+                const contagens = auditoriaResultado.reduce((acc, d) => {
+                  acc[d.tipo] = (acc[d.tipo] || 0) + 1;
+                  return acc;
+                }, {} as Record<string, number>);
+                const tipos: ('Todas' | TipoDiferencaAuditoria)[] = ['Todas', 'NCM', 'Nome', 'Nome e NCM', 'Sequência', 'Planilha'];
+                const listaFiltrada = auditoriaFiltroTipo === 'Todas'
+                  ? auditoriaResultado
+                  : auditoriaResultado.filter(d => d.tipo === auditoriaFiltroTipo);
+
+                return (
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden no-print">
+                    <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-2">
+                        <GitCompare className="w-5 h-5 text-amber-600" />
+                        <div>
+                          <h4 className="font-bold text-slate-800">Auditoria de XML — Divergências</h4>
+                          <div className="text-xs text-slate-400 font-medium">Comparado com: {auditoriaNomeArquivo}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        {auditoriaResultado.length > 0 && (
+                          <button
+                            onClick={exportarAuditoriaXml}
+                            className="flex items-center gap-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Exportar
+                          </button>
+                        )}
+                        <button
+                          onClick={() => { setAuditoriaResultado(null); setAuditoriaFiltroTipo('Todas'); }}
+                          className="text-slate-400 hover:text-slate-600"
+                          title="Fechar auditoria"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {auditoriaResultado.length === 0 ? (
+                      <div className="p-8 text-center text-emerald-600 font-bold flex flex-col items-center gap-2">
+                        <CheckCircle2 className="w-8 h-8" />
+                        Nenhuma divergência encontrada. Nome e NCM batem 100% com a planilha anexada.
+                      </div>
+                    ) : (
+                      <>
+                        <div className="p-4 flex flex-wrap gap-2 border-b border-slate-100">
+                          {tipos.map(t => {
+                            const count = t === 'Todas' ? auditoriaResultado.length : (contagens[t] || 0);
+                            if (t !== 'Todas' && count === 0) return null;
+                            return (
+                              <button
+                                key={t}
+                                onClick={() => setAuditoriaFiltroTipo(t)}
+                                className={cn(
+                                  "px-3 py-1.5 rounded-full text-xs font-bold border transition-all",
+                                  auditoriaFiltroTipo === t
+                                    ? "bg-amber-500 text-white border-amber-500"
+                                    : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
+                                )}
+                              >
+                                {t} ({count})
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="overflow-x-auto overflow-y-auto max-h-[500px]">
+                          <table className="w-full text-sm">
+                            <thead className="sticky top-0 z-10">
+                              <tr className="bg-slate-50 text-left text-[10px] font-black uppercase tracking-wider text-slate-400">
+                                <th className="px-4 py-3">Tipo</th>
+                                <th className="px-4 py-3">Item (Sequência Fiscal)</th>
+                                <th className="px-4 py-3">Item (Planilha)</th>
+                                <th className="px-4 py-3">NCM (Sequência Fiscal)</th>
+                                <th className="px-4 py-3">NCM (Planilha)</th>
+                                <th className="px-4 py-3">Notas (Sequência Fiscal)</th>
+                                <th className="px-4 py-3">Notas (Planilha)</th>
+                                <th className="px-4 py-3 text-right">Ocorr.</th>
+                                <th className="px-4 py-3 text-right">Valor</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {listaFiltrada.map((d, i) => (
+                                <tr key={i} className="hover:bg-slate-50/50">
+                                  <td className="px-4 py-2.5">
+                                    <span className={cn(
+                                      "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border",
+                                      d.tipo === 'NCM' && "bg-blue-50 text-blue-700 border-blue-200",
+                                      d.tipo === 'Nome' && "bg-purple-50 text-purple-700 border-purple-200",
+                                      d.tipo === 'Nome e NCM' && "bg-rose-50 text-rose-700 border-rose-200",
+                                      (d.tipo === 'Sequência' || d.tipo === 'Planilha') && "bg-slate-100 text-slate-600 border-slate-200"
+                                    )}>
+                                      {d.tipo}
+                                    </span>
+                                    {d.outrosTipos && (
+                                      <div className="mt-1 text-[9px] text-amber-600 font-bold leading-tight max-w-[120px]">
+                                        ⚠ nota também em: {d.outrosTipos}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2.5 font-medium text-slate-800">{d.itemSequencia || '—'}</td>
+                                  <td className="px-4 py-2.5 font-medium text-slate-800">{d.itemPlanilha || '—'}</td>
+                                  <td className="px-4 py-2.5 font-mono text-slate-500">{d.ncmSequencia || '—'}</td>
+                                  <td className="px-4 py-2.5 font-mono text-slate-500">{d.ncmPlanilha || '—'}</td>
+                                  <td className="px-4 py-2.5 text-xs text-slate-500">
+                                    {d.notasSequencia.length > 0
+                                      ? formatarNotasAgrupadas(d.notasSequencia).map((linha, li) => <div key={li}>{linha}</div>)
+                                      : '—'}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-xs text-slate-500">
+                                    {d.notasPlanilha.length > 0
+                                      ? formatarNotasAgrupadas(d.notasPlanilha).map((linha, li) => <div key={li}>{linha}</div>)
+                                      : '—'}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-right text-slate-500">{d.ocorrencias}</td>
+                                  <td className="px-4 py-2.5 text-right font-bold text-slate-800">{formatarMoeda(d.valor)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
                     )}
                   </div>
-                )}
-
-                <button 
-                  onClick={reset}
-                  className="text-sm font-bold text-blue-600 hover:text-blue-700 px-4 py-2"
-                >
-                  Nova Análise
-                </button>
-              </div>
+                );
+              })()}
 
               {/* Series List */}
               <div className="space-y-4">
