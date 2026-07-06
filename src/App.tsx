@@ -2286,13 +2286,13 @@ export default function App() {
 
       {/* Header */}
       <header className="text-white shadow-2xl" style={{background: '#020D2F'}}>
-        <div className="max-w-[1650px] mx-auto px-6 py-8 print:px-3 print:py-3 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-          <div className="flex items-center gap-5 print:gap-3">
-            <img src="/logo-sf.png" alt="Contador de Padarias" className="h-16 print:h-9 object-contain" />
-            <div className="hidden md:block w-px h-12 print:h-7 bg-white/15" />
+        <div className="max-w-[1650px] mx-auto px-6 py-8 print:px-4 print:py-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+          <div className="flex items-center gap-5 print:gap-4">
+            <img src="/logo-sf.png" alt="Contador de Padarias" className="h-16 print:h-14 object-contain" />
+            <div className="hidden md:block w-px h-12 print:h-10 bg-white/15" />
             <div>
-              <h1 className="text-3xl print:text-lg font-black tracking-tight text-white mb-0.5 print:mb-0">Sequência Fiscal</h1>
-              <p className="font-medium text-[0.95rem] print:text-[10px]" style={{color: 'rgba(240,180,41,0.8)'}}>Auditoria de Sequência de Vendas e Saídas</p>
+              <h1 className="text-3xl print:text-2xl font-black tracking-tight text-white mb-0.5 print:mb-0.5">Sequência Fiscal</h1>
+              <p className="font-medium text-[0.95rem] print:text-sm" style={{color: 'rgba(240,180,41,0.8)'}}>Auditoria de Sequência de Vendas e Saídas</p>
             </div>
           </div>
 
@@ -3616,11 +3616,6 @@ export default function App() {
                 <div className="font-bold text-slate-400">Nenhuma quebra de sequência identificada.</div>
               </div>
             )}
-          </div>
-
-          <div className="mt-20 border-t border-slate-100 pt-10 flex justify-between text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-            <div>Sequência Fiscal v2.0</div>
-            <div>Página 1 de 1</div>
           </div>
         </div>
         );
