@@ -108,6 +108,9 @@ interface SerieAnalysis {
   // rather than an actual XML — these won't be resolved yet in the SEFAZ system
   // (e.g. Questor), so they need to stay visibly flagged.
   faltantesInutilizadosManual: number[];
+  // Todos os números inutilizados dessa série/modelo, tenham ou não relação com um
+  // número faltante — útil pra mostrar mesmo quando a série já está íntegra.
+  todasInutilizacoes: number[];
   cancelados?: number[];
   situacao: string;
   mesReferencia: string;
@@ -579,10 +582,31 @@ export default function App() {
   const sanitizarNomeArquivo = (v: string) =>
     v.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 
+  // "Todos os Meses" só faz sentido quando o período carregado realmente tem mais de
+  // um mês. Com 2+ meses, usa a faixa "PrimeiroMês_ÚltimoMês_Ano" (ex: Maio_Junho_2026),
+  // já ordenado cronologicamente (mesesDisponiveis vem ordenado por texto, não por data).
+  const periodoParaNomeArquivo = () => {
+    if (filterMes !== 'Todos') return filterMes;
+    if (mesesDisponiveis.length === 0) return 'Todos os Meses';
+    if (mesesDisponiveis.length === 1) return mesesDisponiveis[0];
+
+    const parsed = mesesDisponiveis
+      .map(m => {
+        const [nome, ano] = m.split('/');
+        return { nome, ano, idx: MESES.indexOf(nome) };
+      })
+      .sort((a, b) => `${a.ano}${String(a.idx).padStart(2, '0')}`.localeCompare(`${b.ano}${String(b.idx).padStart(2, '0')}`));
+
+    const primeiro = parsed[0];
+    const ultimo = parsed[parsed.length - 1];
+    return primeiro.ano === ultimo.ano
+      ? `${primeiro.nome} ${ultimo.nome} ${primeiro.ano}`
+      : `${primeiro.nome} ${primeiro.ano} ${ultimo.nome} ${ultimo.ano}`;
+  };
+
   const nomeArquivoExport = (tipo: string, extensao: string) => {
     const empresaBruta = analysis?.[0]?.razaoSocial || notasSaida[0]?.razaoSocial || '';
-    const periodoBruto = filterMes === 'Todos' ? 'Todos os Meses' : filterMes;
-    const partes = [tipo, sanitizarNomeArquivo(empresaBruta), sanitizarNomeArquivo(periodoBruto)].filter(Boolean);
+    const partes = [tipo, sanitizarNomeArquivo(empresaBruta), sanitizarNomeArquivo(periodoParaNomeArquivo())].filter(Boolean);
     return `${partes.join('_')}.${extensao}`;
   };
 
@@ -1865,6 +1889,7 @@ export default function App() {
           faltantes: [],
           faltantesInutilizados: [],
           faltantesInutilizadosManual: [],
+          todasInutilizacoes: [],
           situacao: 'Íntegra',
           mesReferencia: ''
         };
@@ -1913,6 +1938,7 @@ export default function App() {
       const faltantesReais = faltantes.filter(num => !numerosInutilizadosSet.has(num));
       const faltantesInutilizados = faltantes.filter(num => numerosInutilizadosSet.has(num));
       const faltantesInutilizadosManual = faltantesInutilizados.filter(num => numerosInutilizadosManualSet.has(num));
+      const todasInutilizacoes = Array.from(numerosInutilizadosSet).sort((a, b) => a - b);
 
       let situacao = faltantesReais.length > 0 ? 'Quebra Identificada' : 'Íntegra';
       
@@ -1940,6 +1966,7 @@ export default function App() {
         faltantes: faltantesReais,
         faltantesInutilizados,
         faltantesInutilizadosManual,
+        todasInutilizacoes,
         cancelados,
         situacao,
         mesReferencia
@@ -3426,6 +3453,16 @@ export default function App() {
                               Cancelamentos Identificados ({serie.cancelados.length})
                             </div>
                             Números: {formatarFaixas(agruparFaixas(serie.cancelados))}
+                          </div>
+                        )}
+
+                        {serie.faltantes.length === 0 && serie.todasInutilizacoes.length > 0 && (
+                          <div className="bg-slate-100 border border-slate-200 rounded-xl p-4 text-slate-600 text-sm">
+                            <div className="font-bold flex items-center gap-2 mb-1 text-slate-700">
+                              <FileSearch className="w-4 h-4" />
+                              Inutilizações Registradas nessa Série ({serie.todasInutilizacoes.length})
+                            </div>
+                            Números: {formatarFaixas(agruparFaixas(serie.todasInutilizacoes))}
                           </div>
                         )}
 
