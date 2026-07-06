@@ -76,6 +76,9 @@ interface XmlData {
   // portal — distinguishes them from inutilizações that came from an XML the
   // client actually sent.
   origemManual?: boolean;
+  // Nota emitida pela própria empresa sob CFOP de entrada (devolução de venda,
+  // baixa de estoque, etc.) — ocupa numeração real da série, mas não é venda.
+  isEntradaPropria?: boolean;
 }
 
 interface SourceMetadata {
@@ -265,9 +268,10 @@ function parseXML(xmlText: string, fileName: string): XmlData {
     });
 
     if (numero && serie && modelo) {
-      if (tpNF === '0') {
-        return { tipo: 'outro', fileName };
-      }
+      // tpNF === '0' (entrada) does NOT mean "discard": a company can issue its own
+      // NFe under CFOP de entrada (ex: 1202 devolução de venda, 1949, baixa de estoque)
+      // using its own numbering/série — that note still occupies a real slot in the
+      // sequence being audited, so it must be kept (just excluded from revenue later).
       return {
         tipo: 'nfe',
         cnpj: emitCnpj, // Default to issuer for legacy compatibility
@@ -586,7 +590,7 @@ export default function App() {
     );
 
     return xmlList
-      .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj)
+      .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0')
       .reduce((acc, xml) => {
         // If the note's key appears in cancellation events set, treat its value as R$ 0,00
         if (xml.chave && chavesCanceladas.has(xml.chave)) return acc;
@@ -613,7 +617,7 @@ export default function App() {
 
     const totalPorCfop: Record<string, number> = {};
     xmlList
-      .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj)
+      .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0')
       .forEach(xml => {
         if (xml.chave && chavesCanceladas.has(xml.chave)) return;
         const valorNota = parseFloat(xml.valor || '0') || 0;
@@ -661,14 +665,21 @@ export default function App() {
 
     const notas = xmlList
       .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj)
-      .map(xml => ({ ...xml, isCancelada: !!(xml.chave && chavesCanceladas.has(xml.chave)) }));
+      .map(xml => ({
+        ...xml,
+        isCancelada: !!(xml.chave && chavesCanceladas.has(xml.chave)),
+        // Nota emitida pela própria empresa sob CFOP de entrada (devolução de venda,
+        // baixa de estoque, etc.) — ocupa numeração real da série, mas não é venda.
+        isEntradaPropria: xml.tpNF === '0',
+      }));
 
     const inuts = inutilizacoes
       .filter(inut => inut.cnpj === mainCnpj)
       .map(inut => ({
         ...inut,
         numero: inut.nNFIni === inut.nNFFin ? String(inut.nNFIni) : `${inut.nNFIni} a ${inut.nNFFin}`,
-        isCancelada: false
+        isCancelada: false,
+        isEntradaPropria: false,
       }));
 
     return [...notas, ...inuts];
@@ -888,7 +899,7 @@ export default function App() {
     setAuditoriaResultado(null);
     setAuditoriaNomeArquivo(file.name);
     try {
-      let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && n.rawXml);
+      let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && !n.isEntradaPropria && n.rawXml);
       if (filterMes !== 'Todos') {
         notas = notas.filter(n => getMonthYear(n.data) === filterMes);
       }
@@ -1122,7 +1133,7 @@ export default function App() {
   // Simplified confronto: just Natureza/NCM/Item/Valor Contábil, plus the
   // Desconto-onward columns — each included only if some row actually has a value.
   const exportarPlanilhaDetalhadaSimples = () => {
-    let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && n.rawXml);
+    let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && !n.isEntradaPropria && n.rawXml);
     if (filterMes !== 'Todos') {
       notas = notas.filter(n => getMonthYear(n.data) === filterMes);
     }
@@ -1207,7 +1218,7 @@ export default function App() {
   // sum doesn't reconcile to its vNF (note-level acréscimo/rounding), a synthetic
   // "Produto Padrão" adjustment row is emitted — exactly like Questor does.
   const exportarPlanilhaDetalhadaCompleta = () => {
-    let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && n.rawXml);
+    let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && !n.isEntradaPropria && n.rawXml);
     if (filterMes !== 'Todos') {
       notas = notas.filter(n => getMonthYear(n.data) === filterMes);
     }
@@ -1818,7 +1829,10 @@ export default function App() {
         return;
       }
       
-      // Como já filtramos tpNF === '0' no parse e garantimos que emitCnpj === mainCnpj
+      // Qualquer nota emitida pela própria empresa (mesmo CFOP de entrada, tipo
+      // devolução de venda ou baixa de estoque) ocupa numeração real dentro da
+      // série/modelo — por isso entra na mesma sequência, independente do tpNF.
+      // Só é tratada como "entrada" de fato quando o emitente é um terceiro (acima).
       const direcao = 'saida';
 
       const key = `${mainCnpj}_${direcao}_${xml.modelo}_${xml.serie}`;
@@ -2810,6 +2824,8 @@ export default function App() {
                                     )
                                   ) : nota.isCancelada ? (
                                     <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-xs font-bold">Cancelada</span>
+                                  ) : nota.isEntradaPropria ? (
+                                    <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 text-xs font-bold" title="Nota emitida com CFOP de entrada (devolução de venda, baixa de estoque, etc.) — não entra no faturamento.">Devolução/Entrada</span>
                                   ) : (
                                     <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold">Válida</span>
                                   )}
