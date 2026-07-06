@@ -829,7 +829,15 @@ export default function App() {
       const my = getMonthYear(xml.data);
       if (my) months.add(my);
     });
-    return Array.from(months).sort();
+    // Ordena por data real (ano + índice do mês), não por ordem alfabética do nome
+    // do mês — senão "Abril" aparece antes de "Fevereiro" mesmo sendo mais recente.
+    return Array.from(months).sort((a, b) => {
+      const [nomeA, anoA] = a.split('/');
+      const [nomeB, anoB] = b.split('/');
+      const chaveA = `${anoA}${String(MESES.indexOf(nomeA)).padStart(2, '0')}`;
+      const chaveB = `${anoB}${String(MESES.indexOf(nomeB)).padStart(2, '0')}`;
+      return chaveA.localeCompare(chaveB);
+    });
   }, [xmlList]);
 
   useEffect(() => {
