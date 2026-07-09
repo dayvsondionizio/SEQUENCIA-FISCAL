@@ -542,7 +542,8 @@ export default function App() {
   const [attachedSources, setAttachedSources] = useState<SourceMetadata[]>([]);
   const [processedFileNames, setProcessedFileNames] = useState<Set<string>>(new Set());
   const [entradaCount, setEntradaCount] = useState(0);
-  
+  const [fornecedorEntradaInfo, setFornecedorEntradaInfo] = useState<{ count: number; nomes: string } | null>(null);
+
   // Editable messages state
   const [consolidatedMessage, setConsolidatedMessage] = useState('');
 
@@ -1745,55 +1746,57 @@ export default function App() {
       const mergedInuts = deduplicateInutilizacoes([...inutilizacoes, ...finalInuts]);
       const mergedOthers = deduplicateOthers([...otherXmlsList, ...finalOthers]);
 
-      // Check CNPJ consistency (prevent loading different clients, but allow multiple suppliers on purchases/entradas)
-      const cnpjCounts: Record<string, number> = {};
+      // Identify main company from emitters only: the company that issues the most notes is the audited entity.
+      // Counting emitters (not destCnpj) avoids conflating suppliers' entrada notes with the main company.
+      const emitCounts: Record<string, number> = {};
       mergedXmls.forEach(xml => {
-        if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
-        if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+        if (xml.emitCnpj) emitCounts[xml.emitCnpj] = (emitCounts[xml.emitCnpj] || 0) + 1;
       });
       mergedInuts.forEach(inut => {
-        if (inut.cnpj) cnpjCounts[inut.cnpj] = (cnpjCounts[inut.cnpj] || 0) + 1;
+        if (inut.cnpj) emitCounts[inut.cnpj] = (emitCounts[inut.cnpj] || 0) + 1;
       });
+      const mainCnpj = Object.entries(emitCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
 
-      // The main company CNPJ is the most frequent CNPJ overall (as emitter or receiver)
-      const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-
-      // Chaves (chNFe) of notes that belong to the main company, used to validate events below
+      // Chaves (chNFe) of notes from the main company, used to validate events below
       const mainCnpjChaves = new Set<string>(
         mergedXmls
           .filter(xml => xml.tipo === 'nfe' && (xml.emitCnpj === mainCnpj || xml.destCnpj === mainCnpj) && xml.chave)
           .map(xml => xml.chave!)
       );
 
-      // Identify XMLs that do not involve the main company (neither as emitter nor as receiver)
+      // Classify XMLs: supplier entradas (destCnpj = mainCnpj) are accepted silently;
+      // only notes with no connection to the main company are flagged as conflicts.
+      let fornecedorEntradaCount = 0;
+      const fornecedorNames: Record<string, string> = {};
       const conflictingXmls: XmlData[] = [];
+
       if (mainCnpj) {
         mergedXmls.forEach(xml => {
-          let involvesMain: boolean;
           if (xml.tipo === 'evento') {
-            // Events (cancelamento, manifestação do destinatário, etc.) can legitimately be
-            // authored by a third party (e.g. the customer manifesting receipt), so the event's
-            // own CNPJ isn't a reliable company match. What matters is whether it references
-            // (via chNFe) a note that already belongs to the main company.
-            involvesMain = (xml.chave ? mainCnpjChaves.has(xml.chave) : false) || xml.cnpj === mainCnpj;
+            const involvesMain = (xml.chave ? mainCnpjChaves.has(xml.chave) : false) || xml.cnpj === mainCnpj;
+            if (!involvesMain) conflictingXmls.push(xml);
+          } else if (xml.emitCnpj === mainCnpj || xml.cnpj === mainCnpj) {
+            // Own note (saída or devolução issued by the main company) — always OK
+          } else if (xml.destCnpj === mainCnpj) {
+            // Supplier sold TO the main company (nota de entrada/compra) — accept silently
+            fornecedorEntradaCount++;
+            if (xml.emitCnpj && !fornecedorNames[xml.emitCnpj]) {
+              fornecedorNames[xml.emitCnpj] = xml.emitNome || xml.razaoSocial || '';
+            }
           } else {
-            involvesMain = xml.emitCnpj === mainCnpj || xml.destCnpj === mainCnpj || xml.cnpj === mainCnpj;
-          }
-          if (!involvesMain) {
+            // No connection to the main company — genuine conflict
             conflictingXmls.push(xml);
           }
         });
         mergedInuts.forEach(inut => {
-          if (inut.cnpj !== mainCnpj) {
-            conflictingXmls.push(inut);
-          }
+          if (inut.cnpj !== mainCnpj) conflictingXmls.push(inut as XmlData);
         });
       }
 
       if (conflictingXmls.length > 0) {
         const distinctConflicting = new Set<string>();
         const cnpjNames: Record<string, string> = {};
-        
+
         conflictingXmls.forEach(xml => {
           const otherCnpj = xml.emitCnpj || xml.cnpj;
           if (otherCnpj) {
@@ -1803,19 +1806,27 @@ export default function App() {
             }
           }
         });
-        
+
         if (distinctConflicting.size > 0) {
           const conflictList = Array.from(distinctConflicting).map(cnpj => {
             return `- CNPJ: ${cnpj}${cnpjNames[cnpj] ? ` (${cnpjNames[cnpj]})` : ''}`;
           });
-          
+
           alert(`⚠️ Erro de Importação: Múltiplas Empresas Detectadas!\n\nForam encontrados XMLs de outra empresa que não pertencem à empresa principal sob auditoria:\n${conflictList.join('\n')}\n\nPara evitar inconsistências, envie apenas arquivos de uma única empresa por vez.`);
-          
+
           setIsProcessing(false);
           if (fileInputRef.current) fileInputRef.current.value = '';
           if (folderInputRef.current) folderInputRef.current.value = '';
           return;
         }
+      }
+
+      // If supplier entradas were found, store info for the UI notice (non-blocking)
+      if (fornecedorEntradaCount > 0) {
+        const nomesFornecedores = Object.values(fornecedorNames).filter(Boolean).slice(0, 3).join(', ');
+        setFornecedorEntradaInfo({ count: fornecedorEntradaCount, nomes: nomesFornecedores });
+      } else {
+        setFornecedorEntradaInfo(null);
       }
 
       setAttachedSources(Array.from(sourceMap.values()));
@@ -2032,6 +2043,7 @@ export default function App() {
     setAttachedSources([]);
     setProcessedFileNames(new Set());
     setEntradaCount(0);
+    setFornecedorEntradaInfo(null);
     setFilterMes('Todos');
     setFilterModelo('Todos');
     setShowDaysDetail(false);
@@ -2448,6 +2460,19 @@ export default function App() {
                       <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Período Detectado</div>
                     </div>
                   </div>
+
+                  {fornecedorEntradaInfo && (
+                    <div className="mx-6 mb-0 mt-0 border-t border-slate-100/50 pt-4 pb-2">
+                      <div className="flex items-start gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-blue-700 text-sm">
+                        <svg className="w-4 h-4 mt-0.5 shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        <div>
+                          <span className="font-bold">{fornecedorEntradaInfo.count} nota{fornecedorEntradaInfo.count !== 1 ? 's' : ''} de entrada de fornecedor</span> detectada{fornecedorEntradaInfo.count !== 1 ? 's' : ''} e ignorada{fornecedorEntradaInfo.count !== 1 ? 's' : ''} — o app analisa apenas saídas da empresa auditada.
+                          {fornecedorEntradaInfo.nomes && <span className="text-blue-500 ml-1">({fornecedorEntradaInfo.nomes}{Object.keys(fornecedorEntradaInfo.nomes).length > 3 ? ' e outros' : ''})</span>}
+                        </div>
+                        <button onClick={() => setFornecedorEntradaInfo(null)} className="ml-auto shrink-0 text-blue-400 hover:text-blue-600" title="Fechar">✕</button>
+                      </div>
+                    </div>
+                  )}
 
                   {attachedSources.length > 0 && (
                     <div className="p-6 border-t border-slate-100/50">
