@@ -258,8 +258,18 @@ function parseXML(xmlText: string, fileName: string): XmlData {
     
     const emitCnpj = emit?.getElementsByTagName('CNPJ')[0]?.textContent || '';
     const emitNome = emit?.getElementsByTagName('xNome')[0]?.textContent || '';
-    const destCnpj = dest?.getElementsByTagName('CNPJ')[0]?.textContent || '';
-    const destNome = dest?.getElementsByTagName('xNome')[0]?.textContent || '';
+    let destCnpj = dest?.getElementsByTagName('CNPJ')[0]?.textContent || '';
+    let destNome = dest?.getElementsByTagName('xNome')[0]?.textContent || '';
+    // Fallback: if DOM missed the dest block (can happen with certain XML namespace handling),
+    // extract via regex directly from the raw text
+    if (!destCnpj) {
+      const m = xmlText.match(/<dest[\s>][\s\S]*?<CNPJ>(\d+)<\/CNPJ>/);
+      if (m) destCnpj = m[1];
+    }
+    if (!destNome) {
+      const m = xmlText.match(/<dest[\s>][\s\S]*?<xNome>([^<]+)<\/xNome>/);
+      if (m) destNome = m[1];
+    }
 
     // Group each item's NET value (vProd - vDesc + vOutro/vFrete/vSeg) by its CFOP, so the
     // note's vNF (already net of discount) can later be split by natureza da operação even
