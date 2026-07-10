@@ -142,6 +142,26 @@ interface DiferencaAuditoria {
   outrosTipos?: string;
 }
 
+interface SpedC100 {
+  indOper: string;  // '0'=entrada '1'=saída
+  codMod: string;   // '55'=NF-e '65'=NFC-e '01'=NF papel
+  codSit: string;   // '00'=regular '02'=cancelada
+  ser: string;
+  numDoc: string;
+  chave: string;    // CHV_NFE (44 dígitos) — vazio para modelo 01
+  dtDoc: string;    // DDMMAAAA
+  vlDoc: string;
+}
+
+interface SpedData {
+  cnpj: string;
+  razaoSocial: string;
+  dtIni: string;   // DDMMAAAA
+  dtFin: string;
+  c100: SpedC100[];
+  fileName: string;
+}
+
 // --- Helpers ---
 
 const parser = new DOMParser();
@@ -316,6 +336,34 @@ function parseXML(xmlText: string, fileName: string): XmlData {
   }
   
   return { tipo: 'outro', fileName };
+}
+
+function parseSped(text: string, fileName: string): SpedData | null {
+  const lines = text.split(/\r?\n/);
+  if (!lines[0]?.startsWith('|0000|')) return null;
+  const h = lines[0].split('|');
+  // |0000|COD_VER|COD_FIN|DT_INI|DT_FIN|NOME|CNPJ|...
+  const dtIni = h[4] || '';
+  const dtFin = h[5] || '';
+  const razaoSocial = h[6] || '';
+  const cnpj = h[7] || '';
+  const c100: SpedC100[] = [];
+  for (const line of lines) {
+    if (!line.startsWith('|C100|')) continue;
+    const f = line.split('|');
+    // |C100|IND_OPER|IND_EMIT|COD_PART|COD_MOD|COD_SIT|SER|NUM_DOC|CHV_NFE|DT_DOC|DT_E_S|VL_DOC|...
+    c100.push({
+      indOper: f[2] || '',
+      codMod: f[5] || '',
+      codSit: f[6] || '',
+      ser: f[7] || '',
+      numDoc: f[8] || '',
+      chave: f[9] || '',
+      dtDoc: f[10] || '',
+      vlDoc: f[12] || '',
+    });
+  }
+  return { cnpj, razaoSocial, dtIni, dtFin, c100, fileName };
 }
 
 function agruparFaixas(numeros: number[]) {
@@ -516,6 +564,142 @@ function deduplicateOthers(list: XmlData[]): XmlData[] {
 
 // --- Components ---
 
+interface SpedValidationPanelProps {
+  spedData: SpedData;
+  crossRef: {
+    spedSaidasTotal: number;
+    spedEntradasTotal: number;
+    saidaOk: number;
+    saidaFaltantes: SpedC100[];
+    formatDt: (d: string) => string;
+    periodo: string;
+  };
+  onClose: () => void;
+}
+
+function SpedValidationPanel({ spedData, crossRef, onClose }: SpedValidationPanelProps) {
+  const [expandido, setExpandido] = useState(false);
+  const { spedSaidasTotal, saidaOk, saidaFaltantes, periodo } = crossRef;
+  const temFaltantes = saidaFaltantes.length > 0;
+
+  const formatCnpj = (c: string) =>
+    c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+
+  const formatValor = (v: string) => {
+    const n = parseFloat(v.replace(',', '.'));
+    if (isNaN(n)) return v;
+    return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  };
+
+  const formatDtDoc = (d: string) =>
+    d.length === 8 ? `${d.slice(0,2)}/${d.slice(2,4)}/${d.slice(4)}` : d;
+
+  return (
+    <div className="mx-6 mb-0 mt-0 border-t border-slate-100/50 pt-4 pb-3">
+      <div className={cn(
+        'rounded-xl border px-4 py-3 text-sm',
+        temFaltantes
+          ? 'bg-amber-50 border-amber-200'
+          : 'bg-emerald-50 border-emerald-200'
+      )}>
+        {/* Header */}
+        <div className="flex items-start gap-3">
+          <svg className={cn('w-4 h-4 mt-0.5 shrink-0', temFaltantes ? 'text-amber-500' : 'text-emerald-500')} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={temFaltantes
+              ? 'M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z'
+              : 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'
+            } />
+          </svg>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={cn('font-bold', temFaltantes ? 'text-amber-800' : 'text-emerald-800')}>
+                SPED Fiscal detectado
+              </span>
+              <span className="text-[10px] font-mono bg-white/70 border border-slate-200 px-1.5 py-0.5 rounded text-slate-500">
+                {spedData.fileName}
+              </span>
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              {formatCnpj(spedData.cnpj)} · {spedData.razaoSocial} · {periodo}
+            </div>
+          </div>
+          <button onClick={onClose} className="ml-auto shrink-0 text-slate-400 hover:text-slate-600" title="Fechar">✕</button>
+        </div>
+
+        {/* Stats row */}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <div className="flex items-center gap-1.5 bg-white/70 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs">
+            <span className="text-slate-500">No SPED</span>
+            <span className="font-bold text-slate-700">{spedSaidasTotal} saídas</span>
+          </div>
+          <div className="flex items-center gap-1.5 bg-white/70 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+            <span className="text-slate-500">Com XML</span>
+            <span className="font-bold text-emerald-700">{saidaOk}</span>
+          </div>
+          <div className={cn(
+            'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs border',
+            temFaltantes ? 'bg-amber-100 border-amber-300' : 'bg-white/70 border-slate-200'
+          )}>
+            <span className={cn('w-2 h-2 rounded-full shrink-0', temFaltantes ? 'bg-amber-500' : 'bg-slate-300')} />
+            <span className={temFaltantes ? 'text-amber-800' : 'text-slate-500'}>Sem XML</span>
+            <span className={cn('font-bold', temFaltantes ? 'text-amber-800' : 'text-slate-400')}>{saidaFaltantes.length}</span>
+          </div>
+        </div>
+
+        {/* Faltantes expandable list */}
+        {temFaltantes && (
+          <div className="mt-3">
+            <button
+              onClick={() => setExpandido(v => !v)}
+              className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:text-amber-900 transition-colors"
+            >
+              <svg className={cn('w-3.5 h-3.5 transition-transform', expandido && 'rotate-90')} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              {expandido ? 'Ocultar' : 'Ver'} {saidaFaltantes.length} nota{saidaFaltantes.length !== 1 ? 's' : ''} no SPED sem XML
+            </button>
+            {expandido && (
+              <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-amber-200 bg-white custom-scrollbar">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-amber-50 border-b border-amber-200">
+                    <tr>
+                      <th className="text-left px-3 py-2 text-amber-700 font-semibold">Data</th>
+                      <th className="text-left px-3 py-2 text-amber-700 font-semibold">Mod</th>
+                      <th className="text-left px-3 py-2 text-amber-700 font-semibold">Série</th>
+                      <th className="text-left px-3 py-2 text-amber-700 font-semibold">Número</th>
+                      <th className="text-right px-3 py-2 text-amber-700 font-semibold">Valor</th>
+                      <th className="text-left px-3 py-2 text-amber-700 font-semibold">Chave</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {saidaFaltantes.map((c, i) => (
+                      <tr key={i} className="border-b border-slate-100 hover:bg-amber-50/50">
+                        <td className="px-3 py-1.5 text-slate-600">{formatDtDoc(c.dtDoc)}</td>
+                        <td className="px-3 py-1.5 text-slate-500">{c.codMod}</td>
+                        <td className="px-3 py-1.5 text-slate-500">{c.ser}</td>
+                        <td className="px-3 py-1.5 font-mono text-slate-700">{c.numDoc}</td>
+                        <td className="px-3 py-1.5 text-right font-medium text-slate-700">{formatValor(c.vlDoc)}</td>
+                        <td className="px-3 py-1.5 font-mono text-slate-400 text-[10px] truncate max-w-[180px]" title={c.chave}>{c.chave || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!temFaltantes && (
+          <p className="mt-2 text-xs text-emerald-700">
+            Todas as {spedSaidasTotal} saídas declaradas no SPED têm XML carregado. Nenhum faltante.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [xmlList, setXmlList] = useState<XmlData[]>([]);
   const [inutilizacoes, setInutilizacoes] = useState<XmlData[]>([]);
@@ -553,6 +737,11 @@ export default function App() {
   const [processedFileNames, setProcessedFileNames] = useState<Set<string>>(new Set());
   const [entradaCount, setEntradaCount] = useState(0);
   const [fornecedorEntradaInfo, setFornecedorEntradaInfo] = useState<{ count: number; nomes: string } | null>(null);
+  const [spedData, setSpedData] = useState<SpedData | null>(null);
+  const [spedCardFiltro, setSpedCardFiltro] = useState<'Todas' | 'SemXML' | 'Canceladas'>('Todas');
+  const [spedCardOpen, setSpedCardOpen] = useState(false);
+  const [spedSearch, setSpedSearch] = useState('');
+  const spedInputRef = useRef<HTMLInputElement>(null);
 
   // Editable messages state
   const [consolidatedMessage, setConsolidatedMessage] = useState('');
@@ -620,6 +809,46 @@ export default function App() {
     const partes = [tipo, sanitizarNomeArquivo(empresaBruta), sanitizarNomeArquivo(periodoParaNomeArquivo())].filter(Boolean);
     return `${partes.join('_')}.${extensao}`;
   };
+
+  const spedCrossRef = useMemo(() => {
+    if (!spedData) return null;
+    const xmlChaves = new Set(xmlList.filter(x => x.chave).map(x => x.chave!));
+    const spedSaidas = spedData.c100.filter(c => c.indOper === '1');
+    const spedEntradasTotal = spedData.c100.filter(c => c.indOper === '0').length;
+    const comChave = spedSaidas.filter(c => c.chave);
+    const saidaFaltantes = comChave.filter(c => !xmlChaves.has(c.chave));
+    const saidaFaltantesSet = new Set(saidaFaltantes.map(c => c.chave));
+    const saidaOk = comChave.length - saidaFaltantes.length;
+    const formatDt = (d: string) => d.length === 8 ? `${d.slice(0,2)}/${d.slice(2,4)}/${d.slice(4)}` : d;
+    return {
+      spedSaidas,
+      spedSaidasTotal: spedSaidas.length,
+      spedEntradasTotal,
+      saidaOk,
+      saidaFaltantes,
+      saidaFaltantesSet,
+      formatDt,
+      periodo: `${formatDt(spedData.dtIni)} – ${formatDt(spedData.dtFin)}`,
+    };
+  }, [spedData, xmlList]);
+
+  const spedRowsFiltradas = useMemo(() => {
+    if (!spedData || !spedCrossRef) return [];
+    let rows = spedCardFiltro === 'SemXML'
+      ? spedCrossRef.saidaFaltantes
+      : spedCardFiltro === 'Canceladas'
+        ? spedCrossRef.spedSaidas.filter(c => c.codSit === '02' || c.codSit === '06')
+        : spedCrossRef.spedSaidas;
+    if (spedSearch.trim()) {
+      const q = spedSearch.trim().toLowerCase();
+      rows = rows.filter(c =>
+        c.numDoc.includes(q) ||
+        c.chave.toLowerCase().includes(q) ||
+        c.dtDoc.includes(q)
+      );
+    }
+    return rows;
+  }, [spedData, spedCrossRef, spedCardFiltro, spedSearch]);
 
   const faturamentoTotal = useMemo(() => {
     // Identify the Main Client Company CNPJ (the most frequent overall)
@@ -1483,6 +1712,7 @@ export default function App() {
     let finalXmls: XmlData[] = [];
     let finalInuts: XmlData[] = [];
     let finalOthers: XmlData[] = [];
+    let foundSped: SpedData | null = null;
 
         const checkMagicBytes = (buffer: ArrayBuffer | Uint8Array) => {
       const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
@@ -1528,6 +1758,11 @@ export default function App() {
               if (updatedProcessedNames.has(uniqueName)) continue;
               try {
                 const xmlText = await entry.async('text');
+                if (xmlText.trimStart().startsWith('|0000|')) {
+                  const sped = parseSped(xmlText, baseName);
+                  if (sped && !results.localSped) results.localSped = sped;
+                  continue;
+                }
                 const looksLikeXml = xmlText.trim().startsWith('<');
                 if (looksLikeXml || /^[0-9]{44}$/.test(baseName) || name.toLowerCase().endsWith('.xml')) {
                   const data = parseXML(xmlText, name);
@@ -1586,13 +1821,18 @@ export default function App() {
               await processArchiveRecursively(new Uint8Array(await fileData.arrayBuffer()), results, baseName, currentPath);
             } else {
               const xmlText = await fileData.text();
+              if (xmlText.trimStart().startsWith('|0000|')) {
+                const sped = parseSped(xmlText, baseName);
+                if (sped && !results.localSped) results.localSped = sped;
+                continue;
+              }
               const looksLikeXml = xmlText.trim().startsWith('<');
               if (looksLikeXml || /^[0-9]{44}$/.test(baseName) || name.toLowerCase().endsWith('.xml')) {
                 const data = parseXML(xmlText, name);
                 if (data.tipo !== 'outro') {
                   const displaySource = name.includes('/') ? `${containerName}/${name.split('/').slice(0,-1).join('/')}` : containerName;
                   ensureSourceInMap(displaySource, true);
-                  
+
                   results.localTotalCount++;
                   data.sourceName = displaySource;
                   if (data.isCancelamento) results.localCancellations++;
@@ -1628,6 +1868,11 @@ export default function App() {
                 await processArchiveRecursively(file.extraction, results, baseName, currentPath);
               } else {
                 const xmlText = new TextDecoder().decode(file.extraction);
+                if (xmlText.trimStart().startsWith('|0000|')) {
+                  const sped = parseSped(xmlText, baseName);
+                  if (sped && !results.localSped) results.localSped = sped;
+                  continue;
+                }
                 if (xmlText.trim().startsWith('<') || name.toLowerCase().endsWith('.xml')) {
                   const data = parseXML(xmlText, name);
                   if (data.tipo !== 'outro') {
@@ -1664,15 +1909,16 @@ export default function App() {
           const fileUniqueIdentifier = file.webkitRelativePath || file.name;
           if (updatedProcessedNames.has(fileUniqueIdentifier)) return null;
 
-          let res = { 
-            localXmls: [] as XmlData[], 
-            localInuts: [] as XmlData[], 
-            localOthers: [] as XmlData[], 
-            localTotalCount: 0, 
+          let res = {
+            localXmls: [] as XmlData[],
+            localInuts: [] as XmlData[],
+            localOthers: [] as XmlData[],
+            localTotalCount: 0,
             localCancellations: 0,
             localValidNfCount: 0,
             localInutsCount: 0,
-            localNonXmlCount: 0
+            localNonXmlCount: 0,
+            localSped: null as SpedData | null
           };
 
           const nameLower = file.name.toLowerCase();
@@ -1711,6 +1957,14 @@ export default function App() {
           } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
             const zipData = await file.arrayBuffer();
             await processArchiveRecursively(zipData, res, file.name);
+          } else if (nameLower.endsWith('.txt')) {
+            const text = await file.text();
+            if (text.trimStart().startsWith('|0000|')) {
+              const sped = parseSped(text, file.name);
+              if (sped && !res.localSped) res.localSped = sped;
+            } else {
+              res.localNonXmlCount++;
+            }
           } else {
             const sName = file.webkitRelativePath ? file.webkitRelativePath.split('/')[0] : file.name;
             if (!sourceMap.has(sName)) {
@@ -1732,6 +1986,7 @@ export default function App() {
           finalXmls.push(...res.localXmls);
           finalInuts.push(...res.localInuts);
           finalOthers.push(...res.localOthers);
+          if (res.localSped) foundSped = res.localSped;
           
           setStats(prev => ({
             ...prev,
@@ -1839,6 +2094,7 @@ export default function App() {
         setFornecedorEntradaInfo(null);
       }
 
+      if (foundSped) setSpedData(foundSped);
       setAttachedSources(Array.from(sourceMap.values()));
       setProcessedFileNames(updatedProcessedNames);
       setXmlList(mergedXmls);
@@ -2054,6 +2310,10 @@ export default function App() {
     setProcessedFileNames(new Set());
     setEntradaCount(0);
     setFornecedorEntradaInfo(null);
+    setSpedData(null);
+    setSpedCardFiltro('Todas');
+    setSpedCardOpen(false);
+    setSpedSearch('');
     setFilterMes('Todos');
     setFilterModelo('Todos');
     setShowDaysDetail(false);
@@ -2484,6 +2744,14 @@ export default function App() {
                     </div>
                   )}
 
+                  {spedData && spedCrossRef && (
+                    <SpedValidationPanel
+                      spedData={spedData}
+                      crossRef={spedCrossRef}
+                      onClose={() => setSpedData(null)}
+                    />
+                  )}
+
                   {attachedSources.length > 0 && (
                     <div className="p-6 border-t border-slate-100/50">
                       <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Fontes Anexadas ({attachedSources.length})</div>
@@ -2792,10 +3060,199 @@ export default function App() {
                     </select>
                   </div>
                 </div>
+
+                {/* SPED Fiscal card — compacto, abre para a direita */}
+                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden no-print">
+                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest px-6 pt-5 pb-3">SPED Fiscal</div>
+
+                  {!spedData ? (
+                    <div className="px-6 pb-5 flex flex-col gap-3">
+                      <p className="text-xs text-slate-500 leading-relaxed">
+                        Anexe o SPED Fiscal para cruzar com os XMLs e identificar faltantes.
+                      </p>
+                      <button
+                        onClick={() => spedInputRef.current?.click()}
+                        className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-700 transition-colors"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        Anexar SPED (.txt)
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setSpedCardOpen(v => !v)}
+                      className="w-full flex items-center justify-between px-6 pb-5 text-left group"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs text-slate-500 truncate">{spedData.razaoSocial}</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">{spedCrossRef?.periodo}</div>
+                        <div className="flex gap-2 mt-2 flex-wrap">
+                          <span className="text-[11px] font-semibold text-slate-600">{spedCrossRef?.spedSaidasTotal} saídas</span>
+                          {(spedCrossRef?.saidaFaltantes.length ?? 0) > 0 && (
+                            <span className="text-[11px] font-semibold text-amber-600">
+                              ⚠ {spedCrossRef?.saidaFaltantes.length} sem XML
+                            </span>
+                          )}
+                          {(spedCrossRef?.saidaFaltantes.length ?? 0) === 0 && (
+                            <span className="text-[11px] font-semibold text-emerald-600">✓ Todos com XML</span>
+                          )}
+                        </div>
+                      </div>
+                      <ChevronRight className={cn(
+                        'w-5 h-5 text-slate-300 group-hover:text-slate-500 shrink-0 ml-3 transition-transform duration-300',
+                        spedCardOpen && 'rotate-90'
+                      )} />
+                    </button>
+                  )}
+
+                  <input
+                    type="file"
+                    ref={spedInputRef}
+                    accept=".txt"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const text = await file.text();
+                      const sped = parseSped(text, file.name);
+                      if (sped) { setSpedData(sped); setSpedCardFiltro('Todas'); setSpedSearch(''); setSpedCardOpen(true); }
+                      e.target.value = '';
+                    }}
+                  />
+                </div>
               </aside>
 
               {/* Main content */}
               <div className="flex-1 min-w-0 space-y-8">
+
+              {/* SPED Fiscal — card expandido (abre para a direita) */}
+              {spedCardOpen && spedData && spedCrossRef && (() => {
+                const formatValorSped = (v: string) => {
+                  const n = parseFloat(v.replace(',', '.'));
+                  return isNaN(n) ? v : n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                };
+                return (
+                  <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden no-print">
+                    {/* Cabeçalho */}
+                    <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-4">
+                      <div>
+                        <div className="text-sm font-bold text-slate-800">SPED Fiscal</div>
+                        <div className="text-xs text-slate-400 mt-0.5">{spedData.razaoSocial} · CNPJ {spedData.cnpj} · {spedCrossRef.periodo}</div>
+                      </div>
+                      <button
+                        onClick={() => setSpedCardOpen(false)}
+                        className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors shrink-0"
+                        title="Fechar"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Estatísticas rápidas */}
+                    <div className="px-6 py-3 border-b border-slate-100 flex gap-6 flex-wrap text-xs">
+                      <span className="text-slate-500">No SPED: <strong className="text-slate-700">{spedCrossRef.spedSaidasTotal}</strong></span>
+                      <span className="text-slate-500">Com XML: <strong className="text-emerald-600">{spedCrossRef.saidaOk}</strong></span>
+                      <span className="text-slate-500">Sem XML: <strong className={spedCrossRef.saidaFaltantes.length > 0 ? 'text-amber-600' : 'text-slate-700'}>{spedCrossRef.saidaFaltantes.length}</strong></span>
+                      <span className="text-slate-500">Entradas (inf.): <strong className="text-slate-700">{spedCrossRef.spedEntradasTotal}</strong></span>
+                    </div>
+
+                    {/* Filtros + Busca */}
+                    <div className="px-6 py-3 border-b border-slate-100 flex flex-wrap gap-3 items-center">
+                      <div className="flex gap-1.5">
+                        {(['Todas', 'SemXML', 'Canceladas'] as const).map(f => {
+                          const label = f === 'SemXML' ? `Sem XML (${spedCrossRef.saidaFaltantes.length})` : f === 'Canceladas' ? 'Canceladas' : `Todas (${spedCrossRef.spedSaidasTotal})`;
+                          return (
+                            <button
+                              key={f}
+                              onClick={() => setSpedCardFiltro(f)}
+                              className={cn(
+                                'px-3 py-1.5 rounded-xl text-[11px] font-semibold transition-colors',
+                                spedCardFiltro === f
+                                  ? f === 'SemXML'
+                                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                    : 'bg-slate-900 text-white'
+                                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                              )}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="relative flex-1 min-w-[180px] max-w-xs">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={spedSearch}
+                          onChange={e => setSpedSearch(e.target.value)}
+                          placeholder="Buscar número, chave, data…"
+                          className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-300 bg-slate-50"
+                        />
+                        {spedSearch && (
+                          <button onClick={() => setSpedSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Tabela com scroll interno */}
+                    <div className="overflow-y-auto max-h-[500px] custom-scrollbar">
+                      {spedRowsFiltradas.length === 0 ? (
+                        <div className="px-6 py-10 text-center text-sm text-slate-400">
+                          {spedCardFiltro === 'SemXML' ? '✅ Nenhum faltante — todos os XMLs estão carregados.' : spedSearch ? 'Nenhum resultado para a busca.' : 'Nenhum registro neste filtro.'}
+                        </div>
+                      ) : (
+                        <table className="w-full text-xs">
+                          <thead className="sticky top-0 bg-white border-b border-slate-100 z-10">
+                            <tr>
+                              <th className="text-left px-6 py-2.5 text-slate-400 font-semibold">Data</th>
+                              <th className="text-left px-3 py-2.5 text-slate-400 font-semibold">Mod</th>
+                              <th className="text-left px-3 py-2.5 text-slate-400 font-semibold">Série</th>
+                              <th className="text-left px-3 py-2.5 text-slate-400 font-semibold">Nº Doc</th>
+                              <th className="text-right px-6 py-2.5 text-slate-400 font-semibold">Valor</th>
+                              <th className="text-left px-3 py-2.5 text-slate-400 font-semibold">Chave</th>
+                              <th className="px-3 py-2.5 text-slate-400 font-semibold text-center">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {spedRowsFiltradas.map((c, i) => {
+                              const falta = c.chave ? spedCrossRef.saidaFaltantesSet.has(c.chave) : false;
+                              const cancelada = c.codSit === '02' || c.codSit === '06';
+                              return (
+                                <tr key={i} className={cn('border-b border-slate-50 hover:bg-slate-50 transition-colors', falta && !cancelada && 'bg-amber-50/40')}>
+                                  <td className="px-6 py-2 text-slate-500">{spedCrossRef.formatDt(c.dtDoc)}</td>
+                                  <td className="px-3 py-2 text-slate-400">{c.codMod}</td>
+                                  <td className="px-3 py-2 text-slate-400">{c.ser}</td>
+                                  <td className="px-3 py-2 font-mono text-slate-700">{c.numDoc}</td>
+                                  <td className="px-6 py-2 text-right text-slate-600">{formatValorSped(c.vlDoc)}</td>
+                                  <td className="px-3 py-2 font-mono text-[10px] text-slate-400 max-w-[200px] truncate">{c.chave || '—'}</td>
+                                  <td className="px-3 py-2 text-center">
+                                    {cancelada ? (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-500">Cancelada</span>
+                                    ) : falta ? (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700">Sem XML</span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700">Com XML</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                    {spedRowsFiltradas.length > 0 && (
+                      <div className="px-6 py-2.5 border-t border-slate-100 text-[11px] text-slate-400 text-right">
+                        {spedRowsFiltradas.length} registro{spedRowsFiltradas.length !== 1 ? 's' : ''}
+                        {spedSearch ? ' (filtrados)' : ''}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Selection bar — always visible regardless of the current search/filter, since
                   selections made across earlier searches must stay reachable and downloadable. */}
               {notasSelecionadas.size > 0 && (
