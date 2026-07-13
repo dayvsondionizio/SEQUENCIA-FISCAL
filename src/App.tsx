@@ -112,6 +112,7 @@ interface SerieAnalysis {
   // número faltante — útil pra mostrar mesmo quando a série já está íntegra.
   todasInutilizacoes: number[];
   cancelados?: number[];
+  duplicados?: number;
   situacao: string;
   mesReferencia: string;
 }
@@ -2408,24 +2409,23 @@ export default function App() {
 
     setEntradaCount(localEntradaCount);
     const result = Object.values(groups).map(group => {
-      const numeros = group.xmls.map(x => parseInt(x.numero!)).sort((a, b) => a - b);
+      const numerosRaw = group.xmls.map(x => parseInt(x.numero!)).sort((a, b) => a - b);
+      const numerosSet = new Set(numerosRaw);
+      const numeros = Array.from(numerosSet).sort((a, b) => a - b);
       const min = numeros[0];
       const max = numeros[numeros.length - 1];
       const esperados = max - min + 1;
-      const recebidos = numeros.length;
+      // Use unique count — duplicates inflate numerosRaw.length and would mask gaps
+      const recebidos = numerosSet.size;
+      const duplicados = numerosRaw.length - numerosSet.size;
 
-      // Optimized missing number detection
-      let faltantes: number[] = [];
-      if (esperados > recebidos) {
-        const numerosSet = new Set(numeros);
-        // If the gap is huge, we might still hang, but Set.has is O(1)
-        // For extremely large gaps, we might want to limit this or use a different approach
-        for (let i = min; i <= max; i++) {
-          if (!numerosSet.has(i)) {
-            faltantes.push(i);
-            // Safety break to avoid memory crash if millions are missing
-            if (faltantes.length > 10000) break;
-          }
+      // Always scan every number in range — using Set.has is O(1)
+      const faltantes: number[] = [];
+      for (let i = min; i <= max; i++) {
+        if (!numerosSet.has(i)) {
+          faltantes.push(i);
+          // Safety break to avoid memory crash if millions are missing
+          if (faltantes.length > 10000) break;
         }
       }
 
@@ -2472,6 +2472,7 @@ export default function App() {
         max,
         esperados,
         recebidos,
+        duplicados,
         faltantes: faltantesReais,
         faltantesInutilizados,
         faltantesInutilizadosManual,
@@ -4310,6 +4311,16 @@ export default function App() {
                             <div className="text-lg font-bold text-slate-900">{serie.situacao}</div>
                           </div>
                         </div>
+
+                        {(serie.duplicados ?? 0) > 0 && (
+                          <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 text-amber-800 text-sm space-y-1">
+                            <div className="font-bold flex items-center gap-2">
+                              <AlertCircle className="w-4 h-4" />
+                              Atenção: XMLs Duplicados ({serie.duplicados})
+                            </div>
+                            <p>{serie.duplicados} número(s) de nota aparece(m) mais de uma vez nos arquivos enviados. Isso pode mascarar notas faltantes. Verifique se o mesmo XML foi enviado em dois ZIPs diferentes.</p>
+                          </div>
+                        )}
 
                         {serie.faltantesInutilizados.length > 0 && (
                           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-emerald-800 text-sm space-y-2">
