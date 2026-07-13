@@ -907,6 +907,7 @@ export default function App() {
   const [filterMes, setFilterMes] = useState('Todos');
   const [showDaysDetail, setShowDaysDetail] = useState(false);
   const [showCfopBreakdown, setShowCfopBreakdown] = useState(false);
+  const [showAnomalias, setShowAnomalias] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
   const [notaSearchQuery, setNotaSearchQuery] = useState('');
   const [notaSearchCampo, setNotaSearchCampo] = useState<'Tudo' | 'Numero' | 'Chave' | 'Cliente' | 'Item' | 'Data' | 'Valor'>('Tudo');
@@ -1085,8 +1086,9 @@ export default function App() {
     return xmlList
       .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0')
       .reduce((acc, xml) => {
-        // If the note's key appears in cancellation events set, treat its value as R$ 0,00
         if (xml.chave && chavesCanceladas.has(xml.chave)) return acc;
+        // Notes without authorization protocol (contingência not regularized) are invalid
+        if (!xml.protocolo) return acc;
         return acc + (parseFloat(xml.valor || '0') || 0);
       }, 0);
   }, [xmlList]);
@@ -1113,6 +1115,7 @@ export default function App() {
       .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0')
       .forEach(xml => {
         if (xml.chave && chavesCanceladas.has(xml.chave)) return;
+        if (!xml.protocolo) return;
         const valorNota = parseFloat(xml.valor || '0') || 0;
         const itens: Record<string, number> = xml.cfopValores || {};
         const totalItens = Object.values(itens).reduce((s, v) => s + v, 0);
@@ -1136,6 +1139,45 @@ export default function App() {
         valor
       }))
       .sort((a, b) => a.cfop.localeCompare(b.cfop));
+  }, [xmlList]);
+
+  // Detects two classes of anomalies in saída notes:
+  // 1. Notes without an authorization protocol (contingência not regularized with SEFAZ)
+  // 2. Notes with the same série+número but different access keys (same number re-emitted)
+  const notasAnomalias = useMemo(() => {
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!mainCnpj) return { semProtocolo: [] as XmlData[], numeroDuplicado: [] as XmlData[][] };
+
+    const chavesCanceladas = new Set<string>(
+      xmlList
+        .filter(xml => xml.tipo === 'evento' && xml.isCancelamento && xml.chave)
+        .map(xml => xml.chave!)
+    );
+
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' &&
+      xml.emitCnpj === mainCnpj &&
+      xml.tpNF !== '0' &&
+      !(xml.chave && chavesCanceladas.has(xml.chave))
+    );
+
+    const semProtocolo = saidas.filter(xml => !xml.protocolo);
+
+    // Group by série+número; any group with more than one distinct chave is a duplicate number
+    const bySerieNumero: Record<string, XmlData[]> = {};
+    saidas.forEach(xml => {
+      const key = `${xml.serie}-${xml.numero}`;
+      if (!bySerieNumero[key]) bySerieNumero[key] = [];
+      bySerieNumero[key].push(xml);
+    });
+    const numeroDuplicado = Object.values(bySerieNumero).filter(group => group.length > 1);
+
+    return { semProtocolo, numeroDuplicado };
   }, [xmlList]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
@@ -3830,6 +3872,105 @@ export default function App() {
                       </tfoot>
                     </table>
                   </div>
+                </div>
+              )}
+
+              {(notasAnomalias.semProtocolo.length > 0 || notasAnomalias.numeroDuplicado.length > 0) && (
+                <div className="bg-amber-50 border border-amber-200 rounded-3xl p-6 mb-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <span className="text-amber-500 text-xl">⚠️</span>
+                      <div>
+                        <div className="text-sm font-black text-amber-700 uppercase tracking-widest">Notas para Verificação</div>
+                        <div className="text-xs text-amber-600 mt-0.5">
+                          {notasAnomalias.semProtocolo.length > 0 && (
+                            <span>{notasAnomalias.semProtocolo.length} sem protocolo de autorização{notasAnomalias.numeroDuplicado.length > 0 ? ' · ' : ''}</span>
+                          )}
+                          {notasAnomalias.numeroDuplicado.length > 0 && (
+                            <span>{notasAnomalias.numeroDuplicado.length} número(s) com chave duplicada</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setShowAnomalias(!showAnomalias)}
+                      className="text-xs font-bold text-amber-600 hover:text-amber-800 underline no-print"
+                    >
+                      {showAnomalias ? 'Ocultar' : 'Ver detalhes'}
+                    </button>
+                  </div>
+
+                  {showAnomalias && (
+                    <div className="space-y-6">
+                      {notasAnomalias.semProtocolo.length > 0 && (
+                        <div>
+                          <div className="text-xs font-black text-amber-700 uppercase tracking-wider mb-2">
+                            Sem Protocolo de Autorização SEFAZ — excluídas do total válido
+                          </div>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="text-left text-amber-600 font-bold border-b border-amber-200">
+                                  <th className="py-1.5 pr-3">Série</th>
+                                  <th className="py-1.5 pr-3">Nº</th>
+                                  <th className="py-1.5 pr-3">Data</th>
+                                  <th className="py-1.5 pr-3">Chave</th>
+                                  <th className="py-1.5 text-right">Valor</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {notasAnomalias.semProtocolo.map((xml, i) => (
+                                  <tr key={i} className="border-b border-amber-100 last:border-0">
+                                    <td className="py-1.5 pr-3 font-mono text-amber-800">{xml.serie}</td>
+                                    <td className="py-1.5 pr-3 font-mono text-amber-800">{xml.numero}</td>
+                                    <td className="py-1.5 pr-3 text-amber-700">{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                    <td className="py-1.5 pr-3 font-mono text-amber-600 text-[10px] truncate max-w-[180px]" title={xml.chave}>{xml.chave || '—'}</td>
+                                    <td className="py-1.5 text-right font-semibold text-amber-800">{formatarMoeda(parseFloat(xml.valor || '0') || 0)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot>
+                                <tr>
+                                  <td colSpan={4} className="py-2 font-black text-amber-700 text-xs">Total excluído</td>
+                                  <td className="py-2 text-right font-black text-amber-700">
+                                    {formatarMoeda(notasAnomalias.semProtocolo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
+                                  </td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {notasAnomalias.numeroDuplicado.length > 0 && (
+                        <div>
+                          <div className="text-xs font-black text-amber-700 uppercase tracking-wider mb-2">
+                            Números com Mais de uma Chave — possível contingência re-emitida
+                          </div>
+                          <div className="space-y-3">
+                            {notasAnomalias.numeroDuplicado.map((grupo, i) => (
+                              <div key={i} className="bg-white rounded-xl border border-amber-200 p-3">
+                                <div className="text-xs font-bold text-amber-700 mb-2">
+                                  Série {grupo[0].serie} · Nº {grupo[0].numero}
+                                </div>
+                                <div className="space-y-1">
+                                  {grupo.map((xml, j) => (
+                                    <div key={j} className="flex items-center gap-2 text-xs">
+                                      <span className={`px-1.5 py-0.5 rounded font-bold ${xml.protocolo ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                        {xml.protocolo ? '✓ COM protocolo' : '✗ SEM protocolo'}
+                                      </span>
+                                      <span className="font-mono text-slate-500 text-[10px] truncate flex-1" title={xml.chave}>{xml.chave}</span>
+                                      <span className="font-semibold text-slate-700 shrink-0">{formatarMoeda(parseFloat(xml.valor || '0') || 0)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
