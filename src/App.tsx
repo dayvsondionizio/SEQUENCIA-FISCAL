@@ -3799,6 +3799,8 @@ export default function App() {
                                     <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-xs font-bold">Cancelada</span>
                                   ) : nota.isEntradaPropria ? (
                                     <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 text-xs font-bold" title="Nota emitida com CFOP de entrada (devolução de venda, baixa de estoque, etc.) — não entra no faturamento.">Devolução/Entrada</span>
+                                  ) : !nota.protocolo ? (
+                                    <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-xs font-bold" title="Nota sem protocolo de autorização SEFAZ — não incluída no total válido">Sem Autorização</span>
                                   ) : (
                                     <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold">Válida</span>
                                   )}
