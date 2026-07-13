@@ -738,7 +738,7 @@ export default function App() {
   const [entradaCount, setEntradaCount] = useState(0);
   const [fornecedorEntradaInfo, setFornecedorEntradaInfo] = useState<{ count: number; nomes: string } | null>(null);
   const [spedData, setSpedData] = useState<SpedData | null>(null);
-  const [spedCardFiltro, setSpedCardFiltro] = useState<'Todas' | 'SemXML' | 'Canceladas'>('Todas');
+  const [spedCardFiltro, setSpedCardFiltro] = useState<'Todas' | 'SemXML' | 'Canceladas' | 'NaoDeclarado'>('Todas');
   const [spedCardOpen, setSpedCardOpen] = useState(false);
   const [spedSearch, setSpedSearch] = useState('');
   const spedInputRef = useRef<HTMLInputElement>(null);
@@ -820,6 +820,29 @@ export default function App() {
     const saidaFaltantesSet = new Set(saidaFaltantes.map(c => c.chave));
     const saidaOk = comChave.length - saidaFaltantes.length;
     const formatDt = (d: string) => d.length === 8 ? `${d.slice(0,2)}/${d.slice(2,4)}/${d.slice(4)}` : d;
+
+    // Verificação reversa: XMLs de saída NF-e no período do SPED que não estão declarados
+    // Chave NF-e: cUF(2) + AAMM(4) + CNPJ(14) + ... → posições 2-5 = AAMM (ex: "2606" = jun/26)
+    const toAaMm = (ddmmaaaa: string) =>
+      ddmmaaaa.length === 8 ? ddmmaaaa.slice(6, 8) + ddmmaaaa.slice(2, 4) : '';
+    const iniAaMm = toAaMm(spedData.dtIni);
+    const finAaMm = toAaMm(spedData.dtFin);
+    const xmlSaidasNfe = xmlList.filter(x => x.chave && x.tpNF === '1' && x.tipo === 'nfe');
+    const xmlsForaPeriodo = iniAaMm
+      ? xmlSaidasNfe.filter(x => { const aa = x.chave!.slice(2, 6); return aa < iniAaMm || aa > finAaMm; })
+      : [];
+    const xmlsNoPeriodo = iniAaMm
+      ? xmlSaidasNfe.filter(x => { const aa = x.chave!.slice(2, 6); return aa >= iniAaMm && aa <= finAaMm; })
+      : xmlSaidasNfe;
+    const spedChavesSet = new Set(comChave.map(c => c.chave));
+    const xmlsNaoDeclarados = xmlsNoPeriodo.filter(x => !spedChavesSet.has(x.chave!));
+    const nomesMeses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    const mesesFora = [...new Set(xmlsForaPeriodo.map(x => {
+      const s = x.chave!.slice(2, 6);
+      const mm = parseInt(s.slice(2, 4));
+      return `${nomesMeses[mm - 1]}/${s.slice(0, 2)}`;
+    }))].sort();
+
     return {
       spedSaidas,
       spedSaidasTotal: spedSaidas.length,
@@ -829,11 +852,15 @@ export default function App() {
       saidaFaltantesSet,
       formatDt,
       periodo: `${formatDt(spedData.dtIni)} – ${formatDt(spedData.dtFin)}`,
+      xmlsNaoDeclarados,
+      xmlsForaPeriodo,
+      mesesFora,
     };
   }, [spedData, xmlList]);
 
   const spedRowsFiltradas = useMemo(() => {
     if (!spedData || !spedCrossRef) return [];
+    if (spedCardFiltro === 'NaoDeclarado') return []; // tabela separada no UI
     let rows = spedCardFiltro === 'SemXML'
       ? spedCrossRef.saidaFaltantes
       : spedCardFiltro === 'Canceladas'
@@ -3093,7 +3120,19 @@ export default function App() {
                               ⚠ {spedCrossRef?.saidaFaltantes.length} sem XML
                             </span>
                           )}
-                          {(spedCrossRef?.saidaFaltantes.length ?? 0) === 0 && (
+                          {(spedCrossRef?.xmlsNaoDeclarados.length ?? 0) > 0 && (
+                            <span className="text-[11px] font-semibold text-red-600">
+                              ⚠ {spedCrossRef?.xmlsNaoDeclarados.length} não declarados
+                            </span>
+                          )}
+                          {(spedCrossRef?.mesesFora.length ?? 0) > 0 && (
+                            <span className="text-[11px] font-semibold text-orange-600">
+                              ⚠ XMLs fora do período
+                            </span>
+                          )}
+                          {(spedCrossRef?.saidaFaltantes.length ?? 0) === 0 &&
+                           (spedCrossRef?.xmlsNaoDeclarados.length ?? 0) === 0 &&
+                           (spedCrossRef?.mesesFora.length ?? 0) === 0 && (
                             <span className="text-[11px] font-semibold text-emerald-600">✓ Todos com XML</span>
                           )}
                         </div>
@@ -3156,11 +3195,24 @@ export default function App() {
                       <span className="text-slate-500">Entradas (inf.): <strong className="text-slate-700">{spedCrossRef.spedEntradasTotal}</strong></span>
                     </div>
 
+                    {/* Banner de período parcial */}
+                    {spedCrossRef.mesesFora.length > 0 && (
+                      <div className="mx-6 my-3 px-4 py-3 bg-orange-50 border border-orange-200 rounded-2xl text-xs text-orange-800">
+                        <strong>⚠ SPED com período parcial</strong> — cobre apenas {spedCrossRef.periodo}.<br />
+                        XMLs de <strong>{spedCrossRef.mesesFora.join(', ')}</strong> ({spedCrossRef.xmlsForaPeriodo.length} notas) estão fora do período declarado e não podem ser comparados com este SPED.
+                      </div>
+                    )}
+
                     {/* Filtros + Busca */}
                     <div className="px-6 py-3 border-b border-slate-100 flex flex-wrap gap-3 items-center">
-                      <div className="flex gap-1.5">
-                        {(['Todas', 'SemXML', 'Canceladas'] as const).map(f => {
-                          const label = f === 'SemXML' ? `Sem XML (${spedCrossRef.saidaFaltantes.length})` : f === 'Canceladas' ? 'Canceladas' : `Todas (${spedCrossRef.spedSaidasTotal})`;
+                      <div className="flex gap-1.5 flex-wrap">
+                        {(['Todas', 'SemXML', 'NaoDeclarado', 'Canceladas'] as const).map(f => {
+                          const label =
+                            f === 'SemXML' ? `Sem XML (${spedCrossRef.saidaFaltantes.length})` :
+                            f === 'NaoDeclarado' ? `Não Declarados (${spedCrossRef.xmlsNaoDeclarados.length})` :
+                            f === 'Canceladas' ? 'Canceladas' :
+                            `Todas (${spedCrossRef.spedSaidasTotal})`;
+                          if (f === 'NaoDeclarado' && spedCrossRef.xmlsNaoDeclarados.length === 0) return null;
                           return (
                             <button
                               key={f}
@@ -3170,7 +3222,9 @@ export default function App() {
                                 spedCardFiltro === f
                                   ? f === 'SemXML'
                                     ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                                    : 'bg-slate-900 text-white'
+                                    : f === 'NaoDeclarado'
+                                      ? 'bg-red-100 text-red-800 border border-red-300'
+                                      : 'bg-slate-900 text-white'
                                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                               )}
                             >
@@ -3198,7 +3252,47 @@ export default function App() {
 
                     {/* Tabela com scroll interno */}
                     <div className="overflow-y-auto max-h-[500px] custom-scrollbar">
-                      {spedRowsFiltradas.length === 0 ? (
+                      {spedCardFiltro === 'NaoDeclarado' ? (() => {
+                        const q = spedSearch.trim().toLowerCase();
+                        const rows = q
+                          ? spedCrossRef.xmlsNaoDeclarados.filter(x =>
+                              (x.numero ?? '').includes(q) ||
+                              (x.chave ?? '').toLowerCase().includes(q) ||
+                              (x.data ?? '').includes(q)
+                            )
+                          : spedCrossRef.xmlsNaoDeclarados;
+                        if (rows.length === 0) return (
+                          <div className="px-6 py-10 text-center text-sm text-slate-400">Nenhum resultado para a busca.</div>
+                        );
+                        return (
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 bg-white border-b border-slate-100 z-10">
+                              <tr>
+                                <th className="text-left px-6 py-2.5 text-slate-400 font-semibold">Data</th>
+                                <th className="text-left px-3 py-2.5 text-slate-400 font-semibold">Mod</th>
+                                <th className="text-left px-3 py-2.5 text-slate-400 font-semibold">Série</th>
+                                <th className="text-left px-3 py-2.5 text-slate-400 font-semibold">Nº Doc</th>
+                                <th className="text-right px-6 py-2.5 text-slate-400 font-semibold">Valor</th>
+                                <th className="text-left px-3 py-2.5 text-slate-400 font-semibold">Chave</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rows.map((x, i) => (
+                                <tr key={i} className="border-b border-slate-50 hover:bg-red-50/30 bg-red-50/20 transition-colors">
+                                  <td className="px-6 py-2 text-slate-500">{x.data ?? '—'}</td>
+                                  <td className="px-3 py-2 text-slate-400">{x.modelo ?? '—'}</td>
+                                  <td className="px-3 py-2 text-slate-400">{x.serie ?? '—'}</td>
+                                  <td className="px-3 py-2 font-mono text-slate-700">{x.numero ?? '—'}</td>
+                                  <td className="px-6 py-2 text-right text-slate-600">
+                                    {x.valor ? parseFloat(x.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '—'}
+                                  </td>
+                                  <td className="px-3 py-2 font-mono text-[10px] text-slate-400 max-w-[200px] truncate">{x.chave ?? '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        );
+                      })() : spedRowsFiltradas.length === 0 ? (
                         <div className="px-6 py-10 text-center text-sm text-slate-400">
                           {spedCardFiltro === 'SemXML' ? '✅ Nenhum faltante — todos os XMLs estão carregados.' : spedSearch ? 'Nenhum resultado para a busca.' : 'Nenhum registro neste filtro.'}
                         </div>
@@ -3243,12 +3337,18 @@ export default function App() {
                         </table>
                       )}
                     </div>
-                    {spedRowsFiltradas.length > 0 && (
-                      <div className="px-6 py-2.5 border-t border-slate-100 text-[11px] text-slate-400 text-right">
-                        {spedRowsFiltradas.length} registro{spedRowsFiltradas.length !== 1 ? 's' : ''}
-                        {spedSearch ? ' (filtrados)' : ''}
-                      </div>
-                    )}
+                    {(() => {
+                      const count = spedCardFiltro === 'NaoDeclarado'
+                        ? spedCrossRef.xmlsNaoDeclarados.length
+                        : spedRowsFiltradas.length;
+                      if (count === 0) return null;
+                      return (
+                        <div className="px-6 py-2.5 border-t border-slate-100 text-[11px] text-slate-400 text-right">
+                          {count} registro{count !== 1 ? 's' : ''}
+                          {spedSearch ? ' (filtrados)' : ''}
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}
