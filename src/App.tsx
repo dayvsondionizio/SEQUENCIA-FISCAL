@@ -433,7 +433,7 @@ function gerarSpedCorrigido(spedData: SpedData, xmlsParaAdicionar: XmlData[]): s
   return nonEmpty.join('\r\n') + '\r\n';
 }
 
-function gerarSpedZerado(xmlsSaida: XmlData[], cnpjEmpr: string, ieEmpr: string, nomeEmpr: string): string {
+function gerarSpedZerado(xmlsSaida: XmlData[], xmlsEntrada: XmlData[], cnpjEmpr: string, ieEmpr: string, nomeEmpr: string): string {
   const limparNum = (v: string | undefined) => (v ?? '').replace(/\D/g, '');
   const dtSped = (iso: string) => {
     const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -444,10 +444,10 @@ function gerarSpedZerado(xmlsSaida: XmlData[], cnpjEmpr: string, ieEmpr: string,
     return isNaN(n) ? '0,00' : n.toFixed(2).replace('.', ',');
   };
 
-  const datas = xmlsSaida.map(x => x.data ?? '').filter(Boolean).sort();
-  // Usar primeiro e último dia do mês (não a data exata do XML)
-  const primIso = datas[0] ?? '';
-  const ultIso = datas[datas.length - 1] ?? '';
+  // Período: primeiro/último dia do mês, considerando saídas e entradas
+  const todasDatas = [...xmlsSaida, ...xmlsEntrada].map(x => x.data ?? '').filter(Boolean).sort();
+  const primIso = todasDatas[0] ?? '';
+  const ultIso = todasDatas[todasDatas.length - 1] ?? '';
   const dtIni = primIso.length >= 7 ? `01${primIso.slice(5, 7)}${primIso.slice(0, 4)}` : '';
   const ultDate = ultIso.length >= 7 ? new Date(parseInt(ultIso.slice(0, 4)), parseInt(ultIso.slice(5, 7)), 0) : null;
   const dtFin = ultDate ? `${String(ultDate.getDate()).padStart(2, '0')}${String(ultDate.getMonth() + 1).padStart(2, '0')}${ultDate.getFullYear()}` : '';
@@ -463,15 +463,21 @@ function gerarSpedZerado(xmlsSaida: XmlData[], cnpjEmpr: string, ieEmpr: string,
   const cnpjLimpo = limparNum(cnpjEmpr);
   const ieLimpo = limparNum(ieEmpr);
 
-  // COD_MUN (IBGE) — extrai do primeiro XML disponível
+  // COD_MUN (IBGE) — primeiro <cMun> da nota de saída é o da empresa emitente
   const codMunMatch = (xmlsSaida[0]?.rawXml ?? '').match(/<cMun>(\d+)<\/cMun>/);
   const codMun = codMunMatch?.[1] ?? '';
 
-  const c100Lines = xmlsSaida.map(x => {
+  const c100Entradas = xmlsEntrada.map(x => {
+    const dt = dtSped(x.data ?? '');
+    const vl = vlSped(x.valor ?? '0');
+    return `|C100|0|1||${x.modelo ?? '55'}|00|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|2|||${vl}|9|||||||||||||`;
+  });
+  const c100Saidas = xmlsSaida.map(x => {
     const dt = dtSped(x.data ?? '');
     const vl = vlSped(x.valor ?? '0');
     return `|C100|1|0||${x.modelo ?? '55'}|00|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|2|||${vl}|9|||||||||||||`;
   });
+  const c100Lines = [...c100Entradas, ...c100Saidas];
 
   // Blocks 0–9 (layout 020 — inclui bloco B obrigatório)
   const mainLines: string[] = [
@@ -1048,8 +1054,13 @@ export default function App() {
     const cleanCnpj = (c: string) => c.replace(/\D/g, '');
     const mainCnpj = cleanCnpj(analysis[0].cnpj);
     const saidas = xmlList.filter(x => x.tipo === 'nfe' && x.chave && cleanCnpj(x.emitCnpj ?? '') === mainCnpj);
-    if (!saidas.length) return null;
-    return { saidas, cnpj: analysis[0].cnpj, ie: analysis[0].ie, razaoSocial: analysis[0].razaoSocial };
+    const entradas = xmlList.filter(x =>
+      x.tipo === 'nfe' && x.chave &&
+      cleanCnpj(x.destCnpj ?? '') === mainCnpj &&
+      cleanCnpj(x.emitCnpj ?? '') !== mainCnpj
+    );
+    if (!saidas.length && !entradas.length) return null;
+    return { saidas, entradas, cnpj: analysis[0].cnpj, ie: analysis[0].ie, razaoSocial: analysis[0].razaoSocial };
   }, [spedData, analysis, xmlList]);
 
   const faturamentoTotal = useMemo(() => {
@@ -3307,6 +3318,7 @@ export default function App() {
                           onClick={() => {
                             const texto = gerarSpedZerado(
                               spedZeradoSaidas.saidas,
+                              spedZeradoSaidas.entradas,
                               spedZeradoSaidas.cnpj,
                               spedZeradoSaidas.ie ?? '',
                               spedZeradoSaidas.razaoSocial ?? ''
@@ -3316,7 +3328,7 @@ export default function App() {
                             const a = document.createElement('a');
                             a.href = url;
                             const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-                            const datas = spedZeradoSaidas.saidas.map(x => x.data ?? '').filter(Boolean).sort();
+                            const datas = [...spedZeradoSaidas.saidas, ...spedZeradoSaidas.entradas].map(x => x.data ?? '').filter(Boolean).sort();
                             const dtI = datas[0] ?? '';
                             const dtF = datas[datas.length - 1] ?? '';
                             const parseMes = (iso: string) => parseInt(iso.slice(5, 7)) - 1;
@@ -3330,10 +3342,10 @@ export default function App() {
                             URL.revokeObjectURL(url);
                           }}
                           className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-500 transition-colors"
-                          title={`Gera um SPED completo a partir dos ${spedZeradoSaidas.saidas.length} XMLs de saída carregados`}
+                          title={`Gera SPED com ${spedZeradoSaidas.saidas.length} saídas e ${spedZeradoSaidas.entradas.length} entradas`}
                         >
                           <Download className="w-3.5 h-3.5" />
-                          Gerar SPED ({spedZeradoSaidas.saidas.length} notas)
+                          Gerar SPED ({spedZeradoSaidas.saidas.length + spedZeradoSaidas.entradas.length} notas)
                         </button>
                       )}
                     </div>
