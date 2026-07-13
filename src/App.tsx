@@ -1231,9 +1231,10 @@ export default function App() {
 
     return notasSaida.filter(nota => {
       if (filterNotaModelo !== 'Todos' && nota.modelo !== filterNotaModelo) return false;
-      if (filterNotaSituacao === 'Válidas' && (nota.isCancelada || nota.tipo === 'inutilizacao')) return false;
+      if (filterNotaSituacao === 'Válidas' && (nota.isCancelada || nota.tipo === 'inutilizacao' || !nota.protocolo)) return false;
       if (filterNotaSituacao === 'Canceladas' && (!nota.isCancelada || nota.tipo === 'inutilizacao')) return false;
       if (filterNotaSituacao === 'Inutilizadas' && nota.tipo !== 'inutilizacao') return false;
+      if (filterNotaSituacao === 'SemAutorizacao' && (nota.protocolo || nota.isCancelada || nota.tipo === 'inutilizacao')) return false;
       if (!query) return true;
 
       const buscaItem = () => {
@@ -3325,6 +3326,7 @@ export default function App() {
                       <option value="Válidas">Somente válidas</option>
                       <option value="Canceladas">Somente canceladas</option>
                       <option value="Inutilizadas">Somente inutilizadas</option>
+                      <option value="SemAutorizacao">Sem autorização</option>
                     </select>
                   </div>
                 </div>
