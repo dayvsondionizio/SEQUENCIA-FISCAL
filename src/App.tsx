@@ -160,6 +160,7 @@ interface SpedData {
   dtFin: string;
   c100: SpedC100[];
   fileName: string;
+  rawText: string;
 }
 
 // --- Helpers ---
@@ -363,7 +364,70 @@ function parseSped(text: string, fileName: string): SpedData | null {
       vlDoc: f[12] || '',
     });
   }
-  return { cnpj, razaoSocial, dtIni, dtFin, c100, fileName };
+  return { cnpj, razaoSocial, dtIni, dtFin, c100, fileName, rawText: text };
+}
+
+function gerarSpedCorrigido(spedData: SpedData, xmlsParaAdicionar: XmlData[]): string {
+  if (xmlsParaAdicionar.length === 0) return spedData.rawText;
+
+  const dtSped = (iso: string) => {
+    const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}${m[2]}${m[1]}` : '';
+  };
+  const vlSped = (v: string) => {
+    const n = parseFloat((v ?? '').replace(',', '.'));
+    return isNaN(n) ? '0,00' : n.toFixed(2).replace('.', ',');
+  };
+
+  const novasC100 = xmlsParaAdicionar.map(x => {
+    const dt = dtSped(x.data ?? '');
+    const vl = vlSped(x.valor ?? '0');
+    // C100: REG|IND_OPER|IND_EMIT|COD_PART|COD_MOD|COD_SIT|SER|NUM_DOC|CHV_NFE|DT_DOC|DT_E_S|VL_DOC|IND_PGTO|VL_DESC|VL_ABAT_NT|VL_MERC|IND_FRT|VL_FRT|VL_SEG|VL_OUT_DA|VL_BC_ICMS|VL_ICMS|VL_BC_ICMS_ST|VL_ICMS_ST|VL_IPI|VL_PIS|VL_COFINS|VL_PIS_ST|VL_COFINS_ST
+    return `|C100|1|0||${x.modelo ?? '55'}|00|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|0|0,00|0,00|${vl}||0,00|0,00|0,00|0,00|0,00|0,00|0,00|0,00|0,00|0,00|0,00|0,00|`;
+  });
+
+  let lines = spedData.rawText.split(/\r?\n/);
+
+  // Inserir novos C100 antes do C990
+  const c990Idx = lines.findIndex(l => l.trimStart().startsWith('|C990|'));
+  if (c990Idx >= 0) {
+    lines = [...lines.slice(0, c990Idx), ...novasC100, ...lines.slice(c990Idx)];
+  } else {
+    const b9Idx = lines.findIndex(l => l.trimStart().startsWith('|9001|'));
+    const at = b9Idx >= 0 ? b9Idx : lines.length;
+    lines = [...lines.slice(0, at), ...novasC100, ...lines.slice(at)];
+  }
+
+  // Recalcular C990 (total de registros do bloco C incluindo C990)
+  const newC990Idx = lines.findIndex(l => l.trimStart().startsWith('|C990|'));
+  if (newC990Idx >= 0) {
+    const cCount = lines.filter(l => /^\|C\d/.test(l.trimStart())).length;
+    lines[newC990Idx] = `|C990|${cCount}|`;
+  }
+
+  // Atualizar 9900|C100 e 9900|C990 com novas contagens
+  const countOf = (tipo: string) => lines.filter(l => l.split('|')[1] === tipo).length;
+  for (const tipo of ['C100', 'C190', 'C990']) {
+    const idx = lines.findIndex(l => { const p = l.split('|'); return p[1] === '9900' && p[2] === tipo; });
+    if (idx >= 0) lines[idx] = `|9900|${tipo}|${countOf(tipo)}|`;
+  }
+
+  // Recalcular 9900|9900 (conta as próprias linhas 9900)
+  const n9900 = lines.filter(l => l.split('|')[1] === '9900').length;
+  const self9900 = lines.findIndex(l => { const p = l.split('|'); return p[1] === '9900' && p[2] === '9900'; });
+  if (self9900 >= 0) lines[self9900] = `|9900|9900|${n9900}|`;
+
+  // Recalcular 9990 (total de registros do bloco 9)
+  const block9 = lines.filter(l => { const t = l.split('|')[1]; return t === '9001' || t === '9900' || t === '9990' || t === '9999'; }).length;
+  const idx9990 = lines.findIndex(l => l.trimStart().startsWith('|9990|'));
+  if (idx9990 >= 0) lines[idx9990] = `|9990|${block9}|`;
+
+  // Recalcular 9999 (total de linhas no arquivo)
+  const nonEmpty = lines.filter(l => l.trim().length > 0);
+  const idx9999 = nonEmpty.findIndex(l => l.trimStart().startsWith('|9999|'));
+  if (idx9999 >= 0) nonEmpty[idx9999] = `|9999|${nonEmpty.length}|`;
+
+  return nonEmpty.join('\r\n');
 }
 
 function agruparFaixas(numeros: number[]) {
@@ -3199,7 +3263,27 @@ export default function App() {
                       <span className="text-slate-500">Com XML: <strong className="text-emerald-600">{spedCrossRef.saidaOk}</strong></span>
                       <span className="text-slate-500">Sem XML: <strong className={spedCrossRef.saidaFaltantes.length > 0 ? 'text-amber-600' : 'text-slate-700'}>{spedCrossRef.saidaFaltantes.length}</strong></span>
                       {spedCrossRef.xmlsNaoDeclarados.length > 0 && (
-                        <span className="text-slate-500">Não declarados: <strong className="text-red-600">{spedCrossRef.xmlsNaoDeclarados.length}</strong></span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-slate-500">Não declarados: <strong className="text-red-600">{spedCrossRef.xmlsNaoDeclarados.length}</strong></span>
+                          <button
+                            onClick={() => {
+                              const corrigido = gerarSpedCorrigido(spedData, spedCrossRef.xmlsNaoDeclarados);
+                              const blob = new Blob([corrigido], { type: 'text/plain;charset=utf-8' });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              const base = spedData.fileName.replace(/\.txt$/i, '');
+                              a.download = `${base}_CORRIGIDO.txt`;
+                              a.click();
+                              URL.revokeObjectURL(url);
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold hover:bg-red-100 transition-colors"
+                            title="Gera novo SPED com os XMLs não declarados inseridos como C100"
+                          >
+                            <Download className="w-3 h-3" />
+                            Baixar SPED Corrigido
+                          </button>
+                        </span>
                       )}
                     </div>
 
