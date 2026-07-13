@@ -445,8 +445,12 @@ function gerarSpedZerado(xmlsSaida: XmlData[], cnpjEmpr: string, ieEmpr: string,
   };
 
   const datas = xmlsSaida.map(x => x.data ?? '').filter(Boolean).sort();
-  const dtIni = dtSped(datas[0] ?? '');
-  const dtFin = dtSped(datas[datas.length - 1] ?? '');
+  // Usar primeiro e último dia do mês (não a data exata do XML)
+  const primIso = datas[0] ?? '';
+  const ultIso = datas[datas.length - 1] ?? '';
+  const dtIni = primIso.length >= 7 ? `01${primIso.slice(5, 7)}${primIso.slice(0, 4)}` : '';
+  const ultDate = ultIso.length >= 7 ? new Date(parseInt(ultIso.slice(0, 4)), parseInt(ultIso.slice(5, 7)), 0) : null;
+  const dtFin = ultDate ? `${String(ultDate.getDate()).padStart(2, '0')}${String(ultDate.getMonth() + 1).padStart(2, '0')}${ultDate.getFullYear()}` : '';
 
   const cUF = xmlsSaida[0]?.chave?.slice(0, 2) ?? '';
   const ufMap: Record<string, string> = {
@@ -471,7 +475,7 @@ function gerarSpedZerado(xmlsSaida: XmlData[], cnpjEmpr: string, ieEmpr: string,
 
   // Blocks 0–9 (layout 020 — inclui bloco B obrigatório)
   const mainLines: string[] = [
-    `|0000|020|0|${dtIni}|${dtFin}|${nomeEmpr}|${cnpjLimpo}||${uf}|${ieLimpo}|${codMun}|||A|0|`,
+    `|0000|020|0|${dtIni}|${dtFin}|${nomeEmpr}|${cnpjLimpo}||${uf}|${ieLimpo}|${codMun}|||B|1|`,
     `|0001|1|`,   // bloco 0 fechado — sem sub-registros auxiliares
     `|0990|3|`,
     `|B001|1|`,   // bloco B obrigatório no layout 020, sem registros
