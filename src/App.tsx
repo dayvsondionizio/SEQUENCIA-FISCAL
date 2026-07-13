@@ -1434,7 +1434,7 @@ export default function App() {
     setAuditoriaResultado(null);
     setAuditoriaNomeArquivo(file.name);
     try {
-      let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && !n.isEntradaPropria && n.rawXml);
+      let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && !n.isEntradaPropria && n.protocolo && n.rawXml);
       if (filterMes !== 'Todos') {
         notas = notas.filter(n => getMonthYear(n.data) === filterMes);
       }
@@ -1667,7 +1667,7 @@ export default function App() {
   // Simplified confronto: just Natureza/NCM/Item/Valor Contábil, plus the
   // Desconto-onward columns — each included only if some row actually has a value.
   const exportarPlanilhaDetalhadaSimples = () => {
-    let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && !n.isEntradaPropria && n.rawXml);
+    let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && !n.isEntradaPropria && n.protocolo && n.rawXml);
     if (filterMes !== 'Todos') {
       notas = notas.filter(n => getMonthYear(n.data) === filterMes);
     }
@@ -1751,7 +1751,7 @@ export default function App() {
   // sum doesn't reconcile to its vNF (note-level acréscimo/rounding), a synthetic
   // "Produto Padrão" adjustment row is emitted — exactly like Questor does.
   const exportarPlanilhaDetalhadaCompleta = () => {
-    let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && !n.isEntradaPropria && n.rawXml);
+    let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && !n.isEntradaPropria && n.protocolo && n.rawXml);
     if (filterMes !== 'Todos') {
       notas = notas.filter(n => getMonthYear(n.data) === filterMes);
     }
