@@ -910,7 +910,7 @@ export default function App() {
   const [showAnomalias, setShowAnomalias] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
   const [notaSearchQuery, setNotaSearchQuery] = useState('');
-  const [notaSearchCampo, setNotaSearchCampo] = useState<'Tudo' | 'Numero' | 'Chave' | 'Cliente' | 'Item' | 'Data' | 'Valor'>('Tudo');
+  const [notaSearchCampo, setNotaSearchCampo] = useState<'Numero' | 'Chave' | 'Cliente' | 'Item' | 'Data' | 'Valor'>('Numero');
   const [filterNotaModelo, setFilterNotaModelo] = useState('Todos');
   const [filterNotaSituacao, setFilterNotaSituacao] = useState('Todas');
   const [downloadingDanfeChave, setDownloadingDanfeChave] = useState<string | null>(null);
@@ -1251,15 +1251,7 @@ export default function App() {
       if (notaSearchCampo === 'Data') return (nota.data || '').toLowerCase().includes(query);
       if (notaSearchCampo === 'Valor') return (nota.valor || '').toLowerCase().includes(query);
       if (notaSearchCampo === 'Item') return buscaItem();
-
-      // "Tudo": mantém o comportamento combinado de antes.
-      const campos = [
-        nota.chave, nota.numero, nota.serie, nota.modelo,
-        nota.destNome, nota.destCnpj, nota.valor, nota.data,
-        nota.natureza, nota.protocolo
-      ];
-      if (campos.some(campo => campo && campo.toLowerCase().includes(query))) return true;
-      return buscaItem();
+      return false;
     });
   }, [notasSaida, notaSearchQuery, notaSearchCampo, filterNotaModelo, filterNotaSituacao]);
 
@@ -3288,7 +3280,7 @@ export default function App() {
                         type="text"
                         value={notaSearchQuery}
                         onChange={(e) => setNotaSearchQuery(e.target.value)}
-                        placeholder={notaSearchCampo === 'Tudo' ? 'Número, chave, cliente, item, data, valor...' : `Buscar por ${notaSearchCampo.toLowerCase()}...`}
+                        placeholder={`Buscar por ${notaSearchCampo === 'Item' ? 'produto' : notaSearchCampo.toLowerCase()}...`}
                         className="w-full pl-11 pr-4 py-3 rounded-2xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                       />
                     </div>
@@ -3297,11 +3289,10 @@ export default function App() {
                       onChange={(e) => setNotaSearchCampo(e.target.value as typeof notaSearchCampo)}
                       className="px-3 py-2.5 rounded-2xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
                     >
-                      <option value="Tudo">Buscar em: Tudo</option>
                       <option value="Numero">Só Número</option>
                       <option value="Chave">Só Chave</option>
                       <option value="Cliente">Só Cliente</option>
-                      <option value="Item">Só Item</option>
+                      <option value="Item">Produto</option>
                       <option value="Data">Só Data</option>
                       <option value="Valor">Só Valor</option>
                     </select>
