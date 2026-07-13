@@ -827,7 +827,13 @@ export default function App() {
       ddmmaaaa.length === 8 ? ddmmaaaa.slice(6, 8) + ddmmaaaa.slice(2, 4) : '';
     const iniAaMm = toAaMm(spedData.dtIni);
     const finAaMm = toAaMm(spedData.dtFin);
-    const xmlSaidasNfe = xmlList.filter(x => x.chave && x.tpNF === '1' && x.tipo === 'nfe');
+    // Filtra apenas NF-e emitidas pela própria empresa (emitCnpj = CNPJ do SPED)
+    // tpNF=1 sozinho não basta: XMLs de fornecedor também têm tpNF=1
+    const cleanCnpj = (c: string) => c.replace(/\D/g, '');
+    const companyCnpj = cleanCnpj(spedData.cnpj);
+    const xmlSaidasNfe = xmlList.filter(x =>
+      x.chave && x.tipo === 'nfe' && cleanCnpj(x.emitCnpj ?? '') === companyCnpj
+    );
     const xmlsForaPeriodo = iniAaMm
       ? xmlSaidasNfe.filter(x => { const aa = x.chave!.slice(2, 6); return aa < iniAaMm || aa > finAaMm; })
       : [];
@@ -3192,7 +3198,9 @@ export default function App() {
                       <span className="text-slate-500">No SPED: <strong className="text-slate-700">{spedCrossRef.spedSaidasTotal}</strong></span>
                       <span className="text-slate-500">Com XML: <strong className="text-emerald-600">{spedCrossRef.saidaOk}</strong></span>
                       <span className="text-slate-500">Sem XML: <strong className={spedCrossRef.saidaFaltantes.length > 0 ? 'text-amber-600' : 'text-slate-700'}>{spedCrossRef.saidaFaltantes.length}</strong></span>
-                      <span className="text-slate-500">Entradas (inf.): <strong className="text-slate-700">{spedCrossRef.spedEntradasTotal}</strong></span>
+                      {spedCrossRef.xmlsNaoDeclarados.length > 0 && (
+                        <span className="text-slate-500">Não declarados: <strong className="text-red-600">{spedCrossRef.xmlsNaoDeclarados.length}</strong></span>
+                      )}
                     </div>
 
                     {/* Banner de período parcial */}
