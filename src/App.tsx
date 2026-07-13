@@ -805,7 +805,8 @@ export default function App() {
   const [entradaCount, setEntradaCount] = useState(0);
   const [fornecedorEntradaInfo, setFornecedorEntradaInfo] = useState<{ count: number; nomes: string } | null>(null);
   const [spedData, setSpedData] = useState<SpedData | null>(null);
-  const [spedCardFiltro, setSpedCardFiltro] = useState<'Todas' | 'SemXML' | 'Canceladas' | 'NaoDeclarado'>('Todas');
+  const [spedDataOriginal, setSpedDataOriginal] = useState<SpedData | null>(null);
+  const [spedCardFiltro, setSpedCardFiltro] = useState<'Todas' | 'SemXML' | 'Canceladas' | 'NaoDeclarado' | 'Adicionados'>('Todas');
   const [spedCardOpen, setSpedCardOpen] = useState(false);
   const [spedSearch, setSpedSearch] = useState('');
   const spedInputRef = useRef<HTMLInputElement>(null);
@@ -916,6 +917,14 @@ export default function App() {
       return `${nomesMeses[mm - 1]}/${s.slice(0, 2)}`;
     }))].sort();
 
+    // Diff: registros que estão no SPED atual mas não estavam no original (adicionados)
+    const originalChaves = spedDataOriginal
+      ? new Set(spedDataOriginal.c100.filter(c => c.chave).map(c => c.chave))
+      : null;
+    const adicionados = originalChaves
+      ? spedSaidas.filter(c => c.chave && !originalChaves.has(c.chave))
+      : [];
+
     return {
       spedSaidas,
       spedSaidasTotal: spedSaidas.length,
@@ -928,12 +937,15 @@ export default function App() {
       xmlsNaoDeclarados,
       xmlsForaPeriodo,
       mesesFora,
+      adicionados,
+      temOriginal: !!spedDataOriginal,
     };
-  }, [spedData, xmlList]);
+  }, [spedData, spedDataOriginal, xmlList]);
 
   const spedRowsFiltradas = useMemo(() => {
     if (!spedData || !spedCrossRef) return [];
     if (spedCardFiltro === 'NaoDeclarado') return []; // tabela separada no UI
+    if (spedCardFiltro === 'Adicionados') return spedCrossRef.adicionados;
     let rows = spedCardFiltro === 'SemXML'
       ? spedCrossRef.saidaFaltantes
       : spedCardFiltro === 'Canceladas'
@@ -1813,6 +1825,7 @@ export default function App() {
     let finalInuts: XmlData[] = [];
     let finalOthers: XmlData[] = [];
     let foundSped: SpedData | null = null;
+    let foundSpedOriginal: SpedData | null = null;
 
         const checkMagicBytes = (buffer: ArrayBuffer | Uint8Array) => {
       const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
@@ -2086,7 +2099,16 @@ export default function App() {
           finalXmls.push(...res.localXmls);
           finalInuts.push(...res.localInuts);
           finalOthers.push(...res.localOthers);
-          if (res.localSped && (!foundSped || res.localSped.c100.length > foundSped.c100.length)) foundSped = res.localSped;
+          if (res.localSped) {
+            if (!foundSped) {
+              foundSped = res.localSped;
+            } else if (res.localSped.c100.length > foundSped.c100.length) {
+              foundSpedOriginal = foundSped;
+              foundSped = res.localSped;
+            } else {
+              foundSpedOriginal = res.localSped;
+            }
+          }
           
           setStats(prev => ({
             ...prev,
@@ -2195,6 +2217,7 @@ export default function App() {
       }
 
       if (foundSped) setSpedData(foundSped);
+      if (foundSpedOriginal) setSpedDataOriginal(foundSpedOriginal);
       setAttachedSources(Array.from(sourceMap.values()));
       setProcessedFileNames(updatedProcessedNames);
       setXmlList(mergedXmls);
@@ -2411,6 +2434,7 @@ export default function App() {
     setEntradaCount(0);
     setFornecedorEntradaInfo(null);
     setSpedData(null);
+    setSpedDataOriginal(null);
     setSpedCardFiltro('Todas');
     setSpedCardOpen(false);
     setSpedSearch('');
@@ -3163,7 +3187,18 @@ export default function App() {
 
                 {/* SPED Fiscal card — compacto, abre para a direita */}
                 <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden no-print">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest px-6 pt-5 pb-3">SPED Fiscal</div>
+                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest px-6 pt-5 pb-3 flex items-center justify-between">
+                    SPED Fiscal
+                    {spedData && (
+                      <button
+                        onClick={() => spedInputRef.current?.click()}
+                        className="text-[11px] font-normal normal-case text-slate-400 hover:text-slate-600 transition-colors"
+                        title="Substituir pelo SPED corrigido sem reiniciar a análise"
+                      >
+                        Trocar
+                      </button>
+                    )}
+                  </div>
 
                   {!spedData ? (
                     <div className="px-6 pb-5 flex flex-col gap-3">
@@ -3203,9 +3238,15 @@ export default function App() {
                               ⚠ XMLs fora do período
                             </span>
                           )}
+                          {(spedCrossRef?.adicionados.length ?? 0) > 0 && (
+                            <span className="text-[11px] font-semibold text-blue-600">
+                              +{spedCrossRef?.adicionados.length} adicionados
+                            </span>
+                          )}
                           {(spedCrossRef?.saidaFaltantes.length ?? 0) === 0 &&
                            (spedCrossRef?.xmlsNaoDeclarados.length ?? 0) === 0 &&
-                           (spedCrossRef?.mesesFora.length ?? 0) === 0 && (
+                           (spedCrossRef?.mesesFora.length ?? 0) === 0 &&
+                           (spedCrossRef?.adicionados.length ?? 0) === 0 && (
                             <span className="text-[11px] font-semibold text-emerald-600">✓ Todos com XML</span>
                           )}
                         </div>
@@ -3227,7 +3268,13 @@ export default function App() {
                       if (!file) return;
                       const text = await file.text();
                       const sped = parseSped(text, file.name);
-                      if (sped) { setSpedData(sped); setSpedCardFiltro('Todas'); setSpedSearch(''); setSpedCardOpen(true); }
+                      if (sped) {
+                        if (spedData) setSpedDataOriginal(spedData);
+                        setSpedData(sped);
+                        setSpedCardFiltro('Todas');
+                        setSpedSearch('');
+                        setSpedCardOpen(true);
+                      }
                       e.target.value = '';
                     }}
                   />
@@ -3265,6 +3312,9 @@ export default function App() {
                       <span className="text-slate-500">No SPED: <strong className="text-slate-700">{spedCrossRef.spedSaidasTotal}</strong></span>
                       <span className="text-slate-500">Com XML: <strong className="text-emerald-600">{spedCrossRef.saidaOk}</strong></span>
                       <span className="text-slate-500">Sem XML: <strong className={spedCrossRef.saidaFaltantes.length > 0 ? 'text-amber-600' : 'text-slate-700'}>{spedCrossRef.saidaFaltantes.length}</strong></span>
+                      {spedCrossRef.adicionados.length > 0 && (
+                        <span className="text-slate-500">Adicionados: <strong className="text-blue-600">{spedCrossRef.adicionados.length}</strong></span>
+                      )}
                       {spedCrossRef.xmlsNaoDeclarados.length > 0 && (
                         <span className="flex items-center gap-2">
                           <span className="text-slate-500">Não declarados: <strong className="text-red-600">{spedCrossRef.xmlsNaoDeclarados.length}</strong></span>
@@ -3301,13 +3351,15 @@ export default function App() {
                     {/* Filtros + Busca */}
                     <div className="px-6 py-3 border-b border-slate-100 flex flex-wrap gap-3 items-center">
                       <div className="flex gap-1.5 flex-wrap">
-                        {(['Todas', 'SemXML', 'NaoDeclarado', 'Canceladas'] as const).map(f => {
+                        {(['Todas', 'SemXML', 'NaoDeclarado', 'Adicionados', 'Canceladas'] as const).map(f => {
                           const label =
                             f === 'SemXML' ? `Sem XML (${spedCrossRef.saidaFaltantes.length})` :
                             f === 'NaoDeclarado' ? `Não Declarados (${spedCrossRef.xmlsNaoDeclarados.length})` :
+                            f === 'Adicionados' ? `Adicionados (${spedCrossRef.adicionados.length})` :
                             f === 'Canceladas' ? 'Canceladas' :
                             `Todas (${spedCrossRef.spedSaidasTotal})`;
                           if (f === 'NaoDeclarado' && spedCrossRef.xmlsNaoDeclarados.length === 0) return null;
+                          if (f === 'Adicionados' && spedCrossRef.adicionados.length === 0) return null;
                           return (
                             <button
                               key={f}
@@ -3319,7 +3371,9 @@ export default function App() {
                                     ? 'bg-amber-100 text-amber-800 border border-amber-300'
                                     : f === 'NaoDeclarado'
                                       ? 'bg-red-100 text-red-800 border border-red-300'
-                                      : 'bg-slate-900 text-white'
+                                      : f === 'Adicionados'
+                                        ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                        : 'bg-slate-900 text-white'
                                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                               )}
                             >
@@ -3408,8 +3462,9 @@ export default function App() {
                             {spedRowsFiltradas.map((c, i) => {
                               const falta = c.chave ? spedCrossRef.saidaFaltantesSet.has(c.chave) : false;
                               const cancelada = c.codSit === '02' || c.codSit === '06';
+                              const adicionado = spedCardFiltro === 'Adicionados';
                               return (
-                                <tr key={i} className={cn('border-b border-slate-50 hover:bg-slate-50 transition-colors', falta && !cancelada && 'bg-amber-50/40')}>
+                                <tr key={i} className={cn('border-b border-slate-50 hover:bg-slate-50 transition-colors', falta && !cancelada && 'bg-amber-50/40', adicionado && 'bg-blue-50/30')}>
                                   <td className="px-6 py-2 text-slate-500">{spedCrossRef.formatDt(c.dtDoc)}</td>
                                   <td className="px-3 py-2 text-slate-400">{c.codMod}</td>
                                   <td className="px-3 py-2 text-slate-400">{c.ser}</td>
