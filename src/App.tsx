@@ -433,6 +433,77 @@ function gerarSpedCorrigido(spedData: SpedData, xmlsParaAdicionar: XmlData[]): s
   return nonEmpty.join('\r\n');
 }
 
+function gerarSpedZerado(xmlsSaida: XmlData[], cnpjEmpr: string, ieEmpr: string, nomeEmpr: string): string {
+  const limparNum = (v: string | undefined) => (v ?? '').replace(/\D/g, '');
+  const dtSped = (iso: string) => {
+    const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}${m[2]}${m[1]}` : '';
+  };
+  const vlSped = (v: string | undefined) => {
+    const n = parseFloat((v ?? '').replace(',', '.'));
+    return isNaN(n) ? '0,00' : n.toFixed(2).replace('.', ',');
+  };
+
+  const datas = xmlsSaida.map(x => x.data ?? '').filter(Boolean).sort();
+  const dtIni = dtSped(datas[0] ?? '');
+  const dtFin = dtSped(datas[datas.length - 1] ?? '');
+
+  const cUF = xmlsSaida[0]?.chave?.slice(0, 2) ?? '';
+  const ufMap: Record<string, string> = {
+    '11':'RO','12':'AC','13':'AM','14':'RR','15':'PA','16':'AP','17':'TO',
+    '21':'MA','22':'PI','23':'CE','24':'RN','25':'PB','26':'PE','27':'AL',
+    '28':'SE','29':'BA','31':'MG','32':'ES','33':'RJ','35':'SP',
+    '41':'PR','42':'SC','43':'RS','50':'MS','51':'MT','52':'GO','53':'DF',
+  };
+  const uf = ufMap[cUF] ?? '';
+  const cnpjLimpo = limparNum(cnpjEmpr);
+  const ieLimpo = limparNum(ieEmpr);
+
+  const c100Lines = xmlsSaida.map(x => {
+    const dt = dtSped(x.data ?? '');
+    const vl = vlSped(x.valor ?? '0');
+    return `|C100|1|0||${x.modelo ?? '55'}|00|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|2|||${vl}|9|||||||||||||`;
+  });
+
+  // Blocks 0–1
+  const mainLines: string[] = [
+    `|0000|015|0|${dtIni}|${dtFin}|${nomeEmpr}|${cnpjLimpo}||${uf}|${ieLimpo}||||A|0|`,
+    `|0001|0|`,
+    `|0990|3|`,
+    `|C001|0|`,
+    ...c100Lines,
+    `|C990|${c100Lines.length + 2}|`,
+    `|D001|1|`, `|D990|2|`,
+    `|E001|1|`, `|E990|2|`,
+    `|G001|1|`, `|G990|2|`,
+    `|H001|1|`, `|H990|2|`,
+    `|K001|1|`, `|K990|2|`,
+    `|1001|1|`, `|1990|2|`,
+  ];
+
+  // Count record types for 9900 entries
+  const counts: Record<string, number> = {};
+  for (const line of mainLines) {
+    const t = line.split('|')[1];
+    if (t) counts[t] = (counts[t] ?? 0) + 1;
+  }
+
+  const allTypes = [...new Set([...Object.keys(counts), '9001', '9900', '9990', '9999'])].sort();
+  const n9900 = allTypes.length; // number of |9900|TYPE|N| lines
+
+  const linhas9900 = allTypes.map(tipo =>
+    `|9900|${tipo}|${tipo === '9001' ? 1 : tipo === '9900' ? n9900 : tipo === '9990' ? 1 : tipo === '9999' ? 1 : (counts[tipo] ?? 0)}|`
+  );
+
+  const bloco9: string[] = [`|9001|0|`, ...linhas9900];
+  const totalBloco9 = bloco9.length + 2; // + 9990 + 9999
+  bloco9.push(`|9990|${totalBloco9}|`);
+  const totalGeral = mainLines.length + bloco9.length + 1; // + 9999 itself
+  bloco9.push(`|9999|${totalGeral}|`);
+
+  return [...mainLines, ...bloco9].join('\r\n');
+}
+
 function agruparFaixas(numeros: number[]) {
   if (numeros.length === 0) return [];
   const sorted = [...numeros].sort((a, b) => a - b);
@@ -961,6 +1032,15 @@ export default function App() {
     }
     return rows;
   }, [spedData, spedCrossRef, spedCardFiltro, spedSearch]);
+
+  const spedZeradoSaidas = useMemo(() => {
+    if (spedData || !analysis?.length) return null;
+    const cleanCnpj = (c: string) => c.replace(/\D/g, '');
+    const mainCnpj = cleanCnpj(analysis[0].cnpj);
+    const saidas = xmlList.filter(x => x.tipo === 'nfe' && x.chave && cleanCnpj(x.emitCnpj ?? '') === mainCnpj);
+    if (!saidas.length) return null;
+    return { saidas, cnpj: analysis[0].cnpj, ie: analysis[0].ie, razaoSocial: analysis[0].razaoSocial };
+  }, [spedData, analysis, xmlList]);
 
   const faturamentoTotal = useMemo(() => {
     // Identify the Main Client Company CNPJ (the most frequent overall)
@@ -3212,6 +3292,40 @@ export default function App() {
                         <Upload className="w-3.5 h-3.5" />
                         Anexar SPED (.txt)
                       </button>
+                      {spedZeradoSaidas && (
+                        <button
+                          onClick={() => {
+                            const texto = gerarSpedZerado(
+                              spedZeradoSaidas.saidas,
+                              spedZeradoSaidas.cnpj,
+                              spedZeradoSaidas.ie ?? '',
+                              spedZeradoSaidas.razaoSocial ?? ''
+                            );
+                            const blob = new Blob([texto], { type: 'text/plain;charset=utf-8' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+                            const datas = spedZeradoSaidas.saidas.map(x => x.data ?? '').filter(Boolean).sort();
+                            const dtI = datas[0] ?? '';
+                            const dtF = datas[datas.length - 1] ?? '';
+                            const parseMes = (iso: string) => parseInt(iso.slice(5, 7)) - 1;
+                            const parseAno = (iso: string) => iso.slice(0, 4);
+                            const per = parseMes(dtI) === parseMes(dtF) && parseAno(dtI) === parseAno(dtF)
+                              ? `${meses[parseMes(dtI)]}${parseAno(dtI)}`
+                              : `${meses[parseMes(dtI)]}${parseAno(dtI)}-${meses[parseMes(dtF)]}${parseAno(dtF)}`;
+                            const emp = (spedZeradoSaidas.razaoSocial ?? '').replace(/[/\\:*?"<>|]/g, '').trim();
+                            a.download = `SPED (${emp}) (${per}) (gerado).txt`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                          className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-500 transition-colors"
+                          title={`Gera um SPED completo a partir dos ${spedZeradoSaidas.saidas.length} XMLs de saída carregados`}
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          Gerar SPED ({spedZeradoSaidas.saidas.length} notas)
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <button
@@ -3325,8 +3439,14 @@ export default function App() {
                               const url = URL.createObjectURL(blob);
                               const a = document.createElement('a');
                               a.href = url;
-                              const base = spedData.fileName.replace(/\.txt$/i, '');
-                              a.download = `${base}_CORRIGIDO.txt`;
+                              const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+                              const mmI = parseInt(spedData.dtIni.slice(2, 4)) - 1;
+                              const aaI = spedData.dtIni.slice(4, 8);
+                              const mmF = parseInt(spedData.dtFin.slice(2, 4)) - 1;
+                              const aaF = spedData.dtFin.slice(4, 8);
+                              const per = mmI === mmF && aaI === aaF ? `${meses[mmI]}${aaI}` : `${meses[mmI]}${aaI}-${meses[mmF]}${aaF}`;
+                              const emp = spedData.razaoSocial.replace(/[/\\:*?"<>|]/g, '').trim();
+                              a.download = `SPED (${emp}) (${per}) (adicionado).txt`;
                               a.click();
                               URL.revokeObjectURL(url);
                             }}
