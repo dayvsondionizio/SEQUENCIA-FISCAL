@@ -4312,16 +4312,6 @@ export default function App() {
                           </div>
                         </div>
 
-                        {(serie.duplicados ?? 0) > 0 && (
-                          <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 text-amber-800 text-sm space-y-1">
-                            <div className="font-bold flex items-center gap-2">
-                              <AlertCircle className="w-4 h-4" />
-                              Atenção: XMLs Duplicados ({serie.duplicados})
-                            </div>
-                            <p>{serie.duplicados} número(s) de nota aparece(m) mais de uma vez nos arquivos enviados. Isso pode mascarar notas faltantes. Verifique se o mesmo XML foi enviado em dois ZIPs diferentes.</p>
-                          </div>
-                        )}
-
                         {serie.faltantesInutilizados.length > 0 && (
                           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-emerald-800 text-sm space-y-2">
                             <div className="font-bold flex items-center gap-2">
