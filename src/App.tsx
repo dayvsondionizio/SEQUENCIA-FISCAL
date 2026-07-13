@@ -434,7 +434,7 @@ function gerarSpedCorrigido(spedData: SpedData, xmlsParaAdicionar: XmlData[]): s
   return nonEmpty.join('\r\n') + '\r\n';
 }
 
-function gerarSpedZerado(xmlsSaida: XmlData[], xmlsEntrada: XmlData[], cnpjEmpr: string, ieEmpr: string, nomeEmpr: string, chavesCanceladas?: Set<string>): string {
+function gerarSpedZerado(xmlsSaida: XmlData[], xmlsEntrada: XmlData[], cnpjEmpr: string, ieEmpr: string, nomeEmpr: string, chavesCanceladas?: Set<string>, inutilizacoes?: XmlData[]): string {
   const limparNum = (v: string | undefined) => (v ?? '').replace(/\D/g, '');
   const dtSped = (iso: string) => {
     const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -469,6 +469,20 @@ function gerarSpedZerado(xmlsSaida: XmlData[], xmlsEntrada: XmlData[], cnpjEmpr:
   const codMun = codMunMatch?.[1] ?? '';
 
   const codSit = (x: XmlData) => chavesCanceladas?.has(x.chave ?? '') ? '02' : '00';
+
+  // C100|05 para cada número inutilizado — expande ranges (ex: 100 a 103 → 4 registros)
+  const c100Inutilizadas: string[] = [];
+  (inutilizacoes ?? []).forEach(inut => {
+    const ini = inut.nNFIni ?? 0;
+    const fin = inut.nNFFin ?? ini;
+    const dt = dtSped(inut.data ?? '');
+    const mod = inut.modelo ?? '65';
+    const ser = inut.serie ?? '';
+    for (let n = ini; n <= fin; n++) {
+      c100Inutilizadas.push(`|C100|1|0||${mod}|05|${ser}|${n}||${dt}|${dt}|0,00|9|||0,00|9|||||||||||||`);
+    }
+  });
+
   const c100Entradas = xmlsEntrada.map(x => {
     const dt = dtSped(x.data ?? '');
     const vl = vlSped(x.valor ?? '0');
@@ -479,7 +493,7 @@ function gerarSpedZerado(xmlsSaida: XmlData[], xmlsEntrada: XmlData[], cnpjEmpr:
     const vl = vlSped(x.valor ?? '0');
     return `|C100|1|0||${x.modelo ?? '55'}|${codSit(x)}|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|2|||${vl}|9|||||||||||||`;
   });
-  const c100Lines = [...c100Entradas, ...c100Saidas];
+  const c100Lines = [...c100Inutilizadas, ...c100Entradas, ...c100Saidas];
 
   // Blocks 0–9 (layout 020 — inclui bloco B obrigatório)
   const mainLines: string[] = [
@@ -1072,9 +1086,10 @@ export default function App() {
       cleanCnpj(x.destCnpj ?? '') === mainCnpj &&
       cleanCnpj(x.emitCnpj ?? '') !== mainCnpj
     );
+    const inutsParaSped = inutilizacoes.filter(i => cleanCnpj(i.cnpj ?? '') === mainCnpj);
     if (!saidas.length && !entradas.length) return null;
-    return { saidas, entradas, chavesCanceladas, cnpj: analysis[0].cnpj, ie: analysis[0].ie, razaoSocial: analysis[0].razaoSocial };
-  }, [spedData, analysis, xmlList]);
+    return { saidas, entradas, chavesCanceladas, inutilizacoes: inutsParaSped, cnpj: analysis[0].cnpj, ie: analysis[0].ie, razaoSocial: analysis[0].razaoSocial };
+  }, [spedData, analysis, xmlList, inutilizacoes]);
 
   const faturamentoTotal = useMemo(() => {
     // Identify the Main Client Company CNPJ (the most frequent overall)
@@ -3369,7 +3384,8 @@ export default function App() {
                               spedZeradoSaidas.cnpj,
                               spedZeradoSaidas.ie ?? '',
                               spedZeradoSaidas.razaoSocial ?? '',
-                              spedZeradoSaidas.chavesCanceladas
+                              spedZeradoSaidas.chavesCanceladas,
+                              spedZeradoSaidas.inutilizacoes
                             );
                             const blob = new Blob([texto], { type: 'text/plain;charset=utf-8' });
                             const url = URL.createObjectURL(blob);
