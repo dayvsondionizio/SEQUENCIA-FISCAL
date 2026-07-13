@@ -459,17 +459,23 @@ function gerarSpedZerado(xmlsSaida: XmlData[], cnpjEmpr: string, ieEmpr: string,
   const cnpjLimpo = limparNum(cnpjEmpr);
   const ieLimpo = limparNum(ieEmpr);
 
+  // COD_MUN (IBGE) — extrai do primeiro XML disponível
+  const codMunMatch = (xmlsSaida[0]?.rawXml ?? '').match(/<cMun>(\d+)<\/cMun>/);
+  const codMun = codMunMatch?.[1] ?? '';
+
   const c100Lines = xmlsSaida.map(x => {
     const dt = dtSped(x.data ?? '');
     const vl = vlSped(x.valor ?? '0');
     return `|C100|1|0||${x.modelo ?? '55'}|00|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|2|||${vl}|9|||||||||||||`;
   });
 
-  // Blocks 0–1
+  // Blocks 0–9 (layout 020 — inclui bloco B obrigatório)
   const mainLines: string[] = [
-    `|0000|015|0|${dtIni}|${dtFin}|${nomeEmpr}|${cnpjLimpo}||${uf}|${ieLimpo}||||A|0|`,
-    `|0001|0|`,
+    `|0000|020|0|${dtIni}|${dtFin}|${nomeEmpr}|${cnpjLimpo}||${uf}|${ieLimpo}|${codMun}|||A|0|`,
+    `|0001|1|`,   // bloco 0 fechado — sem sub-registros auxiliares
     `|0990|3|`,
+    `|B001|1|`,   // bloco B obrigatório no layout 020, sem registros
+    `|B990|2|`,
     `|C001|0|`,
     ...c100Lines,
     `|C990|${c100Lines.length + 2}|`,
