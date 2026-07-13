@@ -1860,7 +1860,7 @@ export default function App() {
                 const xmlText = await entry.async('text');
                 if (xmlText.trimStart().startsWith('|0000|')) {
                   const sped = parseSped(xmlText, baseName);
-                  if (sped && !results.localSped) results.localSped = sped;
+                  if (sped && (!results.localSped || sped.c100.length > results.localSped.c100.length)) results.localSped = sped;
                   continue;
                 }
                 const looksLikeXml = xmlText.trim().startsWith('<');
@@ -1923,7 +1923,7 @@ export default function App() {
               const xmlText = await fileData.text();
               if (xmlText.trimStart().startsWith('|0000|')) {
                 const sped = parseSped(xmlText, baseName);
-                if (sped && !results.localSped) results.localSped = sped;
+                if (sped && (!results.localSped || sped.c100.length > results.localSped.c100.length)) results.localSped = sped;
                 continue;
               }
               const looksLikeXml = xmlText.trim().startsWith('<');
@@ -1970,7 +1970,7 @@ export default function App() {
                 const xmlText = new TextDecoder().decode(file.extraction);
                 if (xmlText.trimStart().startsWith('|0000|')) {
                   const sped = parseSped(xmlText, baseName);
-                  if (sped && !results.localSped) results.localSped = sped;
+                  if (sped && (!results.localSped || sped.c100.length > results.localSped.c100.length)) results.localSped = sped;
                   continue;
                 }
                 if (xmlText.trim().startsWith('<') || name.toLowerCase().endsWith('.xml')) {
@@ -2086,7 +2086,7 @@ export default function App() {
           finalXmls.push(...res.localXmls);
           finalInuts.push(...res.localInuts);
           finalOthers.push(...res.localOthers);
-          if (res.localSped) foundSped = res.localSped;
+          if (res.localSped && (!foundSped || res.localSped.c100.length > foundSped.c100.length)) foundSped = res.localSped;
           
           setStats(prev => ({
             ...prev,
