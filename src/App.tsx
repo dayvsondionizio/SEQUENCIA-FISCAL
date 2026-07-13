@@ -382,8 +382,11 @@ function gerarSpedCorrigido(spedData: SpedData, xmlsParaAdicionar: XmlData[]): s
   const novasC100 = xmlsParaAdicionar.map(x => {
     const dt = dtSped(x.data ?? '');
     const vl = vlSped(x.valor ?? '0');
-    // C100: REG|IND_OPER|IND_EMIT|COD_PART|COD_MOD|COD_SIT|SER|NUM_DOC|CHV_NFE|DT_DOC|DT_E_S|VL_DOC|IND_PGTO|VL_DESC|VL_ABAT_NT|VL_MERC|IND_FRT|VL_FRT|VL_SEG|VL_OUT_DA|VL_BC_ICMS|VL_ICMS|VL_BC_ICMS_ST|VL_ICMS_ST|VL_IPI|VL_PIS|VL_COFINS|VL_PIS_ST|VL_COFINS_ST
-    return `|C100|1|0||${x.modelo ?? '55'}|00|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|0|0,00|0,00|${vl}||0,00|0,00|0,00|0,00|0,00|0,00|0,00|0,00|0,00|0,00|0,00|0,00|`;
+    // Segue o mesmo padrão das NFC-e saída já presentes no SPED:
+    // campos tributários (VL_BC_ICMS, VL_ICMS, PIS, COFINS...) ficam vazios
+    // VL_MERC = VL_DOC, IND_FRT=9 (sem frete), IND_PGTO=2 (outros)
+    // |C100|IND_OPER|IND_EMIT|COD_PART|COD_MOD|COD_SIT|SER|NUM_DOC|CHV_NFE|DT_DOC|DT_E_S|VL_DOC|IND_PGTO|VL_DESC|VL_ABAT_NT|VL_MERC|IND_FRT|VL_FRT|VL_SEG|VL_OUT_DA|VL_BC_ICMS|VL_ICMS|VL_BC_ICMS_ST|VL_ICMS_ST|VL_IPI|VL_PIS|VL_COFINS|VL_PIS_ST|VL_COFINS_ST
+    return `|C100|1|0||${x.modelo ?? '55'}|00|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|2|||${vl}|9|||||||||||||`;
   });
 
   let lines = spedData.rawText.split(/\r?\n/);
