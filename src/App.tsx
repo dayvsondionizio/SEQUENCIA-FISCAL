@@ -3406,10 +3406,10 @@ export default function App() {
                             URL.revokeObjectURL(url);
                           }}
                           className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-500 transition-colors"
-                          title={`Gera SPED com ${spedZeradoSaidas.saidas.length} saídas e ${spedZeradoSaidas.entradas.length} entradas`}
+                          title={`Gera SPED com ${spedZeradoSaidas.saidas.length} saídas, ${spedZeradoSaidas.entradas.length} entradas e ${spedZeradoSaidas.inutilizacoes.length} inutilização(ões)`}
                         >
                           <Download className="w-3.5 h-3.5" />
-                          Gerar SPED ({spedZeradoSaidas.saidas.length + spedZeradoSaidas.entradas.length} notas)
+                          Gerar SPED ({spedZeradoSaidas.saidas.length + spedZeradoSaidas.entradas.length + spedZeradoSaidas.inutilizacoes.length} notas)
                         </button>
                       )}
                     </div>
