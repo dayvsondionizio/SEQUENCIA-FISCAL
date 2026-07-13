@@ -3315,7 +3315,7 @@ export default function App() {
                               ? `${meses[parseMes(dtI)]}${parseAno(dtI)}`
                               : `${meses[parseMes(dtI)]}${parseAno(dtI)}-${meses[parseMes(dtF)]}${parseAno(dtF)}`;
                             const emp = (spedZeradoSaidas.razaoSocial ?? '').replace(/[/\\:*?"<>|]/g, '').trim();
-                            a.download = `SPED (${emp}) (${per}) (gerado).txt`;
+                            a.download = `SPED ${emp} ${per} GERADO - SEQUENCIA FISCAL.txt`;
                             a.click();
                             URL.revokeObjectURL(url);
                           }}
@@ -3446,7 +3446,7 @@ export default function App() {
                               const aaF = spedData.dtFin.slice(4, 8);
                               const per = mmI === mmF && aaI === aaF ? `${meses[mmI]}${aaI}` : `${meses[mmI]}${aaI}-${meses[mmF]}${aaF}`;
                               const emp = spedData.razaoSocial.replace(/[/\\:*?"<>|]/g, '').trim();
-                              a.download = `SPED (${emp}) (${per}) (adicionado).txt`;
+                              a.download = `SPED ${emp} ${per} ATUALIZADO - SEQUENCIA FISCAL.txt`;
                               a.click();
                               URL.revokeObjectURL(url);
                             }}
