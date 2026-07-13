@@ -434,7 +434,7 @@ function gerarSpedCorrigido(spedData: SpedData, xmlsParaAdicionar: XmlData[]): s
   return nonEmpty.join('\r\n') + '\r\n';
 }
 
-function gerarSpedZerado(xmlsSaida: XmlData[], xmlsEntrada: XmlData[], cnpjEmpr: string, ieEmpr: string, nomeEmpr: string): string {
+function gerarSpedZerado(xmlsSaida: XmlData[], xmlsEntrada: XmlData[], cnpjEmpr: string, ieEmpr: string, nomeEmpr: string, chavesCanceladas?: Set<string>): string {
   const limparNum = (v: string | undefined) => (v ?? '').replace(/\D/g, '');
   const dtSped = (iso: string) => {
     const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -468,15 +468,16 @@ function gerarSpedZerado(xmlsSaida: XmlData[], xmlsEntrada: XmlData[], cnpjEmpr:
   const codMunMatch = (xmlsSaida[0]?.rawXml ?? '').match(/<cMun>(\d+)<\/cMun>/);
   const codMun = codMunMatch?.[1] ?? '';
 
+  const codSit = (x: XmlData) => chavesCanceladas?.has(x.chave ?? '') ? '02' : '00';
   const c100Entradas = xmlsEntrada.map(x => {
     const dt = dtSped(x.data ?? '');
     const vl = vlSped(x.valor ?? '0');
-    return `|C100|0|1||${x.modelo ?? '55'}|00|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|2|||${vl}|9|||||||||||||`;
+    return `|C100|0|1||${x.modelo ?? '55'}|${codSit(x)}|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|2|||${vl}|9|||||||||||||`;
   });
   const c100Saidas = xmlsSaida.map(x => {
     const dt = dtSped(x.data ?? '');
     const vl = vlSped(x.valor ?? '0');
-    return `|C100|1|0||${x.modelo ?? '55'}|00|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|2|||${vl}|9|||||||||||||`;
+    return `|C100|1|0||${x.modelo ?? '55'}|${codSit(x)}|${x.serie ?? ''}|${x.numero ?? ''}|${x.chave ?? ''}|${dt}|${dt}|${vl}|2|||${vl}|9|||||||||||||`;
   });
   const c100Lines = [...c100Entradas, ...c100Saidas];
 
@@ -1055,14 +1056,24 @@ export default function App() {
     if (spedData || !analysis?.length) return null;
     const cleanCnpj = (c: string) => c.replace(/\D/g, '');
     const mainCnpj = cleanCnpj(analysis[0].cnpj);
-    const saidas = xmlList.filter(x => x.tipo === 'nfe' && x.chave && cleanCnpj(x.emitCnpj ?? '') === mainCnpj);
+    const chavesCanceladas = new Set<string>(
+      xmlList
+        .filter(x => x.tipo === 'evento' && x.isCancelamento && x.chave)
+        .map(x => x.chave!)
+    );
+    // Sem protocolo = contingência não regularizada — sem validade fiscal, fora do SPED
+    // Canceladas = incluídas mas com COD_SIT 02 (chavesCanceladas passado à geração)
+    const saidas = xmlList.filter(x =>
+      x.tipo === 'nfe' && x.chave && x.protocolo &&
+      cleanCnpj(x.emitCnpj ?? '') === mainCnpj
+    );
     const entradas = xmlList.filter(x =>
-      x.tipo === 'nfe' && x.chave &&
+      x.tipo === 'nfe' && x.chave && x.protocolo &&
       cleanCnpj(x.destCnpj ?? '') === mainCnpj &&
       cleanCnpj(x.emitCnpj ?? '') !== mainCnpj
     );
     if (!saidas.length && !entradas.length) return null;
-    return { saidas, entradas, cnpj: analysis[0].cnpj, ie: analysis[0].ie, razaoSocial: analysis[0].razaoSocial };
+    return { saidas, entradas, chavesCanceladas, cnpj: analysis[0].cnpj, ie: analysis[0].ie, razaoSocial: analysis[0].razaoSocial };
   }, [spedData, analysis, xmlList]);
 
   const faturamentoTotal = useMemo(() => {
@@ -3357,7 +3368,8 @@ export default function App() {
                               spedZeradoSaidas.entradas,
                               spedZeradoSaidas.cnpj,
                               spedZeradoSaidas.ie ?? '',
-                              spedZeradoSaidas.razaoSocial ?? ''
+                              spedZeradoSaidas.razaoSocial ?? '',
+                              spedZeradoSaidas.chavesCanceladas
                             );
                             const blob = new Blob([texto], { type: 'text/plain;charset=utf-8' });
                             const url = URL.createObjectURL(blob);
