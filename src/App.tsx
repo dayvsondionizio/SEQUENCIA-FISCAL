@@ -430,7 +430,7 @@ function gerarSpedCorrigido(spedData: SpedData, xmlsParaAdicionar: XmlData[]): s
   const idx9999 = nonEmpty.findIndex(l => l.trimStart().startsWith('|9999|'));
   if (idx9999 >= 0) nonEmpty[idx9999] = `|9999|${nonEmpty.length}|`;
 
-  return nonEmpty.join('\r\n');
+  return nonEmpty.join('\r\n') + '\r\n';
 }
 
 function gerarSpedZerado(xmlsSaida: XmlData[], cnpjEmpr: string, ieEmpr: string, nomeEmpr: string): string {
@@ -501,7 +501,7 @@ function gerarSpedZerado(xmlsSaida: XmlData[], cnpjEmpr: string, ieEmpr: string,
   const totalGeral = mainLines.length + bloco9.length + 1; // + 9999 itself
   bloco9.push(`|9999|${totalGeral}|`);
 
-  return [...mainLines, ...bloco9].join('\r\n');
+  return [...mainLines, ...bloco9].join('\r\n') + '\r\n';
 }
 
 function agruparFaixas(numeros: number[]) {
