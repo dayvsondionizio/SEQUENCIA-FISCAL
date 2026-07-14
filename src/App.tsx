@@ -1206,17 +1206,17 @@ export default function App() {
 
     const foraDoPrazo = saidas.filter(isForaDoPrazo);
 
-    // A sem-protocolo note is only truly problematic if no authorized version exists
-    // anywhere in the XML set (same chave OR same série+número with any nProt).
+    // Contingência não regularizada: emitida offline (tpEmis=9) sem nProt,
+    // desconsiderando notas que têm versão autorizada com a mesma chave/série+número.
     const saidasComProtocolo = saidas.filter(x => !!x.protocolo);
     const chavesComProtocolo = new Set(saidasComProtocolo.map(x => x.chave).filter(Boolean));
     const seriesNumerosComProtocolo = new Set(saidasComProtocolo.map(x => `${x.serie}-${x.numero}`));
-    const semProtocoloRaw = saidas.filter(xml => !xml.protocolo);
-    const semProtocolo = semProtocoloRaw.filter(xml =>
+    const semProtocolo = saidas.filter(xml =>
+      xml.isContingencia && !xml.protocolo &&
       !(xml.chave && chavesComProtocolo.has(xml.chave)) &&
       !seriesNumerosComProtocolo.has(`${xml.serie}-${xml.numero}`)
     );
-    const semProtocoloAbatidas = semProtocoloRaw.length - semProtocolo.length;
+    const semProtocoloAbatidas = 0; // kept for UI compat, no longer shown
 
     // Group by série+número; any group with more than one distinct chave is a duplicate number
     const bySerieNumero: Record<string, XmlData[]> = {};
@@ -3933,16 +3933,10 @@ export default function App() {
                     <div className="flex items-center gap-3">
                       <span className="text-amber-500 text-xl">⚠️</span>
                       <div>
-                        <div className="text-sm font-black text-amber-700 uppercase tracking-widest">Notas para Verificação</div>
+                        <div className="text-sm font-black text-amber-700 uppercase tracking-widest">Contingência Não Regularizada</div>
                         <div className="text-xs text-amber-600 mt-0.5">
                           {notasAnomalias.semProtocolo.length > 0 && (
-                            <span>
-                              {notasAnomalias.semProtocolo.length} sem protocolo de autorização
-                              {notasAnomalias.semProtocoloAbatidas > 0 && (
-                                <span className="ml-1 text-emerald-600">(−{notasAnomalias.semProtocoloAbatidas} já regularizadas fora do prazo)</span>
-                              )}
-                              {notasAnomalias.numeroDuplicado.length > 0 ? ' · ' : ''}
-                            </span>
+                            <span>{notasAnomalias.semProtocolo.length} nota(s) emitida(s) offline sem autorização SEFAZ{notasAnomalias.numeroDuplicado.length > 0 ? ' · ' : ''}</span>
                           )}
                           {notasAnomalias.numeroDuplicado.length > 0 && (
                             <span>{notasAnomalias.numeroDuplicado.length} número(s) com chave duplicada</span>
@@ -3963,7 +3957,7 @@ export default function App() {
                       {notasAnomalias.semProtocolo.length > 0 && (
                         <div>
                           <div className="text-xs font-black text-amber-700 uppercase tracking-wider mb-2">
-                            Sem Protocolo de Autorização SEFAZ — excluídas do total válido
+                            Emitidas em Contingência sem Autorização SEFAZ — excluídas do total válido
                           </div>
                           <div className="overflow-x-auto">
                             <table className="w-full text-xs">
