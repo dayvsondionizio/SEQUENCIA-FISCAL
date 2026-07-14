@@ -1354,12 +1354,20 @@ export default function App() {
         return `${fromEpochDay(faixa[0])} a ${fromEpochDay(faixa[faixa.length - 1])}`;
       }
     });
-    
+
+    const notasPorDia: Record<string, number> = {};
+    datas.forEach(d => { notasPorDia[d] = (notasPorDia[d] || 0) + 1; });
+    const diasComContagem = Object.entries(notasPorDia)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([data, count]) => ({ data: formatarDataBR(data), count }));
+
     return {
       inicio: formatarDataBR(datas[0]),
       fim: formatarDataBR(datas[datas.length - 1]),
       totalDias: uniqueDays.length,
-      diasDetalhados
+      totalNotas: datas.length,
+      diasDetalhados,
+      diasComContagem,
     };
   }, [xmlList]);
 
@@ -3309,7 +3317,7 @@ export default function App() {
                     {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
                   </div>
                   <div className="flex items-center justify-between text-xs font-semibold text-slate-400 mt-2">
-                    <span>{periodoAnalise.totalDias} dias com movimentação</span>
+                    <span>{periodoAnalise.totalDias} dias · {periodoAnalise.totalNotas ?? 0} notas</span>
                     {periodoAnalise.diasDetalhados && periodoAnalise.diasDetalhados.length > 0 && (
                       <button
                         onClick={() => setShowDaysDetail(!showDaysDetail)}
@@ -3879,15 +3887,32 @@ export default function App() {
                 </div>
               )}
 
-              {showDaysDetail && periodoAnalise.diasDetalhados && periodoAnalise.diasDetalhados.length > 0 && (
+              {showDaysDetail && periodoAnalise.diasComContagem && periodoAnalise.diasComContagem.length > 0 && (
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Dias com Movimentação Detalhados</div>
-                  <div className="flex flex-wrap gap-2">
-                    {periodoAnalise.diasDetalhados.map((dia, idx) => (
-                      <span key={idx} className="font-mono text-xs text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
-                        {dia}
-                      </span>
-                    ))}
+                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Notas por Dia</div>
+                  <div className="overflow-y-auto max-h-72">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-white">
+                        <tr className="text-left text-slate-400 font-bold border-b border-slate-100">
+                          <th className="py-1.5 pr-4">Data</th>
+                          <th className="py-1.5 text-right">Notas</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {periodoAnalise.diasComContagem.map((dia, idx) => (
+                          <tr key={idx} className="border-b border-slate-50 last:border-0">
+                            <td className="py-1.5 pr-4 font-mono text-slate-600">{dia.data}</td>
+                            <td className="py-1.5 text-right font-semibold text-slate-700">{dia.count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot className="sticky bottom-0 bg-white">
+                        <tr className="border-t border-slate-200">
+                          <td className="py-1.5 font-black text-slate-500 text-xs">Total</td>
+                          <td className="py-1.5 text-right font-black text-slate-700">{periodoAnalise.totalNotas ?? 0}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
                   </div>
                 </div>
               )}
@@ -3933,7 +3958,12 @@ export default function App() {
                     <div className="flex items-center gap-3">
                       <span className="text-amber-500 text-xl">⚠️</span>
                       <div>
-                        <div className="text-sm font-black text-amber-700 uppercase tracking-widest">Contingência Não Regularizada</div>
+                        <div className="flex items-baseline gap-3">
+                          <div className="text-sm font-black text-amber-700 uppercase tracking-widest">Contingência Não Regularizada</div>
+                          {notasAnomalias.semProtocolo.length > 0 && (
+                            <div className="text-sm font-black text-amber-700">{formatarMoeda(notasAnomalias.semProtocolo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
+                          )}
+                        </div>
                         <div className="text-xs text-amber-600 mt-0.5">
                           {notasAnomalias.semProtocolo.length > 0 && (
                             <span>{notasAnomalias.semProtocolo.length} nota(s) emitida(s) offline sem autorização SEFAZ{notasAnomalias.numeroDuplicado.length > 0 ? ' · ' : ''}</span>
@@ -3959,9 +3989,9 @@ export default function App() {
                           <div className="text-xs font-black text-amber-700 uppercase tracking-wider mb-2">
                             Emitidas em Contingência sem Autorização SEFAZ — excluídas do total válido
                           </div>
-                          <div className="overflow-x-auto">
+                          <div className="overflow-x-auto overflow-y-auto max-h-72">
                             <table className="w-full text-xs">
-                              <thead>
+                              <thead className="sticky top-0 bg-amber-50">
                                 <tr className="text-left text-amber-600 font-bold border-b border-amber-200">
                                   <th className="py-1.5 pr-3">Série</th>
                                   <th className="py-1.5 pr-3">Nº</th>
@@ -4033,7 +4063,10 @@ export default function App() {
                     <div className="flex items-center gap-3">
                       <span className="text-orange-400 text-xl">🕐</span>
                       <div>
-                        <div className="text-sm font-black text-orange-700 uppercase tracking-widest">Contingência Regularizada Fora do Prazo</div>
+                        <div className="flex items-baseline gap-3">
+                          <div className="text-sm font-black text-orange-700 uppercase tracking-widest">Contingência Regularizada Fora do Prazo</div>
+                          <div className="text-sm font-black text-orange-700">{formatarMoeda(notasAnomalias.foraDoPrazo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
+                        </div>
                         <div className="text-xs text-orange-600 mt-0.5">
                           {notasAnomalias.foraDoPrazo.length} nota(s) emitida(s) offline e autorizada(s) pelo SEFAZ com atraso superior a 30 min — incluídas no faturamento
                         </div>
@@ -4048,9 +4081,9 @@ export default function App() {
                   </div>
 
                   {showForaDoPrazo && (
-                    <div className="overflow-x-auto">
+                    <div className="overflow-x-auto overflow-y-auto max-h-72">
                       <table className="w-full text-xs">
-                        <thead>
+                        <thead className="sticky top-0 bg-orange-50">
                           <tr className="text-left text-orange-600 font-bold border-b border-orange-200">
                             <th className="py-1.5 pr-3">Série</th>
                             <th className="py-1.5 pr-3">Nº</th>
