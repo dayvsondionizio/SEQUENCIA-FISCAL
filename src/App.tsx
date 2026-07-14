@@ -1204,8 +1204,13 @@ export default function App() {
       !(xml.chave && chavesCanceladas.has(xml.chave))
     );
 
-    const semProtocolo = saidas.filter(xml => !xml.protocolo);
     const foraDoPrazo = saidas.filter(isForaDoPrazo);
+
+    // Remove from semProtocolo any note that has an authorized (fora do prazo) twin
+    // with the same série+número — those were eventually regularized; the sem-protocolo
+    // version is just the raw contingency XML the client also uploaded.
+    const seriesNumerosForaDoPrazo = new Set(foraDoPrazo.map(x => `${x.serie}-${x.numero}`));
+    const semProtocolo = saidas.filter(xml => !xml.protocolo && !seriesNumerosForaDoPrazo.has(`${xml.serie}-${xml.numero}`));
 
     // Group by série+número; any group with more than one distinct chave is a duplicate number
     const bySerieNumero: Record<string, XmlData[]> = {};
