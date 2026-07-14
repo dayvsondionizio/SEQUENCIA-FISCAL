@@ -58,6 +58,7 @@ interface XmlData {
   valor?: string;
   natureza?: string;
   protocolo?: string;
+  dhRecbto?: string;
   nNFIni?: number;
   nNFFin?: number;
   fileName: string;
@@ -329,6 +330,7 @@ function parseXML(xmlText: string, fileName: string): XmlData {
         valor: getTextContent('vNF'),
         natureza: getTextContent('natOp'),
         protocolo: getTextContent('nProt'),
+        dhRecbto: getTextContent('dhRecbto') || undefined,
         tpNF,
         cfopValores,
         fileName,
@@ -338,6 +340,15 @@ function parseXML(xmlText: string, fileName: string): XmlData {
   }
   
   return { tipo: 'outro', fileName };
+}
+
+// Contingência autorizada fora do prazo: emitida em modo offline (tpEmis=9), tem protocolo
+// mas o SEFAZ só recebeu mais de 30 minutos após a emissão.
+function isForaDoPrazo(xml: XmlData): boolean {
+  if (!xml.isContingencia || !xml.protocolo || !xml.dhRecbto || !xml.data) return false;
+  const emi = new Date(xml.data).getTime();
+  const rec = new Date(xml.dhRecbto).getTime();
+  return !isNaN(emi) && !isNaN(rec) && (rec - emi) > 1_800_000;
 }
 
 function parseSped(text: string, fileName: string): SpedData | null {
@@ -1013,7 +1024,7 @@ export default function App() {
       ? xmlSaidasNfe.filter(x => { const aa = x.chave!.slice(2, 6); return aa >= iniAaMm && aa <= finAaMm; })
       : xmlSaidasNfe;
     const spedChavesSet = new Set(comChave.map(c => c.chave));
-    const xmlsNaoDeclarados = xmlsNoPeriodo.filter(x => !spedChavesSet.has(x.chave!));
+    const xmlsNaoDeclarados = xmlsNoPeriodo.filter(x => !spedChavesSet.has(x.chave!) && !!x.protocolo);
     const nomesMeses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
     const mesesFora = [...new Set(xmlsForaPeriodo.map(x => {
       const s = x.chave!.slice(2, 6);
@@ -1193,6 +1204,7 @@ export default function App() {
     );
 
     const semProtocolo = saidas.filter(xml => !xml.protocolo);
+    const foraDoPrazo = saidas.filter(isForaDoPrazo);
 
     // Group by série+número; any group with more than one distinct chave is a duplicate number
     const bySerieNumero: Record<string, XmlData[]> = {};
@@ -1203,7 +1215,7 @@ export default function App() {
     });
     const numeroDuplicado = Object.values(bySerieNumero).filter(group => group.length > 1);
 
-    return { semProtocolo, numeroDuplicado };
+    return { semProtocolo, foraDoPrazo, numeroDuplicado };
   }, [xmlList]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
@@ -1261,6 +1273,7 @@ export default function App() {
       if (filterNotaSituacao === 'Canceladas' && (!nota.isCancelada || nota.tipo === 'inutilizacao')) return false;
       if (filterNotaSituacao === 'Inutilizadas' && nota.tipo !== 'inutilizacao') return false;
       if (filterNotaSituacao === 'SemAutorizacao' && (nota.protocolo || nota.isCancelada || nota.tipo === 'inutilizacao')) return false;
+      if (filterNotaSituacao === 'ForaDoPrazo' && !isForaDoPrazo(nota)) return false;
       if (!query) return true;
 
       const buscaItem = () => {
@@ -3344,6 +3357,7 @@ export default function App() {
                       <option value="Canceladas">Somente canceladas</option>
                       <option value="Inutilizadas">Somente inutilizadas</option>
                       <option value="SemAutorizacao">Sem autorização</option>
+                      <option value="ForaDoPrazo">Autorizada fora do prazo</option>
                     </select>
                   </div>
                 </div>
@@ -3822,6 +3836,8 @@ export default function App() {
                                     <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 text-xs font-bold" title="Nota emitida com CFOP de entrada (devolução de venda, baixa de estoque, etc.) — não entra no faturamento.">Devolução/Entrada</span>
                                   ) : !nota.protocolo ? (
                                     <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-xs font-bold" title="Nota sem protocolo de autorização SEFAZ — não incluída no total válido">Sem Autorização</span>
+                                  ) : isForaDoPrazo(nota) ? (
+                                    <span className="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-xs font-bold" title={`Contingência autorizada fora do prazo — emissão: ${nota.data ? new Date(nota.data).toLocaleString('pt-BR') : '?'} · autorização: ${nota.dhRecbto ? new Date(nota.dhRecbto).toLocaleString('pt-BR') : '?'}`}>Fora do Prazo</span>
                                   ) : (
                                     <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold">Válida</span>
                                   )}
@@ -3898,7 +3914,7 @@ export default function App() {
                 </div>
               )}
 
-              {(notasAnomalias.semProtocolo.length > 0 || notasAnomalias.numeroDuplicado.length > 0) && (
+              {(notasAnomalias.semProtocolo.length > 0 || notasAnomalias.foraDoPrazo.length > 0 || notasAnomalias.numeroDuplicado.length > 0) && (
                 <div className="bg-amber-50 border border-amber-200 rounded-3xl p-6 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -3907,7 +3923,10 @@ export default function App() {
                         <div className="text-sm font-black text-amber-700 uppercase tracking-widest">Notas para Verificação</div>
                         <div className="text-xs text-amber-600 mt-0.5">
                           {notasAnomalias.semProtocolo.length > 0 && (
-                            <span>{notasAnomalias.semProtocolo.length} sem protocolo de autorização{notasAnomalias.numeroDuplicado.length > 0 ? ' · ' : ''}</span>
+                            <span>{notasAnomalias.semProtocolo.length} sem protocolo{(notasAnomalias.foraDoPrazo.length > 0 || notasAnomalias.numeroDuplicado.length > 0) ? ' · ' : ''}</span>
+                          )}
+                          {notasAnomalias.foraDoPrazo.length > 0 && (
+                            <span>{notasAnomalias.foraDoPrazo.length} autorizada(s) fora do prazo{notasAnomalias.numeroDuplicado.length > 0 ? ' · ' : ''}</span>
                           )}
                           {notasAnomalias.numeroDuplicado.length > 0 && (
                             <span>{notasAnomalias.numeroDuplicado.length} número(s) com chave duplicada</span>
@@ -3957,6 +3976,54 @@ export default function App() {
                                   <td colSpan={4} className="py-2 font-black text-amber-700 text-xs">Total excluído</td>
                                   <td className="py-2 text-right font-black text-amber-700">
                                     {formatarMoeda(notasAnomalias.semProtocolo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
+                                  </td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {notasAnomalias.foraDoPrazo.length > 0 && (
+                        <div>
+                          <div className="text-xs font-black text-orange-700 uppercase tracking-wider mb-2">
+                            Contingência Autorizada Fora do Prazo — nota emitida offline, SEFAZ autorizou mais de 30 min depois
+                          </div>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="text-left text-orange-600 font-bold border-b border-orange-200">
+                                  <th className="py-1.5 pr-3">Série</th>
+                                  <th className="py-1.5 pr-3">Nº</th>
+                                  <th className="py-1.5 pr-3">Emissão</th>
+                                  <th className="py-1.5 pr-3">Autorização</th>
+                                  <th className="py-1.5 text-right">Valor</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {notasAnomalias.foraDoPrazo.map((xml, i) => {
+                                  const emi = xml.data ? new Date(xml.data) : null;
+                                  const rec = xml.dhRecbto ? new Date(xml.dhRecbto) : null;
+                                  const diffMin = (emi && rec) ? Math.round((rec.getTime() - emi.getTime()) / 60_000) : null;
+                                  return (
+                                    <tr key={i} className="border-b border-orange-100 last:border-0">
+                                      <td className="py-1.5 pr-3 font-mono text-orange-800">{xml.serie}</td>
+                                      <td className="py-1.5 pr-3 font-mono text-orange-800">{xml.numero}</td>
+                                      <td className="py-1.5 pr-3 text-orange-700">{emi ? emi.toLocaleString('pt-BR') : '—'}</td>
+                                      <td className="py-1.5 pr-3 text-orange-700">
+                                        {rec ? rec.toLocaleString('pt-BR') : '—'}
+                                        {diffMin !== null && <span className="ml-1 text-orange-500 font-semibold">(+{diffMin < 60 ? `${diffMin}min` : `${Math.round(diffMin / 60)}h`})</span>}
+                                      </td>
+                                      <td className="py-1.5 text-right font-semibold text-orange-800">{formatarMoeda(parseFloat(xml.valor || '0') || 0)}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                              <tfoot>
+                                <tr>
+                                  <td colSpan={4} className="py-2 font-black text-orange-700 text-xs">Total (incluído no faturamento — nota está autorizada)</td>
+                                  <td className="py-2 text-right font-black text-orange-700">
+                                    {formatarMoeda(notasAnomalias.foraDoPrazo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                                   </td>
                                 </tr>
                               </tfoot>
