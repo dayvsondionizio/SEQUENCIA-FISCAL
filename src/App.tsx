@@ -1206,14 +1206,15 @@ export default function App() {
 
     const foraDoPrazo = saidas.filter(isForaDoPrazo);
 
-    // Remove from semProtocolo any note that has an authorized twin: match by chave
-    // (same raw XML content, just wrapped with protNFe) OR by série+número.
-    const chavesForaDoPrazo = new Set(foraDoPrazo.map(x => x.chave).filter(Boolean));
-    const seriesNumerosForaDoPrazo = new Set(foraDoPrazo.map(x => `${x.serie}-${x.numero}`));
+    // A sem-protocolo note is only truly problematic if no authorized version exists
+    // anywhere in the XML set (same chave OR same série+número with any nProt).
+    const saidasComProtocolo = saidas.filter(x => !!x.protocolo);
+    const chavesComProtocolo = new Set(saidasComProtocolo.map(x => x.chave).filter(Boolean));
+    const seriesNumerosComProtocolo = new Set(saidasComProtocolo.map(x => `${x.serie}-${x.numero}`));
     const semProtocoloRaw = saidas.filter(xml => !xml.protocolo);
     const semProtocolo = semProtocoloRaw.filter(xml =>
-      !(xml.chave && chavesForaDoPrazo.has(xml.chave)) &&
-      !seriesNumerosForaDoPrazo.has(`${xml.serie}-${xml.numero}`)
+      !(xml.chave && chavesComProtocolo.has(xml.chave)) &&
+      !seriesNumerosComProtocolo.has(`${xml.serie}-${xml.numero}`)
     );
     const semProtocoloAbatidas = semProtocoloRaw.length - semProtocolo.length;
 
