@@ -1206,11 +1206,16 @@ export default function App() {
 
     const foraDoPrazo = saidas.filter(isForaDoPrazo);
 
-    // Remove from semProtocolo any note that has an authorized (fora do prazo) twin
-    // with the same série+número — those were eventually regularized; the sem-protocolo
-    // version is just the raw contingency XML the client also uploaded.
+    // Remove from semProtocolo any note that has an authorized twin: match by chave
+    // (same raw XML content, just wrapped with protNFe) OR by série+número.
+    const chavesForaDoPrazo = new Set(foraDoPrazo.map(x => x.chave).filter(Boolean));
     const seriesNumerosForaDoPrazo = new Set(foraDoPrazo.map(x => `${x.serie}-${x.numero}`));
-    const semProtocolo = saidas.filter(xml => !xml.protocolo && !seriesNumerosForaDoPrazo.has(`${xml.serie}-${xml.numero}`));
+    const semProtocoloRaw = saidas.filter(xml => !xml.protocolo);
+    const semProtocolo = semProtocoloRaw.filter(xml =>
+      !(xml.chave && chavesForaDoPrazo.has(xml.chave)) &&
+      !seriesNumerosForaDoPrazo.has(`${xml.serie}-${xml.numero}`)
+    );
+    const semProtocoloAbatidas = semProtocoloRaw.length - semProtocolo.length;
 
     // Group by série+número; any group with more than one distinct chave is a duplicate number
     const bySerieNumero: Record<string, XmlData[]> = {};
@@ -1221,7 +1226,7 @@ export default function App() {
     });
     const numeroDuplicado = Object.values(bySerieNumero).filter(group => group.length > 1);
 
-    return { semProtocolo, foraDoPrazo, numeroDuplicado };
+    return { semProtocolo, semProtocoloAbatidas, foraDoPrazo, numeroDuplicado };
   }, [xmlList]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
@@ -3930,7 +3935,13 @@ export default function App() {
                         <div className="text-sm font-black text-amber-700 uppercase tracking-widest">Notas para Verificação</div>
                         <div className="text-xs text-amber-600 mt-0.5">
                           {notasAnomalias.semProtocolo.length > 0 && (
-                            <span>{notasAnomalias.semProtocolo.length} sem protocolo de autorização{notasAnomalias.numeroDuplicado.length > 0 ? ' · ' : ''}</span>
+                            <span>
+                              {notasAnomalias.semProtocolo.length} sem protocolo de autorização
+                              {notasAnomalias.semProtocoloAbatidas > 0 && (
+                                <span className="ml-1 text-emerald-600">(−{notasAnomalias.semProtocoloAbatidas} já regularizadas fora do prazo)</span>
+                              )}
+                              {notasAnomalias.numeroDuplicado.length > 0 ? ' · ' : ''}
+                            </span>
                           )}
                           {notasAnomalias.numeroDuplicado.length > 0 && (
                             <span>{notasAnomalias.numeroDuplicado.length} número(s) com chave duplicada</span>
