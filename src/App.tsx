@@ -351,12 +351,9 @@ function isForaDoPrazo(xml: XmlData): boolean {
   return !isNaN(emi) && !isNaN(rec) && (rec - emi) > 1_800_000;
 }
 
-// CFOPs de alerta: remessas, ativo imobilizado, industrialização e "outras saídas"
-// (5500-5999 e 6500-6999). Devoluções (52xx/53xx) e vendas (51xx/54xx/61xx/64xx) não são alertas.
+// CFOP 5929 não entra no faturamento contábil (baixa de estoque por doação).
 function isAlertCfop(cfop: string): boolean {
-  const n = parseInt(cfop, 10);
-  if (isNaN(n)) return false;
-  return (n >= 5500 && n <= 5999) || (n >= 6500 && n <= 6999);
+  return cfop === '5929';
 }
 
 function parseSped(text: string, fileName: string): SpedData | null {
