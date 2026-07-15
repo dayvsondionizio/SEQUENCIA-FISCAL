@@ -3830,7 +3830,7 @@ export default function App() {
               )}
 
               {/* Search results — opens here in the main area as soon as the sidebar search has a query/filter active */}
-              {(notaSearchQuery.trim() || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas') && (
+              {(notaSearchQuery.trim() || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas' || filterNotaCfop !== 'Todos') && (
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
                   <div className="overflow-x-auto overflow-y-auto max-h-[520px] custom-scrollbar">
                     {notasSaidaFiltradas.length === 0 ? (
@@ -3845,6 +3845,7 @@ export default function App() {
                             <th className="py-2 pr-4">Cliente</th>
                             <th className="py-2 pr-4">Data</th>
                             <th className="py-2 pr-4 text-right">Valor</th>
+                            <th className="py-2 pr-4">CFOP</th>
                             <th className="py-2 pr-4">Chave</th>
                             <th className="py-2 pr-4">Situação</th>
                             <th className="py-2 pr-4">DANFE</th>
@@ -3871,6 +3872,11 @@ export default function App() {
                                 <td className="py-2 pr-4 text-slate-700">{isInutilizacao ? '—' : (nota.destNome || '—')}</td>
                                 <td className="py-2 pr-4 text-slate-500">{nota.data ? nota.data.substring(0, 10).split('-').reverse().join('/') : '—'}</td>
                                 <td className="py-2 pr-4 text-right font-semibold text-slate-900">{isInutilizacao ? '—' : formatarMoeda(parseFloat(nota.valor || '0') || 0)}</td>
+                                <td className="py-2 pr-4 font-mono text-xs text-slate-600">
+                                  {isInutilizacao || !nota.cfopValores
+                                    ? '—'
+                                    : Object.keys(nota.cfopValores).sort().join(', ')}
+                                </td>
                                 <td className="py-2 pr-4 text-slate-400 font-mono text-xs">{isInutilizacao ? '—' : nota.chave}</td>
                                 <td className="py-2 pr-4">
                                   {isInutilizacao ? (
