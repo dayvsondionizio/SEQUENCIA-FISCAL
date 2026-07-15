@@ -1089,19 +1089,25 @@ export default function App() {
     );
     // Sem protocolo = contingência não regularizada — sem validade fiscal, fora do SPED
     // Canceladas = incluídas mas com COD_SIT 02 (chavesCanceladas passado à geração)
+    const mesFiltro = filterMes !== 'Todos' ? filterMes : null;
     const saidas = xmlList.filter(x =>
       x.tipo === 'nfe' && x.chave && x.protocolo &&
-      cleanCnpj(x.emitCnpj ?? '') === mainCnpj
+      cleanCnpj(x.emitCnpj ?? '') === mainCnpj &&
+      (!mesFiltro || getMonthYear(x.data) === mesFiltro)
     );
     const entradas = xmlList.filter(x =>
       x.tipo === 'nfe' && x.chave && x.protocolo &&
       cleanCnpj(x.destCnpj ?? '') === mainCnpj &&
-      cleanCnpj(x.emitCnpj ?? '') !== mainCnpj
+      cleanCnpj(x.emitCnpj ?? '') !== mainCnpj &&
+      (!mesFiltro || getMonthYear(x.data) === mesFiltro)
     );
-    const inutsParaSped = inutilizacoes.filter(i => cleanCnpj(i.cnpj ?? '') === mainCnpj);
+    const inutsParaSped = inutilizacoes.filter(i =>
+      cleanCnpj(i.cnpj ?? '') === mainCnpj &&
+      (!mesFiltro || getMonthYear(i.data) === mesFiltro)
+    );
     if (!saidas.length && !entradas.length) return null;
     return { saidas, entradas, chavesCanceladas, inutilizacoes: inutsParaSped, cnpj: analysis[0].cnpj, ie: analysis[0].ie, razaoSocial: analysis[0].razaoSocial };
-  }, [spedData, analysis, xmlList, inutilizacoes]);
+  }, [spedData, analysis, xmlList, inutilizacoes, filterMes]);
 
   const faturamentoTotal = useMemo(() => {
     // Identify the Main Client Company CNPJ (the most frequent overall)
@@ -1125,11 +1131,11 @@ export default function App() {
       .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0')
       .reduce((acc, xml) => {
         if (xml.chave && chavesCanceladas.has(xml.chave)) return acc;
-        // Notes without authorization protocol (contingência not regularized) are invalid
         if (!xml.protocolo) return acc;
+        if (filterMes !== 'Todos' && getMonthYear(xml.data) !== filterMes) return acc;
         return acc + (parseFloat(xml.valor || '0') || 0);
       }, 0);
-  }, [xmlList]);
+  }, [xmlList, filterMes]);
 
   // Breaks faturamentoTotal down by natureza da operação (CFOP), mirroring the
   // "Totais ICMS por Natureza" report from the fiscal system.
@@ -1154,6 +1160,7 @@ export default function App() {
       .forEach(xml => {
         if (xml.chave && chavesCanceladas.has(xml.chave)) return;
         if (!xml.protocolo) return;
+        if (filterMes !== 'Todos' && getMonthYear(xml.data) !== filterMes) return;
         const valorNota = parseFloat(xml.valor || '0') || 0;
         const itens: Record<string, number> = xml.cfopValores || {};
         const totalItens = Object.values(itens).reduce((s, v) => s + v, 0);
@@ -1177,7 +1184,7 @@ export default function App() {
         valor
       }))
       .sort((a, b) => a.cfop.localeCompare(b.cfop));
-  }, [xmlList]);
+  }, [xmlList, filterMes]);
 
   // Detects two classes of anomalies in saída notes:
   // 1. Notes without an authorization protocol (contingência not regularized with SEFAZ)
