@@ -945,6 +945,7 @@ export default function App() {
   const [showAnomalias, setShowAnomalias] = useState(false);
   const [showForaDoPrazo, setShowForaDoPrazo] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
+  const [showExportXmlMenu, setShowExportXmlMenu] = useState(false);
   const [exportPartes, setExportPartes] = useState(1);
   const [notaSearchQuery, setNotaSearchQuery] = useState('');
   const [notaSearchCampo, setNotaSearchCampo] = useState<'Numero' | 'Chave' | 'Cliente' | 'Item' | 'Data' | 'Valor'>('Numero');
@@ -1422,7 +1423,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterMes, inutilizacoes]);
 
-  const exportFilteredXmls = async () => {
+  const exportFilteredXmls = async (partes?: number) => {
     let filteredXmls = xmlList;
     if (filterMes !== 'Todos') {
       filteredXmls = xmlList.filter(xml => getMonthYear(xml.data) === filterMes);
@@ -1456,7 +1457,7 @@ export default function App() {
     }
 
     try {
-      const n = exportPartes;
+      const n = partes ?? exportPartes;
       const chunkSize = Math.ceil(allFiles.length / n);
 
       for (let i = 0; i < n; i++) {
@@ -4390,26 +4391,29 @@ export default function App() {
                     <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
-                <div className="flex items-center rounded-lg border border-emerald-200 overflow-hidden shadow-sm">
+                <div className="relative">
                   <button
-                    onClick={exportFilteredXmls}
-                    className="flex items-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 text-sm font-bold transition-all cursor-pointer border-r border-emerald-200"
+                    onClick={() => setShowExportXmlMenu(v => !v)}
+                    className="flex items-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer"
                   >
                     <Download className="w-4 h-4" />
                     Exportar XMLs ({filterMes === 'Todos' ? 'Todos' : filterMes})
                   </button>
-                  <div className="flex items-center bg-emerald-50">
-                    {([1, 2, 3] as const).map(n => (
-                      <button
-                        key={n}
-                        onClick={() => setExportPartes(n)}
-                        title={n === 1 ? '1 arquivo' : `Dividir em ${n} arquivos`}
-                        className={`px-2.5 py-2 text-xs font-black transition-colors border-r border-emerald-200 last:border-r-0 ${exportPartes === n ? 'bg-emerald-600 text-white' : 'text-emerald-600 hover:bg-emerald-100'}`}
-                      >
-                        {n}
-                      </button>
-                    ))}
-                  </div>
+                  {showExportXmlMenu && (
+                    <div className="absolute left-0 top-full mt-2 z-20 bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden w-52">
+                      <div className="px-4 py-2 text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100">Dividir em quantos arquivos?</div>
+                      {([1, 2, 3] as const).map(n => (
+                        <button
+                          key={n}
+                          onClick={() => { setExportPartes(n); setShowExportXmlMenu(false); exportFilteredXmls(n); }}
+                          className="w-full text-left px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 transition-colors flex items-center gap-2"
+                        >
+                          <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-black flex items-center justify-center">{n}</span>
+                          {n === 1 ? '1 arquivo (padrão)' : `${n} arquivos`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="relative">
                   <button
