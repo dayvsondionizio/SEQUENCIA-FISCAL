@@ -945,6 +945,7 @@ export default function App() {
   const [showAnomalias, setShowAnomalias] = useState(false);
   const [showForaDoPrazo, setShowForaDoPrazo] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
+  const [exportPartes, setExportPartes] = useState(1);
   const [notaSearchQuery, setNotaSearchQuery] = useState('');
   const [notaSearchCampo, setNotaSearchCampo] = useState<'Numero' | 'Chave' | 'Cliente' | 'Item' | 'Data' | 'Valor'>('Numero');
   const [filterNotaModelo, setFilterNotaModelo] = useState('Todos');
@@ -1427,42 +1428,52 @@ export default function App() {
       filteredXmls = xmlList.filter(xml => getMonthYear(xml.data) === filterMes);
     }
 
-    if (filteredXmls.length === 0) {
-      alert("Nenhum XML de nota fiscal encontrado para exportar.");
-      return;
-    }
-
-    const zip = new JSZip();
-    
-    filteredXmls.forEach(xml => {
-      const name = xml.fileName || `${xml.chave || xml.numero}.xml`;
-      const safeName = name.toLowerCase().endsWith('.xml') ? name : `${name}.xml`;
-      if (xml.rawXml) {
-        zip.file(safeName, xml.rawXml);
-      }
-    });
-
     let filteredInuts = inutilizacoes;
     if (filterMes !== 'Todos') {
       filteredInuts = inutilizacoes.filter(inut => getMonthYear(inut.data) === filterMes);
     }
-    
-    filteredInuts.forEach(inut => {
-      const name = inut.fileName || `inutilizacao_${inut.serie}_${inut.nNFIni}_${inut.nNFFin}.xml`;
+
+    type FileEntry = { name: string; content: string };
+    const allFiles: FileEntry[] = [];
+
+    filteredXmls.forEach(xml => {
+      if (!xml.rawXml) return;
+      const name = xml.fileName || `${xml.chave || xml.numero}.xml`;
       const safeName = name.toLowerCase().endsWith('.xml') ? name : `${name}.xml`;
-      if (inut.rawXml) {
-        zip.file(`inutilizacoes/${safeName}`, inut.rawXml);
-      }
+      allFiles.push({ name: safeName, content: xml.rawXml });
     });
 
+    filteredInuts.forEach(inut => {
+      if (!inut.rawXml) return;
+      const name = inut.fileName || `inutilizacao_${inut.serie}_${inut.nNFIni}_${inut.nNFFin}.xml`;
+      const safeName = name.toLowerCase().endsWith('.xml') ? name : `${name}.xml`;
+      allFiles.push({ name: `inutilizacoes/${safeName}`, content: inut.rawXml });
+    });
+
+    if (allFiles.length === 0) {
+      alert("Nenhum XML de nota fiscal encontrado para exportar.");
+      return;
+    }
+
     try {
-      const content = await zip.generateAsync({ type: 'blob' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(content);
-      link.download = nomeArquivoExport('xmls_filtrados', 'zip');
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const n = exportPartes;
+      const chunkSize = Math.ceil(allFiles.length / n);
+
+      for (let i = 0; i < n; i++) {
+        const chunk = allFiles.slice(i * chunkSize, (i + 1) * chunkSize);
+        if (chunk.length === 0) continue;
+        const zip = new JSZip();
+        chunk.forEach(f => zip.file(f.name, f.content));
+        const content = await zip.generateAsync({ type: 'blob' });
+        const suffix = n > 1 ? `_parte${i + 1}de${n}` : '';
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(content);
+        link.download = nomeArquivoExport(`xmls_filtrados${suffix}`, 'zip');
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        if (i < n - 1) await new Promise(resolve => setTimeout(resolve, 400));
+      }
     } catch (err) {
       console.error("Erro ao gerar arquivo ZIP:", err);
       alert("Erro ao exportar arquivos XML.");
@@ -4379,13 +4390,27 @@ export default function App() {
                     <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
-                <button
-                  onClick={exportFilteredXmls}
-                  className="flex items-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer"
-                >
-                  <Download className="w-4 h-4" />
-                  Exportar XMLs ({filterMes === 'Todos' ? 'Todos' : filterMes})
-                </button>
+                <div className="flex items-center rounded-lg border border-emerald-200 overflow-hidden shadow-sm">
+                  <button
+                    onClick={exportFilteredXmls}
+                    className="flex items-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 text-sm font-bold transition-all cursor-pointer border-r border-emerald-200"
+                  >
+                    <Download className="w-4 h-4" />
+                    Exportar XMLs ({filterMes === 'Todos' ? 'Todos' : filterMes})
+                  </button>
+                  <div className="flex items-center bg-emerald-50">
+                    {([1, 2, 3] as const).map(n => (
+                      <button
+                        key={n}
+                        onClick={() => setExportPartes(n)}
+                        title={n === 1 ? '1 arquivo' : `Dividir em ${n} arquivos`}
+                        className={`px-2.5 py-2 text-xs font-black transition-colors border-r border-emerald-200 last:border-r-0 ${exportPartes === n ? 'bg-emerald-600 text-white' : 'text-emerald-600 hover:bg-emerald-100'}`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="relative">
                   <button
                     onClick={() => setShowExportOptions(!showExportOptions)}
