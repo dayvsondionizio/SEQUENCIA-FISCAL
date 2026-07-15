@@ -351,13 +351,12 @@ function isForaDoPrazo(xml: XmlData): boolean {
   return !isNaN(emi) && !isNaN(rec) && (rec - emi) > 1_800_000;
 }
 
-// CFOPs de venda típica: 51xx, 54xx (com ST), 61xx (interestadual), 64xx (interestadual c/ ST).
-// Qualquer outro (5929, 5xxx fora do padrão, etc.) é alerta — não entra no faturamento contábil.
+// CFOPs de alerta: remessas, ativo imobilizado, industrialização e "outras saídas"
+// (5500-5999 e 6500-6999). Devoluções (52xx/53xx) e vendas (51xx/54xx/61xx/64xx) não são alertas.
 function isAlertCfop(cfop: string): boolean {
   const n = parseInt(cfop, 10);
   if (isNaN(n)) return false;
-  const hundreds = Math.floor(n / 100);
-  return ![51, 54, 61, 64].includes(hundreds);
+  return (n >= 5500 && n <= 5999) || (n >= 6500 && n <= 6999);
 }
 
 function parseSped(text: string, fileName: string): SpedData | null {
