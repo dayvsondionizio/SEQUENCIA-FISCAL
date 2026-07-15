@@ -351,6 +351,15 @@ function isForaDoPrazo(xml: XmlData): boolean {
   return !isNaN(emi) && !isNaN(rec) && (rec - emi) > 1_800_000;
 }
 
+// CFOPs de venda típica: 51xx, 54xx (com ST), 61xx (interestadual), 64xx (interestadual c/ ST).
+// Qualquer outro (5929, 5xxx fora do padrão, etc.) é alerta — não entra no faturamento contábil.
+function isAlertCfop(cfop: string): boolean {
+  const n = parseInt(cfop, 10);
+  if (isNaN(n)) return false;
+  const hundreds = Math.floor(n / 100);
+  return ![51, 54, 61, 64].includes(hundreds);
+}
+
 function parseSped(text: string, fileName: string): SpedData | null {
   const lines = text.split(/\r?\n/);
   if (!lines[0]?.startsWith('|0000|')) return null;
@@ -3872,10 +3881,14 @@ export default function App() {
                                 <td className="py-2 pr-4 text-slate-700">{isInutilizacao ? '—' : (nota.destNome || '—')}</td>
                                 <td className="py-2 pr-4 text-slate-500">{nota.data ? nota.data.substring(0, 10).split('-').reverse().join('/') : '—'}</td>
                                 <td className="py-2 pr-4 text-right font-semibold text-slate-900">{isInutilizacao ? '—' : formatarMoeda(parseFloat(nota.valor || '0') || 0)}</td>
-                                <td className="py-2 pr-4 font-mono text-xs text-slate-600">
+                                <td className="py-2 pr-4 font-mono text-xs">
                                   {isInutilizacao || !nota.cfopValores
-                                    ? '—'
-                                    : Object.keys(nota.cfopValores).sort().join(', ')}
+                                    ? <span className="text-slate-400">—</span>
+                                    : Object.keys(nota.cfopValores).sort().map((c, i) => (
+                                        <span key={c} className={isAlertCfop(c) ? 'text-red-600 font-bold' : 'text-slate-600'}>
+                                          {i > 0 ? ', ' : ''}{c}
+                                        </span>
+                                      ))}
                                 </td>
                                 <td className="py-2 pr-4 text-slate-400 font-mono text-xs">{isInutilizacao ? '—' : nota.chave}</td>
                                 <td className="py-2 pr-4">
@@ -3965,13 +3978,16 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {breakdownPorCfop.map(({ cfop, descricao, valor }) => (
-                          <tr key={cfop} className="border-b border-slate-100 last:border-0">
-                            <td className="py-2 pr-4 font-mono text-slate-500">{cfop}</td>
-                            <td className="py-2 pr-4 text-slate-700">{descricao}</td>
-                            <td className="py-2 pr-4 text-right font-semibold text-slate-900">{formatarMoeda(valor)}</td>
-                          </tr>
-                        ))}
+                        {breakdownPorCfop.map(({ cfop, descricao, valor }) => {
+                          const alerta = isAlertCfop(cfop);
+                          return (
+                            <tr key={cfop} className="border-b border-slate-100 last:border-0">
+                              <td className={`py-2 pr-4 font-mono font-bold ${alerta ? 'text-red-600' : 'text-slate-500'}`}>{cfop}</td>
+                              <td className={`py-2 pr-4 ${alerta ? 'text-red-600 font-semibold' : 'text-slate-700'}`}>{descricao}</td>
+                              <td className={`py-2 pr-4 text-right font-semibold ${alerta ? 'text-red-600' : 'text-slate-900'}`}>{formatarMoeda(valor)}</td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                       <tfoot>
                         <tr>
