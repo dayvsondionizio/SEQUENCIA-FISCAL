@@ -940,6 +940,7 @@ export default function App() {
   const [notaSearchCampo, setNotaSearchCampo] = useState<'Numero' | 'Chave' | 'Cliente' | 'Item' | 'Data' | 'Valor'>('Numero');
   const [filterNotaModelo, setFilterNotaModelo] = useState('Todos');
   const [filterNotaSituacao, setFilterNotaSituacao] = useState('Todas');
+  const [filterNotaCfop, setFilterNotaCfop] = useState('Todos');
   const [downloadingDanfeChave, setDownloadingDanfeChave] = useState<string | null>(null);
   const [notasSelecionadas, setNotasSelecionadas] = useState<Set<string>>(new Set());
   const [showSelecionadas, setShowSelecionadas] = useState(false);
@@ -1281,9 +1282,17 @@ export default function App() {
     return Array.from(new Set(notasSaida.map(n => n.modelo).filter((m): m is string => !!m))).sort();
   }, [notasSaida]);
 
+  const cfopsDisponiveis = useMemo(() => {
+    const cfopSet = new Set<string>();
+    notasSaida.forEach(n => {
+      if (n.cfopValores) Object.keys(n.cfopValores).forEach(c => cfopSet.add(c));
+    });
+    return Array.from(cfopSet).sort();
+  }, [notasSaida]);
+
   const notasSaidaFiltradas = useMemo(() => {
     const query = notaSearchQuery.trim().toLowerCase();
-    const temFiltroAtivo = query || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas';
+    const temFiltroAtivo = query || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas' || filterNotaCfop !== 'Todos';
     if (!temFiltroAtivo) return [];
 
     return notasSaida.filter(nota => {
@@ -1293,6 +1302,7 @@ export default function App() {
       if (filterNotaSituacao === 'Inutilizadas' && nota.tipo !== 'inutilizacao') return false;
       if (filterNotaSituacao === 'SemAutorizacao' && (nota.protocolo || nota.isCancelada || nota.tipo === 'inutilizacao')) return false;
       if (filterNotaSituacao === 'ForaDoPrazo' && !isForaDoPrazo(nota)) return false;
+      if (filterNotaCfop !== 'Todos' && !(nota.cfopValores && filterNotaCfop in nota.cfopValores)) return false;
       if (!query) return true;
 
       const buscaItem = () => {
@@ -1311,7 +1321,7 @@ export default function App() {
       if (notaSearchCampo === 'Item') return buscaItem();
       return false;
     });
-  }, [notasSaida, notaSearchQuery, notaSearchCampo, filterNotaModelo, filterNotaSituacao]);
+  }, [notasSaida, notaSearchQuery, notaSearchCampo, filterNotaModelo, filterNotaSituacao, filterNotaCfop]);
 
   const periodoAnalise = useMemo(() => {
     // Identify the Main Client Company CNPJ (the most frequent overall)
@@ -3386,6 +3396,18 @@ export default function App() {
                       <option value="SemAutorizacao">Sem autorização</option>
                       <option value="ForaDoPrazo">Autorizada fora do prazo</option>
                     </select>
+                    {cfopsDisponiveis.length > 0 && (
+                      <select
+                        value={filterNotaCfop}
+                        onChange={(e) => setFilterNotaCfop(e.target.value)}
+                        className="px-3 py-2.5 rounded-2xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      >
+                        <option value="Todos">Todos os CFOPs</option>
+                        {cfopsDisponiveis.map(cfop => (
+                          <option key={cfop} value={cfop}>{cfop}</option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                 </div>
 
