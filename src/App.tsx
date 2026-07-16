@@ -2045,6 +2045,7 @@ export default function App() {
 
   const [wasmBinary, setWasmBinary] = useState<ArrayBuffer | null>(null);
   const [extractionStatus, setExtractionStatus] = useState<string | null>(null);
+  const [extractionErrors, setExtractionErrors] = useState<string[]>([]);
 
   const loadWasm = async () => {
     if (wasmBinary) return wasmBinary;
@@ -2202,7 +2203,11 @@ export default function App() {
             }
           }
           return;
-        } catch (e) { console.error('Erro ZIP:', e); return; }
+        } catch (e) {
+          console.error('Erro ZIP:', e);
+          setExtractionErrors(prev => [...prev, `${currentPath} — falha ao ler ZIP: ${e instanceof Error ? e.message : String(e)}`]);
+          return;
+        }
       }
 
       if (type === 'rar' || type === 'unknown') {
@@ -2303,7 +2308,11 @@ export default function App() {
               }
             }
           }
-        } catch (rarErr) { console.error('Erro RAR final:', rarErr); }
+        } catch (rarErr) {
+          console.error('Erro RAR final:', rarErr);
+          const msg = rarErr instanceof Error ? rarErr.message : String(rarErr);
+          setExtractionErrors(prev => [...prev, `${currentPath} — parou no meio da extração (${msg}). Pode haver notas faltando desse arquivo — geralmente por RAR muito grande/aninhado consumindo toda a memória disponível.`]);
+        }
         setExtractionStatus(null);
       }
     };
@@ -2713,6 +2722,7 @@ export default function App() {
     setXmlList([]);
     setInutilizacoes([]);
     setOtherXmlsList([]);
+    setExtractionErrors([]);
     setStats({
       totalFiles: 0,
       totalXmls: 0,
@@ -3106,6 +3116,35 @@ export default function App() {
       </header>
 
       <main className="max-w-[1650px] mx-auto p-6 lg:p-8 no-print flex-1 w-full">
+        {extractionErrors.length > 0 && (
+          <div className="bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-800 border-l-4 border-l-rose-500 rounded-2xl p-5 mb-6 shadow-sm">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold text-rose-700 dark:text-rose-300">
+                  {extractionErrors.length} arquivo(s) não puderam ser lidos completamente
+                </div>
+                <div className="text-xs text-rose-600 dark:text-rose-400 mt-0.5 mb-2">
+                  Pode haver notas fiscais faltando na análise abaixo por causa disso. Peça ao cliente para reenviar esses arquivos, de preferência divididos em partes menores (evite RAR com outros RARs aninhados dentro).
+                </div>
+                <ul className="space-y-1">
+                  {extractionErrors.map((err, i) => (
+                    <li key={i} className="text-xs font-mono text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950 rounded-lg px-3 py-2 break-words">
+                      {err}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <button
+                onClick={() => setExtractionErrors([])}
+                className="text-rose-400 hover:text-rose-600 shrink-0"
+                title="Dispensar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
         <AnimatePresence mode="wait">
           {!analysis ? (
             <motion.div 
