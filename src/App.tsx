@@ -189,7 +189,7 @@ function parseXML(xmlText: string, fileName: string): XmlData {
   
   const getTextContent = (tagName: string) => {
     const element = doc.getElementsByTagName(tagName)[0];
-    return element ? element.textContent : '';
+    return element ? (element.textContent || '').trim() : '';
   };
 
   const getAllTextContent = (tagName: string) => {
@@ -211,9 +211,9 @@ function parseXML(xmlText: string, fileName: string): XmlData {
   // Check for Events (like Cancellation)
   const isEvento = doc.getElementsByTagName('procEventoNFe').length > 0 || doc.getElementsByTagName('eventoNFe').length > 0;
   if (isEvento) {
-    // tpEvento: 110111 = Cancelamento; outros = carta de correção, etc.
+    // tpEvento: 110111 = Cancelamento; 110112 = Cancelamento por Substituição; outros = carta de correção, etc.
     const tpEvento = getTextContent('tpEvento');
-    const isCancelamentoEvento = tpEvento === '110111';
+    const isCancelamentoEvento = tpEvento === '110111' || tpEvento === '110112';
     return {
       tipo: 'evento',
       subTipo: tpEvento || descEventos[0] || 'Evento',
@@ -225,7 +225,21 @@ function parseXML(xmlText: string, fileName: string): XmlData {
     };
   }
 
-  // Check for Consultation results
+  // Old cancellation format (procCancNFe): pre-evento NF-e systems
+  const isProcCancNFe = doc.getElementsByTagName('procCancNFe').length > 0;
+  if (isProcCancNFe) {
+    return {
+      tipo: 'evento',
+      subTipo: '110111',
+      isCancelamento: true,
+      cnpj: getTextContent('CNPJ'),
+      chave: getTextContent('chNFe'),
+      fileName,
+      rawXml: xmlText
+    };
+  }
+
+  // Check for Consultation results (e.g. retConsSitNFe downloaded from SEFAZ portal)
   const isConsulta = doc.getElementsByTagName('retConsSitNFe').length > 0;
   if (isConsulta) {
     return {
@@ -1092,7 +1106,7 @@ export default function App() {
     const mainCnpj = cleanCnpj(analysis[0].cnpj);
     const chavesCanceladas = new Set<string>(
       xmlList
-        .filter(x => x.tipo === 'evento' && x.isCancelamento && x.chave)
+        .filter(x => (x.tipo === 'evento' || x.tipo === 'consulta') && x.isCancelamento && x.chave)
         .map(x => x.chave!)
     );
     // Sem protocolo = contingência não regularizada — sem validade fiscal, fora do SPED
@@ -1131,7 +1145,7 @@ export default function App() {
     // Build a set of note keys that have a genuine cancellation event (tpEvento === '110111')
     const chavesCanceladas = new Set<string>(
       xmlList
-        .filter(xml => xml.tipo === 'evento' && xml.isCancelamento && xml.chave)
+        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
         .map(xml => xml.chave!)
     );
 
@@ -1158,7 +1172,7 @@ export default function App() {
 
     const chavesCanceladas = new Set<string>(
       xmlList
-        .filter(xml => xml.tipo === 'evento' && xml.isCancelamento && xml.chave)
+        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
         .map(xml => xml.chave!)
     );
 
@@ -1208,7 +1222,7 @@ export default function App() {
 
     const chavesCanceladas = new Set<string>(
       xmlList
-        .filter(xml => xml.tipo === 'evento' && xml.isCancelamento && xml.chave)
+        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
         .map(xml => xml.chave!)
     );
 
@@ -1259,7 +1273,7 @@ export default function App() {
 
     const chavesCanceladas = new Set<string>(
       xmlList
-        .filter(xml => xml.tipo === 'evento' && xml.isCancelamento && xml.chave)
+        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
         .map(xml => xml.chave!)
     );
 
