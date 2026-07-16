@@ -3895,12 +3895,12 @@ export default function App() {
                     </button>
                   </div>
                   {showSelecionadas && (
-                    <div className="mt-3 pt-3 border-t border-slate-100 max-h-64 overflow-y-auto custom-scrollbar space-y-1.5">
+                    <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 max-h-64 overflow-y-auto custom-scrollbar space-y-1.5">
                       {notasSaida.filter(n => n.chave && notasSelecionadas.has(n.chave)).map(nota => (
-                        <div key={nota.chave} className="flex items-center justify-between gap-3 text-xs bg-slate-50 rounded-lg px-3 py-2">
-                          <span className="font-semibold text-slate-900">Nº {nota.numero}</span>
-                          <span className="text-slate-500 truncate flex-1">{nota.destNome || '—'}</span>
-                          <span className="font-semibold text-slate-700">{formatarMoeda(parseFloat(nota.valor || '0') || 0)}</span>
+                        <div key={nota.chave} className="flex items-center justify-between gap-3 text-xs bg-slate-50 dark:bg-slate-800 rounded-lg px-3 py-2">
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">Nº {nota.numero}</span>
+                          <span className="text-slate-500 dark:text-slate-400 truncate flex-1">{nota.destNome || '—'}</span>
+                          <span className="font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(parseFloat(nota.valor || '0') || 0)}</span>
                           <button
                             onClick={() => toggleSelecaoNota(nota.chave!)}
                             className="text-slate-400 hover:text-rose-600 transition-all shrink-0"
@@ -3917,14 +3917,14 @@ export default function App() {
 
               {/* Search results — opens here in the main area as soon as the sidebar search has a query/filter active */}
               {(notaSearchQuery.trim() || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas' || filterNotaCfop !== 'Todos') && (
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm">
                   <div className="overflow-x-auto overflow-y-auto max-h-[520px] custom-scrollbar">
                     {notasSaidaFiltradas.length === 0 ? (
-                      <p className="text-sm text-slate-400 py-4 text-center">Nenhuma nota encontrada com os filtros atuais.</p>
+                      <p className="text-sm text-slate-400 dark:text-slate-500 py-4 text-center">Nenhuma nota encontrada com os filtros atuais.</p>
                     ) : (
                       <table className="w-full text-sm">
-                        <thead className="sticky top-0 bg-white z-10">
-                          <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                        <thead className="sticky top-0 bg-white dark:bg-slate-900 z-10">
+                          <tr className="text-left text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider border-b border-slate-200 dark:border-slate-700">
                             <th className="py-2 pr-2 w-8"></th>
                             <th className="py-2 pr-4">Número</th>
                             <th className="py-2 pr-4">Série/Modelo</th>
@@ -3942,7 +3942,7 @@ export default function App() {
                             const isInutilizacao = nota.tipo === 'inutilizacao';
                             const podeSelecionar = !isInutilizacao && !!nota.chave && !!nota.rawXml;
                             return (
-                              <tr key={nota.chave || `${nota.cnpj}-${nota.modelo}-${nota.serie}-${nota.nNFIni}-${idx}`} className="border-b border-slate-100 last:border-0">
+                              <tr key={nota.chave || `${nota.cnpj}-${nota.modelo}-${nota.serie}-${nota.nNFIni}-${idx}`} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
                                 <td className="py-2 pr-2">
                                   {podeSelecionar && (
                                     <input
@@ -3953,38 +3953,38 @@ export default function App() {
                                     />
                                   )}
                                 </td>
-                                <td className="py-2 pr-4 font-semibold text-slate-900">{nota.numero}</td>
-                                <td className="py-2 pr-4 text-slate-500">{nota.serie}/{nota.modelo}</td>
-                                <td className="py-2 pr-4 text-slate-700">{isInutilizacao ? '—' : (nota.destNome || '—')}</td>
-                                <td className="py-2 pr-4 text-slate-500">{nota.data ? nota.data.substring(0, 10).split('-').reverse().join('/') : '—'}</td>
-                                <td className="py-2 pr-4 text-right font-semibold text-slate-900">{isInutilizacao ? '—' : formatarMoeda(parseFloat(nota.valor || '0') || 0)}</td>
+                                <td className="py-2 pr-4 font-semibold text-slate-900 dark:text-slate-100">{nota.numero}</td>
+                                <td className="py-2 pr-4 text-slate-500 dark:text-slate-400">{nota.serie}/{nota.modelo}</td>
+                                <td className="py-2 pr-4 text-slate-700 dark:text-slate-300">{isInutilizacao ? '—' : (nota.destNome || '—')}</td>
+                                <td className="py-2 pr-4 text-slate-500 dark:text-slate-400">{nota.data ? nota.data.substring(0, 10).split('-').reverse().join('/') : '—'}</td>
+                                <td className="py-2 pr-4 text-right font-semibold text-slate-900 dark:text-slate-100">{isInutilizacao ? '—' : formatarMoeda(parseFloat(nota.valor || '0') || 0)}</td>
                                 <td className="py-2 pr-4 font-mono text-xs">
                                   {isInutilizacao || !nota.cfopValores
-                                    ? <span className="text-slate-400">—</span>
+                                    ? <span className="text-slate-400 dark:text-slate-500">—</span>
                                     : Object.keys(nota.cfopValores).sort().map((c, i) => (
-                                        <span key={c} className={isAlertCfop(c) ? 'text-red-600 font-bold' : 'text-slate-600'}>
+                                        <span key={c} className={isAlertCfop(c) ? 'text-red-600 dark:text-red-400 font-bold' : 'text-slate-600 dark:text-slate-400'}>
                                           {i > 0 ? ', ' : ''}{c}
                                         </span>
                                       ))}
                                 </td>
-                                <td className="py-2 pr-4 text-slate-400 font-mono text-xs">{isInutilizacao ? '—' : nota.chave}</td>
+                                <td className="py-2 pr-4 text-slate-400 dark:text-slate-500 font-mono text-xs">{isInutilizacao ? '—' : nota.chave}</td>
                                 <td className="py-2 pr-4">
                                   {isInutilizacao ? (
                                     nota.origemManual ? (
-                                      <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-bold">Inutilizada (Manual)</span>
+                                      <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-bold">Inutilizada (Manual)</span>
                                     ) : (
-                                      <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 text-xs font-bold">Inutilizada (XML)</span>
+                                      <span className="px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-300 text-xs font-bold">Inutilizada (XML)</span>
                                     )
                                   ) : nota.isCancelada ? (
-                                    <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-xs font-bold">Cancelada</span>
+                                    <span className="px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950 text-rose-600 dark:text-rose-300 text-xs font-bold">Cancelada</span>
                                   ) : nota.isEntradaPropria ? (
-                                    <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 text-xs font-bold" title="Nota emitida com CFOP de entrada (devolução de venda, baixa de estoque, etc.) — não entra no faturamento.">Devolução/Entrada</span>
+                                    <span className="px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-300 text-xs font-bold" title="Nota emitida com CFOP de entrada (devolução de venda, baixa de estoque, etc.) — não entra no faturamento.">Devolução/Entrada</span>
                                   ) : !nota.protocolo ? (
-                                    <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-xs font-bold" title="Nota sem protocolo de autorização SEFAZ — não incluída no total válido">Sem Autorização</span>
+                                    <span className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 text-xs font-bold" title="Nota sem protocolo de autorização SEFAZ — não incluída no total válido">Sem Autorização</span>
                                   ) : isForaDoPrazo(nota) ? (
-                                    <span className="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-xs font-bold" title={`Contingência autorizada fora do prazo — emissão: ${nota.data ? new Date(nota.data).toLocaleString('pt-BR') : '?'} · autorização: ${nota.dhRecbto ? new Date(nota.dhRecbto).toLocaleString('pt-BR') : '?'}`}>Fora do Prazo</span>
+                                    <span className="px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300 text-xs font-bold" title={`Contingência autorizada fora do prazo — emissão: ${nota.data ? new Date(nota.data).toLocaleString('pt-BR') : '?'} · autorização: ${nota.dhRecbto ? new Date(nota.dhRecbto).toLocaleString('pt-BR') : '?'}`}>Fora do Prazo</span>
                                   ) : (
-                                    <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold">Válida</span>
+                                    <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-300 text-xs font-bold">Válida</span>
                                   )}
                                 </td>
                                 <td className="py-2 pr-4">
@@ -4192,19 +4192,19 @@ export default function App() {
                       <span className="text-slate-400 text-xl">🚫</span>
                       <div>
                         <div className="flex items-baseline gap-3">
-                          <div className="text-sm font-bold text-slate-600 tracking-wide">Sem Autorização</div>
-                          <div className="text-sm font-bold text-slate-700">
+                          <div className="text-sm font-bold text-slate-600 dark:text-slate-300 tracking-wide">Sem Autorização</div>
+                          <div className="text-sm font-bold text-slate-700 dark:text-slate-200">
                             {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                           </div>
                         </div>
-                        <div className="text-xs text-slate-500 mt-0.5">
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                           {notasAnomalias.semAutorizacaoNaoContingencia.length} nota(s) sem protocolo SEFAZ e sem flag de contingência — excluídas do total válido
                         </div>
                       </div>
                     </div>
                     <button
                       onClick={() => setShowSemAutorizacao(!showSemAutorizacao)}
-                      className="text-xs font-bold text-slate-500 hover:text-slate-700 underline no-print"
+                      className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
                     >
                       {showSemAutorizacao ? 'Ocultar' : 'Ver detalhes'}
                     </button>
@@ -4212,13 +4212,13 @@ export default function App() {
 
                   {showSemAutorizacao && (
                     <div>
-                      <div className="text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
+                      <div className="text-xs font-black text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-2">
                         Emitidas sem autorização SEFAZ — excluídas do total válido
                       </div>
                       <div className="overflow-x-auto overflow-y-auto max-h-72">
                         <table className="w-full text-xs">
-                          <thead className="sticky top-0 bg-slate-50">
-                            <tr className="text-left text-slate-500 font-bold border-b border-slate-200">
+                          <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
+                            <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
                               <th className="py-1.5 pr-3">Série</th>
                               <th className="py-1.5 pr-3">Nº</th>
                               <th className="py-1.5 pr-3">Data</th>
@@ -4228,15 +4228,15 @@ export default function App() {
                           </thead>
                           <tbody>
                             {notasAnomalias.semAutorizacaoNaoContingencia.map((xml, i) => (
-                              <tr key={i} className="border-b border-slate-100 last:border-0">
-                                <td className="py-1.5 pr-3 font-mono text-slate-700">{xml.serie}</td>
-                                <td className="py-1.5 pr-3 font-mono text-slate-700">{xml.numero}</td>
-                                <td className="py-1.5 pr-3 text-slate-600">{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
-                                <td className="py-1.5 pr-3 font-mono text-slate-500 text-[10px] truncate max-w-[180px]" title={xml.chave}>{xml.chave || '—'}</td>
-                                <td className="py-1.5 text-right font-semibold text-slate-700">
+                              <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{xml.serie}</td>
+                                <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{xml.numero}</td>
+                                <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-400 text-[10px] truncate max-w-[180px]" title={xml.chave}>{xml.chave || '—'}</td>
+                                <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300">
                                   <div>{formatarMoeda(parseFloat(xml.valor || '0') || 0)}</div>
                                   {xml.temInutilizacao && (
-                                    <div className="mt-0.5 text-[10px] font-bold text-orange-600 bg-orange-100 rounded px-1.5 py-0.5 text-right whitespace-nowrap">
+                                    <div className="mt-0.5 text-[10px] font-bold text-orange-600 dark:text-orange-300 bg-orange-100 dark:bg-orange-950 rounded px-1.5 py-0.5 text-right whitespace-nowrap">
                                       ⚠ Série/Nº inutilizado
                                     </div>
                                   )}
@@ -4246,8 +4246,8 @@ export default function App() {
                           </tbody>
                           <tfoot>
                             <tr>
-                              <td colSpan={4} className="py-2 font-black text-slate-600 text-xs">Total excluído</td>
-                              <td className="py-2 text-right font-black text-slate-700">
+                              <td colSpan={4} className="py-2 font-black text-slate-600 dark:text-slate-300 text-xs">Total excluído</td>
+                              <td className="py-2 text-right font-black text-slate-700 dark:text-slate-200">
                                 {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                               </td>
                             </tr>
@@ -4255,7 +4255,7 @@ export default function App() {
                         </table>
                       </div>
                       {notasAnomalias.semAutorizacaoNaoContingencia.some(x => x.temInutilizacao) && (
-                        <div className="mt-3 text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded-xl px-3 py-2">
+                        <div className="mt-3 text-xs text-orange-700 dark:text-orange-300 bg-orange-50 dark:bg-orange-950 border border-orange-200 dark:border-orange-800 rounded-xl px-3 py-2">
                           <span className="font-bold">⚠ Atenção:</span> uma ou mais notas acima têm o mesmo série/número de uma inutilização registrada. Verifique se a numeração foi reaproveitada indevidamente.
                         </div>
                       )}
@@ -4809,32 +4809,32 @@ export default function App() {
                     </div>
 
                     {expandedIdx === idx && (
-                      <motion.div 
+                      <motion.div
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: 'auto', opacity: 1 }}
-                        className="border-t border-slate-100 bg-slate-50/50 p-8 space-y-6"
+                        className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 p-8 space-y-6"
                       >
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                          <div className="bg-white p-4 rounded-xl border border-slate-200">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Menor Número</div>
-                            <div className="text-lg font-bold text-slate-900">{serie.min}</div>
+                          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                            <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Menor Número</div>
+                            <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.min}</div>
                           </div>
-                          <div className="bg-white p-4 rounded-xl border border-slate-200">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Maior Número</div>
-                            <div className="text-lg font-bold text-slate-900">{serie.max}</div>
+                          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                            <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Maior Número</div>
+                            <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.max}</div>
                           </div>
-                          <div className="bg-white p-4 rounded-xl border border-slate-200">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Esperados</div>
-                            <div className="text-lg font-bold text-slate-900">{serie.esperados}</div>
+                          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                            <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Esperados</div>
+                            <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.esperados}</div>
                           </div>
-                          <div className="bg-white p-4 rounded-xl border border-slate-200">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Situação</div>
-                            <div className="text-lg font-bold text-slate-900">{serie.situacao}</div>
+                          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                            <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Situação</div>
+                            <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.situacao}</div>
                           </div>
                         </div>
 
                         {serie.faltantesInutilizados.length > 0 && (
-                          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-emerald-800 text-sm space-y-2">
+                          <div className="bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 rounded-xl p-4 text-emerald-800 dark:text-emerald-200 text-sm space-y-2">
                             <div className="font-bold flex items-center gap-2">
                               <Check className="w-4 h-4" />
                               Inutilizações Identificadas ({serie.faltantesInutilizados.length})
@@ -4847,8 +4847,8 @@ export default function App() {
                                     <div>Da XML: {formatarFaixas(agruparFaixas(doXml))}</div>
                                   )}
                                   {serie.faltantesInutilizadosManual.length > 0 && (
-                                    <div className="flex items-start gap-2 bg-white/60 border border-emerald-300 rounded-lg p-2 no-print">
-                                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                                    <div className="flex items-start gap-2 bg-white/60 dark:bg-slate-900/60 border border-emerald-300 dark:border-emerald-700 rounded-lg p-2 no-print">
+                                      <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
                                       <span>
                                         <strong>Confirmadas manualmente, sem XML ({serie.faltantesInutilizadosManual.length}):</strong> {formatarFaixas(agruparFaixas(serie.faltantesInutilizadosManual))}
                                       </span>
@@ -4861,9 +4861,9 @@ export default function App() {
                         )}
 
                         {serie.cancelados && serie.cancelados.length > 0 && (
-                          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-800 text-sm">
+                          <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-xl p-4 text-amber-800 dark:text-amber-200 text-sm">
                             <div className="font-bold flex items-center gap-2 mb-1">
-                              <AlertCircle className="w-4 h-4 text-amber-600" />
+                              <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                               Cancelamentos Identificados ({serie.cancelados.length})
                             </div>
                             Números: {formatarFaixas(agruparFaixas(serie.cancelados))}
@@ -4871,8 +4871,8 @@ export default function App() {
                         )}
 
                         {serie.faltantes.length === 0 && serie.todasInutilizacoes.length > 0 && (
-                          <div className="bg-slate-100 border border-slate-200 rounded-xl p-4 text-slate-600 text-sm">
-                            <div className="font-bold flex items-center gap-2 mb-1 text-slate-700">
+                          <div className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-slate-600 dark:text-slate-300 text-sm">
+                            <div className="font-bold flex items-center gap-2 mb-1 text-slate-700 dark:text-slate-200">
                               <FileSearch className="w-4 h-4" />
                               Inutilizações Registradas nessa Série ({serie.todasInutilizacoes.length})
                             </div>
@@ -4881,7 +4881,7 @@ export default function App() {
                         )}
 
                         {serie.faltantes.length > 0 && (
-                          <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-rose-800 text-sm">
+                          <div className="bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 rounded-xl p-4 text-rose-800 dark:text-rose-200 text-sm">
                             <div className="font-bold flex items-center gap-2 mb-1">
                               <AlertCircle className="w-4 h-4" />
                               Números Ausentes ({serie.faltantes.length})
@@ -4890,7 +4890,7 @@ export default function App() {
                           </div>
                         )}
 
-                        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-blue-800 text-sm">
+                        <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-xl p-4 text-blue-800 dark:text-blue-200 text-sm">
                           <div className="font-bold flex items-center gap-2 mb-1">
                             <Search className="w-4 h-4" />
                             Verificação de Abrangência
