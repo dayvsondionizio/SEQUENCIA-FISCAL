@@ -953,6 +953,7 @@ export default function App() {
   const [showDaysDetail, setShowDaysDetail] = useState(false);
   const [showCfopBreakdown, setShowCfopBreakdown] = useState(false);
   const [showAnomalias, setShowAnomalias] = useState(false);
+  const [showSemAutorizacao, setShowSemAutorizacao] = useState(false);
   const [showForaDoPrazo, setShowForaDoPrazo] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
   const [showExportXmlMenu, setShowExportXmlMenu] = useState(false);
@@ -1256,8 +1257,36 @@ export default function App() {
     });
     const numeroDuplicado = Object.values(bySerieNumero).filter(group => group.length > 1);
 
-    return { semProtocolo, semProtocoloAbatidas, foraDoPrazo, numeroDuplicado };
-  }, [xmlList]);
+    // Notas sem autorização que NÃO são contingência offline (tpEmis != 9):
+    // rejeitadas, timeout ou XML sem nProt por outro motivo.
+    const semAutorizacaoNaoContingencia = saidas.filter(xml =>
+      !xml.isContingencia && !xml.protocolo &&
+      !(xml.chave && chavesComProtocolo.has(xml.chave)) &&
+      !seriesNumerosComProtocolo.has(`${xml.serie}-${xml.numero}`)
+    );
+
+    // Cross-reference com inutilizações: se o mesmo série+número foi inutilizado,
+    // o analista precisa saber — pode indicar numeração reaproveitada indevidamente.
+    const cleanCnpjLocal = (c: string) => c.replace(/\D/g, '');
+    const seriesNumerosInutilizados = new Set<string>(
+      inutilizacoes
+        .filter(i => cleanCnpjLocal(i.cnpj ?? '') === mainCnpj)
+        .flatMap(i => {
+          const items: string[] = [];
+          for (let n = (i.nNFIni ?? 0); n <= (i.nNFFin ?? 0); n++) {
+            items.push(`${i.serie}-${n}`);
+          }
+          return items;
+        })
+    );
+
+    const semAutorizacaoComFlag = semAutorizacaoNaoContingencia.map(xml => ({
+      ...xml,
+      temInutilizacao: seriesNumerosInutilizados.has(`${xml.serie}-${xml.numero}`)
+    }));
+
+    return { semProtocolo, semProtocoloAbatidas, foraDoPrazo, numeroDuplicado, semAutorizacaoNaoContingencia: semAutorizacaoComFlag };
+  }, [xmlList, inutilizacoes]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
   // manually confirmed), flagged with cancellation status — the searchable
@@ -4122,6 +4151,86 @@ export default function App() {
                               </div>
                             ))}
                           </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Card: Sem Autorização (não contingência) */}
+              {notasAnomalias.semAutorizacaoNaoContingencia.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-3xl p-6 mb-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <span className="text-red-500 text-xl">🚫</span>
+                      <div>
+                        <div className="flex items-baseline gap-3">
+                          <div className="text-sm font-black text-red-700 uppercase tracking-widest">Sem Autorização</div>
+                          <div className="text-sm font-black text-red-700">
+                            {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
+                          </div>
+                        </div>
+                        <div className="text-xs text-red-600 mt-0.5">
+                          {notasAnomalias.semAutorizacaoNaoContingencia.length} nota(s) sem protocolo SEFAZ e sem flag de contingência — excluídas do total válido
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setShowSemAutorizacao(!showSemAutorizacao)}
+                      className="text-xs font-bold text-red-600 hover:text-red-800 underline no-print"
+                    >
+                      {showSemAutorizacao ? 'Ocultar' : 'Ver detalhes'}
+                    </button>
+                  </div>
+
+                  {showSemAutorizacao && (
+                    <div>
+                      <div className="text-xs font-black text-red-700 uppercase tracking-wider mb-2">
+                        Emitidas sem autorização SEFAZ — excluídas do total válido
+                      </div>
+                      <div className="overflow-x-auto overflow-y-auto max-h-72">
+                        <table className="w-full text-xs">
+                          <thead className="sticky top-0 bg-red-50">
+                            <tr className="text-left text-red-600 font-bold border-b border-red-200">
+                              <th className="py-1.5 pr-3">Série</th>
+                              <th className="py-1.5 pr-3">Nº</th>
+                              <th className="py-1.5 pr-3">Data</th>
+                              <th className="py-1.5 pr-3">Chave</th>
+                              <th className="py-1.5 text-right">Valor</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {notasAnomalias.semAutorizacaoNaoContingencia.map((xml, i) => (
+                              <tr key={i} className="border-b border-red-100 last:border-0">
+                                <td className="py-1.5 pr-3 font-mono text-red-800">{xml.serie}</td>
+                                <td className="py-1.5 pr-3 font-mono text-red-800">{xml.numero}</td>
+                                <td className="py-1.5 pr-3 text-red-700">{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                <td className="py-1.5 pr-3 font-mono text-red-600 text-[10px] truncate max-w-[180px]" title={xml.chave}>{xml.chave || '—'}</td>
+                                <td className="py-1.5 text-right font-semibold text-red-800">
+                                  <div>{formatarMoeda(parseFloat(xml.valor || '0') || 0)}</div>
+                                  {xml.temInutilizacao && (
+                                    <div className="mt-0.5 text-[10px] font-bold text-orange-600 bg-orange-100 rounded px-1.5 py-0.5 text-right whitespace-nowrap">
+                                      ⚠ Série/Nº inutilizado
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr>
+                              <td colSpan={4} className="py-2 font-black text-red-700 text-xs">Total excluído</td>
+                              <td className="py-2 text-right font-black text-red-700">
+                                {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                      {notasAnomalias.semAutorizacaoNaoContingencia.some(x => x.temInutilizacao) && (
+                        <div className="mt-3 text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded-xl px-3 py-2">
+                          <span className="font-bold">⚠ Atenção:</span> uma ou mais notas acima têm o mesmo série/número de uma inutilização registrada. Verifique se a numeração foi reaproveitada indevidamente.
                         </div>
                       )}
                     </div>
