@@ -30,7 +30,9 @@ import {
   X,
   GitCompare,
   Loader2,
-  XCircle
+  XCircle,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -901,6 +903,15 @@ function SpedValidationPanel({ spedData, crossRef, onClose }: SpedValidationPane
 }
 
 export default function App() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('sequencia-fiscal-theme');
+    return saved === 'dark' ? 'dark' : 'light';
+  });
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    localStorage.setItem('sequencia-fiscal-theme', theme);
+  }, [theme]);
+
   const [xmlList, setXmlList] = useState<XmlData[]>([]);
   const [inutilizacoes, setInutilizacoes] = useState<XmlData[]>([]);
   const [otherXmlsList, setOtherXmlsList] = useState<XmlData[]>([]);
@@ -932,6 +943,18 @@ export default function App() {
     setCopiedHeaderField(campo);
     setTimeout(() => setCopiedHeaderField(null), 1500);
   };
+
+  const ThemeToggle = () => (
+    <button
+      onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+      className="flex items-center gap-2 px-3 py-2 rounded-xl text-white text-sm font-bold transition-all no-print shrink-0"
+      style={{background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(240,180,41,0.35)'}}
+      title={theme === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
+    >
+      {theme === 'dark' ? <Sun className="w-4 h-4" style={{color: '#F0B429'}} /> : <Moon className="w-4 h-4" style={{color: '#F0B429'}} />}
+      {theme === 'dark' ? 'Claro' : 'Escuro'}
+    </button>
+  );
   const [analystName, setAnalystName] = useState('');
   const [attachedSources, setAttachedSources] = useState<SourceMetadata[]>([]);
   const [processedFileNames, setProcessedFileNames] = useState<Set<string>>(new Set());
@@ -2954,7 +2977,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col font-sans text-slate-900 relative" style={{background: '#f0f4f8'}}>
+    <div className="min-h-screen flex flex-col font-sans text-slate-900 dark:text-slate-100 relative bg-[#f0f4f8] dark:bg-slate-950">
       {/* Loading Overlay */}
       <AnimatePresence>
         {isProcessing && (
@@ -3012,14 +3035,17 @@ export default function App() {
 
           {analysis && analysis.length > 0 && (
             <div className="flex flex-col items-end gap-3 no-print">
-              <button
-                onClick={reset}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-bold transition-all shrink-0"
-                style={{background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(240,180,41,0.35)'}}
-              >
-                <FileSearch className="w-4 h-4" />
-                Nova Análise
-              </button>
+              <div className="flex items-center gap-3 no-print">
+                <ThemeToggle />
+                <button
+                  onClick={reset}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-bold transition-all shrink-0"
+                  style={{background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(240,180,41,0.35)'}}
+                >
+                  <FileSearch className="w-4 h-4" />
+                  Nova Análise
+                </button>
+              </div>
               <motion.div
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -3373,9 +3399,9 @@ export default function App() {
             >
               {/* Sidebar — summary + search, stays in view while the main content scrolls */}
               <aside className="w-full lg:w-80 shrink-0 lg:sticky lg:top-6 space-y-6">
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Total de Saídas Auditadas (Válidas)</div>
-                  <div className="text-3xl font-black text-emerald-600 mt-2">
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                  <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total de Saídas Auditadas (Válidas)</div>
+                  <div className="text-3xl font-bold text-emerald-600 dark:text-emerald-400 mt-2">
                     {formatarMoeda(faturamentoTotal)}
                   </div>
                   {breakdownPorCfop.length > 0 && (
@@ -3384,16 +3410,16 @@ export default function App() {
                       title="Ver totais por natureza (CFOP)"
                       className="inline-flex items-center justify-center cursor-pointer mt-3 no-print"
                     >
-                      <ChevronRight className={cn("w-6 h-6 text-slate-300 hover:text-slate-500 transition-all duration-300", showCfopBreakdown && "rotate-90")} />
+                      <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showCfopBreakdown && "rotate-90")} />
                     </button>
                   )}
                 </div>
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm transition-all">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Período Analisado</div>
-                  <div className="text-xl font-black text-slate-900 mt-2">
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition-all">
+                  <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Período Analisado</div>
+                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100 mt-2">
                     {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
                   </div>
-                  <div className="flex items-center justify-between text-xs font-semibold text-slate-400 mt-2">
+                  <div className="flex items-center justify-between text-xs font-semibold text-slate-400 dark:text-slate-500 mt-2">
                     <span>{periodoAnalise.totalDias} dias · {periodoAnalise.totalNotas ?? 0} notas</span>
                     {periodoAnalise.diasDetalhados && periodoAnalise.diasDetalhados.length > 0 && (
                       <button
@@ -3401,29 +3427,29 @@ export default function App() {
                         title="Ver detalhes"
                         className="inline-flex items-center justify-center cursor-pointer shrink-0"
                       >
-                        <ChevronRight className={cn("w-6 h-6 text-slate-300 hover:text-slate-500 transition-all duration-300", showDaysDetail && "rotate-90")} />
+                        <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showDaysDetail && "rotate-90")} />
                       </button>
                     )}
                   </div>
                 </div>
 
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3">Pesquisar Notas de Saída</div>
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                  <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide mb-3">Pesquisar Notas de Saída</div>
                   <div className="flex flex-col gap-2">
                     <div className="relative">
-                      <Search className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
+                      <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-4 top-1/2 -translate-y-1/2" />
                       <input
                         type="text"
                         value={notaSearchQuery}
                         onChange={(e) => setNotaSearchQuery(e.target.value)}
                         placeholder={`Buscar por ${notaSearchCampo === 'Item' ? 'produto' : notaSearchCampo.toLowerCase()}...`}
-                        className="w-full pl-11 pr-4 py-3 rounded-2xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        className="w-full pl-11 pr-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                       />
                     </div>
                     <select
                       value={notaSearchCampo}
                       onChange={(e) => setNotaSearchCampo(e.target.value as typeof notaSearchCampo)}
-                      className="px-3 py-2.5 rounded-2xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="px-3 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
                     >
                       <option value="Numero">Só Número</option>
                       <option value="Chave">Só Chave</option>
@@ -3435,7 +3461,7 @@ export default function App() {
                     <select
                       value={filterNotaModelo}
                       onChange={(e) => setFilterNotaModelo(e.target.value)}
-                      className="px-3 py-2.5 rounded-2xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="px-3 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
                     >
                       <option value="Todos">Todos os modelos</option>
                       {modelosDisponiveis.map(modelo => (
@@ -3447,7 +3473,7 @@ export default function App() {
                     <select
                       value={filterNotaSituacao}
                       onChange={(e) => setFilterNotaSituacao(e.target.value)}
-                      className="px-3 py-2.5 rounded-2xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="px-3 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
                     >
                       <option value="Todas">Todas as situações</option>
                       <option value="Válidas">Somente válidas</option>
@@ -3460,7 +3486,7 @@ export default function App() {
                       <select
                         value={filterNotaCfop}
                         onChange={(e) => setFilterNotaCfop(e.target.value)}
-                        className="px-3 py-2.5 rounded-2xl border border-slate-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        className="px-3 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
                       >
                         <option value="Todos">Todos os CFOPs</option>
                         {cfopsDisponiveis.map(cfop => (
@@ -3472,8 +3498,8 @@ export default function App() {
                 </div>
 
                 {/* SPED Fiscal card — compacto, abre para a direita */}
-                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden no-print">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest px-6 pt-5 pb-3 flex items-center justify-between">
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden no-print">
+                  <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide px-6 pt-5 pb-3 flex items-center justify-between">
                     SPED Fiscal
                     {spedData && (
                       <button
@@ -3488,7 +3514,7 @@ export default function App() {
 
                   {!spedData ? (
                     <div className="px-6 pb-5 flex flex-col gap-3">
-                      <p className="text-xs text-slate-500 leading-relaxed">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                         Anexe o SPED Fiscal para cruzar com os XMLs e identificar faltantes.
                       </p>
                       <button
@@ -4055,15 +4081,15 @@ export default function App() {
 
               {/* Painel de problemas reais: sem protocolo + número duplicado */}
               {(notasAnomalias.semProtocolo.length > 0 || notasAnomalias.numeroDuplicado.length > 0) && (
-                <div className="bg-amber-50 border border-amber-200 rounded-3xl p-6 mb-6">
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-amber-400 rounded-2xl p-6 mb-6 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                       <span className="text-amber-500 text-xl">⚠️</span>
                       <div>
                         <div className="flex items-baseline gap-3">
-                          <div className="text-sm font-black text-amber-700 uppercase tracking-widest">Contingência Não Regularizada</div>
+                          <div className="text-sm font-bold text-amber-700 tracking-wide">Contingência Não Regularizada</div>
                           {notasAnomalias.semProtocolo.length > 0 && (
-                            <div className="text-sm font-black text-amber-700">{formatarMoeda(notasAnomalias.semProtocolo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
+                            <div className="text-sm font-bold text-amber-700">{formatarMoeda(notasAnomalias.semProtocolo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
                           )}
                         </div>
                         <div className="text-xs text-amber-600 mt-0.5">
@@ -4160,14 +4186,14 @@ export default function App() {
 
               {/* Card: Sem Autorização (não contingência) */}
               {notasAnomalias.semAutorizacaoNaoContingencia.length > 0 && (
-                <div className="bg-slate-50 border-l-4 border-l-slate-400 border border-slate-200 rounded-3xl p-6 mb-6">
+                <div className="bg-white dark:bg-slate-900 border-l-4 border-l-slate-400 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 mb-6 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                       <span className="text-slate-400 text-xl">🚫</span>
                       <div>
                         <div className="flex items-baseline gap-3">
-                          <div className="text-sm font-black text-slate-600 uppercase tracking-widest">Sem Autorização</div>
-                          <div className="text-sm font-black text-slate-700">
+                          <div className="text-sm font-bold text-slate-600 tracking-wide">Sem Autorização</div>
+                          <div className="text-sm font-bold text-slate-700">
                             {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                           </div>
                         </div>
@@ -4240,14 +4266,14 @@ export default function App() {
 
               {/* Painel informativo: contingência autorizada fora do prazo */}
               {notasAnomalias.foraDoPrazo.length > 0 && (
-                <div className="bg-orange-50 border border-orange-200 rounded-3xl p-6 mb-6">
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-orange-400 rounded-2xl p-6 mb-6 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                       <span className="text-orange-400 text-xl">🕐</span>
                       <div>
                         <div className="flex items-baseline gap-3">
-                          <div className="text-sm font-black text-orange-700 uppercase tracking-widest">Contingência Regularizada Fora do Prazo</div>
-                          <div className="text-sm font-black text-orange-700">{formatarMoeda(notasAnomalias.foraDoPrazo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
+                          <div className="text-sm font-bold text-orange-700 tracking-wide">Contingência Regularizada Fora do Prazo</div>
+                          <div className="text-sm font-bold text-orange-700">{formatarMoeda(notasAnomalias.foraDoPrazo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
                         </div>
                         <div className="text-xs text-orange-600 mt-0.5">
                           {notasAnomalias.foraDoPrazo.length} nota(s) emitida(s) offline e autorizada(s) pelo SEFAZ com atraso superior a 30 min — incluídas no faturamento
@@ -4318,40 +4344,40 @@ export default function App() {
 
                 return (
                   <div className={cn("grid grid-cols-2 gap-4", totalManual > 0 ? "md:grid-cols-3 lg:grid-cols-6" : "md:grid-cols-4")}>
-                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                      <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Séries</div>
-                      <div className="text-4xl font-black text-slate-900 mt-2">{analysis.length}</div>
+                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                      <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Séries</div>
+                      <div className="text-4xl font-bold text-slate-900 dark:text-slate-100 mt-2">{analysis.length}</div>
                     </div>
-                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                      <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Com Quebra</div>
-                      <div className="text-4xl font-black text-amber-500 mt-2">
+                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                      <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Com Quebra</div>
+                      <div className="text-4xl font-bold text-amber-500 dark:text-amber-400 mt-2">
                         {analysis.filter(s => s.faltantes.length > 0).length}
                       </div>
                     </div>
                     {totalManual > 0 ? (
                       <>
-                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm no-print">
-                          <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Faltante Bruto (XML)</div>
-                          <div className="text-4xl font-black text-rose-600 mt-2">{faltantesBrutos}</div>
+                        <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm no-print">
+                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Bruto (XML)</div>
+                          <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesBrutos}</div>
                         </div>
-                        <div className="bg-white p-6 rounded-3xl border border-amber-200 shadow-sm no-print">
-                          <div className="text-sm font-bold text-amber-600 uppercase tracking-widest">Inutilizadas Sem XML</div>
-                          <div className="text-4xl font-black text-amber-600 mt-2">{totalManual}</div>
+                        <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-amber-200 dark:border-amber-800 shadow-sm no-print">
+                          <div className="text-sm font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wide">Inutilizadas Sem XML</div>
+                          <div className="text-4xl font-bold text-amber-600 dark:text-amber-400 mt-2">{totalManual}</div>
                         </div>
-                        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                          <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Faltante Líquido</div>
-                          <div className="text-4xl font-black text-slate-500 mt-2">{faltantesLiquidos}</div>
+                        <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Líquido</div>
+                          <div className="text-4xl font-bold text-slate-500 dark:text-slate-400 mt-2">{faltantesLiquidos}</div>
                         </div>
                       </>
                     ) : (
-                      <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                        <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Total Faltantes</div>
-                        <div className="text-4xl font-black text-rose-600 mt-2">{faltantesLiquidos}</div>
+                      <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Faltantes</div>
+                        <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesLiquidos}</div>
                       </div>
                     )}
-                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                      <div className="text-sm font-bold text-slate-400 uppercase tracking-widest">Total Recebidos</div>
-                      <div className="text-4xl font-black text-blue-600 mt-2">
+                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                      <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Recebidos</div>
+                      <div className="text-4xl font-bold text-blue-600 dark:text-blue-400 mt-2">
                         {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
                       </div>
                     </div>
@@ -4486,15 +4512,15 @@ export default function App() {
               })()}
 
               {/* Filters */}
-              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-4 no-print">
-                <div className="flex items-center gap-2 text-slate-500 font-bold text-sm px-2">
+              <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-wrap items-center gap-4 no-print">
+                <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 font-bold text-sm px-2">
                   <Filter className="w-4 h-4" />
                   FILTROS:
                 </div>
                 <select 
                   value={filterModelo} 
                   onChange={(e) => setFilterModelo(e.target.value)}
-                  className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                  className="bg-slate-50 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
                 >
                   <option value="Todos">Todos os Modelos</option>
                   <option value="55">Modelo 55 (NF-e)</option>
@@ -4503,7 +4529,7 @@ export default function App() {
                 <select 
                   value={filterMes} 
                   onChange={(e) => setFilterMes(e.target.value)}
-                  className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                  className="bg-slate-50 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
                 >
                   <option value="Todos">Todos os Meses</option>
                   {mesesDisponiveis.map(m => (
@@ -4737,46 +4763,46 @@ export default function App() {
               {/* Series List */}
               <div className="space-y-4">
                 {filteredAnalysis.map((serie, idx) => (
-                  <div key={idx} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition-all hover:shadow-md">
-                    <div 
+                  <div key={idx} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden transition-all hover:shadow-md">
+                    <div
                       className="p-6 cursor-pointer flex items-center gap-6"
                       onClick={() => setExpandedIdx(expandedIdx === idx ? null : idx)}
                     >
                       <div className={cn(
                         "w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg",
-                        serie.faltantes.length > 0 ? "bg-rose-100 text-rose-600" : "bg-emerald-100 text-emerald-600"
+                        serie.faltantes.length > 0 ? "bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400" : "bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400"
                       )}>
                         {serie.faltantes.length > 0 ? "!" : "✓"}
                       </div>
-                      
+
                       <div className="flex-1">
                         <div className="flex items-center gap-3">
-                          <h3 className="font-bold text-slate-800 text-lg">{serie.razaoSocial}</h3>
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-200">
+                          <h3 className="font-semibold text-slate-800 dark:text-slate-200 text-lg">{serie.razaoSocial}</h3>
+                          <span className="px-2 py-0.5 bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 text-[10px] font-semibold rounded uppercase tracking-wider border border-amber-200 dark:border-amber-800">
                             {serie.mesReferencia}
                           </span>
                         </div>
-                        <div className="text-slate-400 text-sm font-medium">
+                        <div className="text-slate-400 dark:text-slate-500 text-sm font-medium">
                           Mod {serie.modelo} • Série {serie.serie} • CNPJ {serie.cnpj} • IE {serie.ie}
                         </div>
                       </div>
 
                       <div className="flex gap-8 items-center">
                         <div className="text-center">
-                          <div className="text-xs font-bold text-slate-400 uppercase tracking-tighter">Recebidos</div>
-                          <div className="text-xl font-black text-slate-900">{serie.recebidos}</div>
+                          <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-tighter">Recebidos</div>
+                          <div className="text-xl font-bold text-slate-900 dark:text-slate-100">{serie.recebidos}</div>
                         </div>
                         <div className="text-center">
-                          <div className="text-xs font-bold text-slate-400 uppercase tracking-tighter">Faltantes</div>
+                          <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-tighter">Faltantes</div>
                           <div className={cn(
-                            "text-xl font-black",
-                            serie.faltantes.length > 0 ? "text-rose-600" : "text-emerald-600"
+                            "text-xl font-bold",
+                            serie.faltantes.length > 0 ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
                           )}>
                             {serie.faltantes.length}
                           </div>
                         </div>
                         <ChevronRight className={cn(
-                          "w-6 h-6 text-slate-300 transition-transform duration-300",
+                          "w-6 h-6 text-slate-300 dark:text-slate-600 transition-transform duration-300",
                           expandedIdx === idx && "rotate-90"
                         )} />
                       </div>
