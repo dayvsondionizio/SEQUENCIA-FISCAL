@@ -2272,6 +2272,17 @@ export default function App() {
           new Uint8Array(cleanBuffer).set(uint8);
           let currentWasm = wasmBinary || await loadWasm();
           if (currentWasm) {
+            // Pre-scan: list entries without decompressing, so the user sees the
+            // real nesting/volume before we commit to extracting it (and so very
+            // large nested archives get a heads-up instead of a silent freeze).
+            const listExtractor = await createExtractorFromData({ data: new Uint8Array(cleanBuffer), wasmBinary: currentWasm });
+            const headers = [...listExtractor.getFileList().fileHeaders].filter(h => !h.flags.directory);
+            const nestedArchives = headers.filter(h => /\.(zip|rar)$/i.test(h.name));
+            const totalUnpSize = headers.reduce((s, h) => s + h.unpSize, 0);
+            if (nestedArchives.length > 0 || totalUnpSize > 20 * 1024 * 1024) {
+              setExtractionStatus(`Extraindo ${containerName} (${headers.length} arquivo(s), ${(totalUnpSize / 1024 / 1024).toFixed(0)}MB, ${nestedArchives.length} aninhado(s))...`);
+            }
+
             const extractor = await createExtractorFromData({ data: new Uint8Array(cleanBuffer), wasmBinary: currentWasm });
             const extracted = extractor.extract();
             for (const file of extracted.files) {
@@ -2279,6 +2290,11 @@ export default function App() {
               const name = file.fileHeader.name;
               const baseName = name.split('/').pop() || name;
               if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
+                // Give the JS engine a chance to actually reclaim the previous
+                // archive's WASM/buffer memory before diving into the next
+                // nested one — without this, deeply nested RARs can pile up
+                // enough live memory at once to crash the tab.
+                await new Promise(r => setTimeout(r, 0));
                 await processArchiveRecursively(file.extraction, results, baseName, currentPath);
               } else {
                 const xmlText = new TextDecoder().decode(file.extraction);
