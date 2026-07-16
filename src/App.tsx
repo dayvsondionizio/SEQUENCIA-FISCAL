@@ -4013,28 +4013,28 @@ export default function App() {
               )}
 
               {showDaysDetail && periodoAnalise.diasComContagem && periodoAnalise.diasComContagem.length > 0 && (
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Notas por Dia</div>
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                  <div className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">Notas por Dia</div>
                   <div className="overflow-y-auto max-h-72">
                     <table className="w-full text-xs">
-                      <thead className="sticky top-0 bg-white">
-                        <tr className="text-left text-slate-400 font-bold border-b border-slate-100">
+                      <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                        <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-100 dark:border-slate-800">
                           <th className="py-1.5 pr-4">Data</th>
                           <th className="py-1.5 text-right">Notas</th>
                         </tr>
                       </thead>
                       <tbody>
                         {periodoAnalise.diasComContagem.map((dia, idx) => (
-                          <tr key={idx} className="border-b border-slate-50 last:border-0">
-                            <td className="py-1.5 pr-4 font-mono text-slate-600">{dia.data}</td>
-                            <td className="py-1.5 text-right font-semibold text-slate-700">{dia.count}</td>
+                          <tr key={idx} className="border-b border-slate-50 dark:border-slate-800 last:border-0">
+                            <td className="py-1.5 pr-4 font-mono text-slate-600 dark:text-slate-400">{dia.data}</td>
+                            <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300">{dia.count}</td>
                           </tr>
                         ))}
                       </tbody>
-                      <tfoot className="sticky bottom-0 bg-white">
-                        <tr className="border-t border-slate-200">
-                          <td className="py-1.5 font-black text-slate-500 text-xs">Total</td>
-                          <td className="py-1.5 text-right font-black text-slate-700">{periodoAnalise.totalNotas ?? 0}</td>
+                      <tfoot className="sticky bottom-0 bg-white dark:bg-slate-900">
+                        <tr className="border-t border-slate-200 dark:border-slate-700">
+                          <td className="py-1.5 font-black text-slate-500 dark:text-slate-400 text-xs">Total</td>
+                          <td className="py-1.5 text-right font-black text-slate-700 dark:text-slate-300">{periodoAnalise.totalNotas ?? 0}</td>
                         </tr>
                       </tfoot>
                     </table>
@@ -4043,12 +4043,12 @@ export default function App() {
               )}
 
               {showCfopBreakdown && breakdownPorCfop.length > 0 && (
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm mb-6">
-                  <div className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Totais por Natureza da Operação (CFOP)</div>
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm mb-6">
+                  <div className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">Totais por Natureza da Operação (CFOP)</div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                        <tr className="text-left text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider border-b border-slate-200 dark:border-slate-700">
                           <th className="py-2 pr-4">CFOP</th>
                           <th className="py-2 pr-4">Natureza</th>
                           <th className="py-2 pr-4 text-right whitespace-nowrap">Vlr Contábil</th>
@@ -4058,18 +4058,18 @@ export default function App() {
                         {breakdownPorCfop.map(({ cfop, descricao, valor }) => {
                           const alerta = isAlertCfop(cfop);
                           return (
-                            <tr key={cfop} className="border-b border-slate-100 last:border-0">
-                              <td className={`py-2 pr-4 font-mono font-bold ${alerta ? 'text-red-600' : 'text-slate-500'}`}>{cfop}</td>
-                              <td className={`py-2 pr-4 ${alerta ? 'text-red-600 font-semibold' : 'text-slate-700'}`}>{descricao}</td>
-                              <td className={`py-2 pr-4 text-right font-semibold ${alerta ? 'text-red-600' : 'text-slate-900'}`}>{formatarMoeda(valor)}</td>
+                            <tr key={cfop} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                              <td className={`py-2 pr-4 font-mono font-bold ${alerta ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'}`}>{cfop}</td>
+                              <td className={`py-2 pr-4 ${alerta ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-slate-700 dark:text-slate-300'}`}>{descricao}</td>
+                              <td className={`py-2 pr-4 text-right font-semibold ${alerta ? 'text-red-600 dark:text-red-400' : 'text-slate-900 dark:text-slate-100'}`}>{formatarMoeda(valor)}</td>
                             </tr>
                           );
                         })}
                       </tbody>
                       <tfoot>
                         <tr>
-                          <td colSpan={2} className="py-3 pr-4 font-black text-slate-900 uppercase text-xs tracking-wider">Total de Saídas</td>
-                          <td className="py-3 pr-4 text-right font-black text-emerald-600">
+                          <td colSpan={2} className="py-3 pr-4 font-black text-slate-900 dark:text-slate-100 uppercase text-xs tracking-wider">Total de Saídas</td>
+                          <td className="py-3 pr-4 text-right font-black text-emerald-600 dark:text-emerald-400">
                             {formatarMoeda(breakdownPorCfop.reduce((acc, item) => acc + item.valor, 0))}
                           </td>
                         </tr>
