@@ -4160,25 +4160,25 @@ export default function App() {
 
               {/* Card: Sem Autorização (não contingência) */}
               {notasAnomalias.semAutorizacaoNaoContingencia.length > 0 && (
-                <div className="bg-red-50 border border-red-200 rounded-3xl p-6 mb-6">
+                <div className="bg-slate-50 border-l-4 border-l-slate-400 border border-slate-200 rounded-3xl p-6 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <span className="text-red-500 text-xl">🚫</span>
+                      <span className="text-slate-400 text-xl">🚫</span>
                       <div>
                         <div className="flex items-baseline gap-3">
-                          <div className="text-sm font-black text-red-700 uppercase tracking-widest">Sem Autorização</div>
-                          <div className="text-sm font-black text-red-700">
+                          <div className="text-sm font-black text-slate-600 uppercase tracking-widest">Sem Autorização</div>
+                          <div className="text-sm font-black text-slate-700">
                             {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                           </div>
                         </div>
-                        <div className="text-xs text-red-600 mt-0.5">
+                        <div className="text-xs text-slate-500 mt-0.5">
                           {notasAnomalias.semAutorizacaoNaoContingencia.length} nota(s) sem protocolo SEFAZ e sem flag de contingência — excluídas do total válido
                         </div>
                       </div>
                     </div>
                     <button
                       onClick={() => setShowSemAutorizacao(!showSemAutorizacao)}
-                      className="text-xs font-bold text-red-600 hover:text-red-800 underline no-print"
+                      className="text-xs font-bold text-slate-500 hover:text-slate-700 underline no-print"
                     >
                       {showSemAutorizacao ? 'Ocultar' : 'Ver detalhes'}
                     </button>
@@ -4186,13 +4186,13 @@ export default function App() {
 
                   {showSemAutorizacao && (
                     <div>
-                      <div className="text-xs font-black text-red-700 uppercase tracking-wider mb-2">
+                      <div className="text-xs font-black text-slate-600 uppercase tracking-wider mb-2">
                         Emitidas sem autorização SEFAZ — excluídas do total válido
                       </div>
                       <div className="overflow-x-auto overflow-y-auto max-h-72">
                         <table className="w-full text-xs">
-                          <thead className="sticky top-0 bg-red-50">
-                            <tr className="text-left text-red-600 font-bold border-b border-red-200">
+                          <thead className="sticky top-0 bg-slate-50">
+                            <tr className="text-left text-slate-500 font-bold border-b border-slate-200">
                               <th className="py-1.5 pr-3">Série</th>
                               <th className="py-1.5 pr-3">Nº</th>
                               <th className="py-1.5 pr-3">Data</th>
@@ -4202,12 +4202,12 @@ export default function App() {
                           </thead>
                           <tbody>
                             {notasAnomalias.semAutorizacaoNaoContingencia.map((xml, i) => (
-                              <tr key={i} className="border-b border-red-100 last:border-0">
-                                <td className="py-1.5 pr-3 font-mono text-red-800">{xml.serie}</td>
-                                <td className="py-1.5 pr-3 font-mono text-red-800">{xml.numero}</td>
-                                <td className="py-1.5 pr-3 text-red-700">{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
-                                <td className="py-1.5 pr-3 font-mono text-red-600 text-[10px] truncate max-w-[180px]" title={xml.chave}>{xml.chave || '—'}</td>
-                                <td className="py-1.5 text-right font-semibold text-red-800">
+                              <tr key={i} className="border-b border-slate-100 last:border-0">
+                                <td className="py-1.5 pr-3 font-mono text-slate-700">{xml.serie}</td>
+                                <td className="py-1.5 pr-3 font-mono text-slate-700">{xml.numero}</td>
+                                <td className="py-1.5 pr-3 text-slate-600">{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                <td className="py-1.5 pr-3 font-mono text-slate-500 text-[10px] truncate max-w-[180px]" title={xml.chave}>{xml.chave || '—'}</td>
+                                <td className="py-1.5 text-right font-semibold text-slate-700">
                                   <div>{formatarMoeda(parseFloat(xml.valor || '0') || 0)}</div>
                                   {xml.temInutilizacao && (
                                     <div className="mt-0.5 text-[10px] font-bold text-orange-600 bg-orange-100 rounded px-1.5 py-0.5 text-right whitespace-nowrap">
@@ -4220,8 +4220,8 @@ export default function App() {
                           </tbody>
                           <tfoot>
                             <tr>
-                              <td colSpan={4} className="py-2 font-black text-red-700 text-xs">Total excluído</td>
-                              <td className="py-2 text-right font-black text-red-700">
+                              <td colSpan={4} className="py-2 font-black text-slate-600 text-xs">Total excluído</td>
+                              <td className="py-2 text-right font-black text-slate-700">
                                 {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                               </td>
                             </tr>
