@@ -2108,6 +2108,437 @@ export default function App() {
     XLSX.writeFile(wb, nomeArquivoExport('planilha_detalhada', 'xlsx'));
   };
 
+  // Full field-by-field XML → spreadsheet conversion (mirrors the layout of
+  // dedicated "XML to Excel" conversion tools): one workbook, 12 sheets, each
+  // sheet a flat 1:1 mapping of one block of the nfeProc schema. Unlike the
+  // other exports (which filter to valid/auditable notes), this dumps every
+  // note with a rawXml as-is — cancelled, sem autorização, contingência,
+  // doesn't matter, since the point here is raw field visibility, not audit.
+  const exportarPlanilhaCompletaXML = () => {
+    let notas = notasSaida.filter(n => n.tipo === 'nfe' && n.rawXml);
+    if (filterMes !== 'Todos') {
+      notas = notas.filter(n => getMonthYear(n.data) === filterMes);
+    }
+    if (notas.length === 0) {
+      alert('Nenhuma nota com XML encontrada para exportar.');
+      return;
+    }
+
+    // Scoped text/number lookup: search only within a given element's subtree,
+    // never document-wide — required since tag names like vBC/CST repeat
+    // across ICMS/IPI/PIS/COFINS/IBSCBS with different meanings per block.
+    const t = (scope: Element | Document | null | undefined, tag: string): string =>
+      scope?.getElementsByTagName(tag)[0]?.textContent?.trim() ?? '';
+    const n = (scope: Element | Document | null | undefined, tag: string): number =>
+      parseFloat(t(scope, tag)) || 0;
+    const first = (scope: Element | Document | null | undefined, tag: string): Element | undefined =>
+      scope?.getElementsByTagName(tag)[0];
+
+    const rowsIdent: (string | number)[][] = [[
+      'Arquivo', 'Versão_XML', 'Chave_de_Acesso', 'cUF', 'cNF', 'natOp', 'indPag', 'mod', 'serie', 'nNF',
+      'dhEmi', 'dhSaiEnt', 'hSaiEnt', 'tpNF', 'idDest', 'cMunFG', 'tpImp', 'tpEmis', 'cDV', 'tpAmb',
+      'finNFe', 'indFinal', 'indPres', 'indIntermed', 'procEmi', 'verProc', 'dhCont', 'xJust',
+      'NFREF_refNFe', 'REFNF_cUF', 'REFNF_AAMM', 'REFNF_CNPJ', 'REFNF_mod', 'REFNF_serie', 'REFNF_nNF',
+      'REFNFP_cUF', 'REFNFP_AAMM', 'REFNFP_CNPJ', 'REFNFP_CPF', 'REFNFP_IE', 'REFNFP_mod', 'REFNFP_serie', 'REFNFP_nNF',
+      'refCTe', 'REFECF_mod', 'REFECF_nECF', 'REFECF_nCOO'
+    ]];
+    const rowsEmit: (string | number)[][] = [[
+      'Arquivo', 'nNF', 'CNPJ', 'CPF', 'xNome', 'xFant', 'enderEMIT_xLgr', 'enderEMIT_nro', 'enderEMIT_xCpl',
+      'enderEMIT_xBairro', 'enderEMIT_cMun', 'enderEMIT_xMun', 'enderEMIT_UF', 'enderEMIT_CEP', 'enderEMIT_cPais',
+      'enderEMIT_xPais', 'enderEMIT_fone', 'IE', 'IEST', 'IM', 'CNAE', 'CRT'
+    ]];
+    const rowsDest: (string | number)[][] = [[
+      'Arquivo', 'nNF', 'CNPJ', 'CPF', 'idEstrangeiro', 'xNome', 'enderDEST_xLgr', 'enderDEST_nro', 'enderDEST_xCpl',
+      'enderDEST_xBairro', 'enderDEST_cMun', 'enderDEST_xMun', 'enderDEST_UF', 'enderDEST_CEP', 'enderDEST_cPais',
+      'enderDEST_xPais', 'enderDEST_fone', 'indIEDest', 'IE', 'ISUF', 'IM', 'email'
+    ]];
+    const rowsItens: (string | number)[][] = [[
+      'Arquivo', 'nNF', 'NumItem', 'cProd', 'cEAN', 'cBarra', 'xProd', 'NCM', 'CEST', 'indEscala', 'CNPJFab',
+      'cBenef', 'EXTIPI', 'CFOP', 'uCom', 'qCom', 'vUnCom', 'vProd', 'cEANTrib', 'cBarraTrib', 'uTrib', 'qTrib',
+      'vUnTrib', 'vFrete', 'vSeg', 'vDesc', 'vOutro', 'indTot', 'indBemMovelUsado', 'xPed', 'nItemPed', 'nFCI',
+      'INFPRODNFF_cProdFisco', 'INFPRODNFF_cOperNFF', 'INFPRODEMB_xEmb', 'INFPRODEMB_qVolEmb', 'INFPRODEMB_uEmb',
+      'VEICPROD_tpOp', 'VEICPROD_chassi', 'VEICPROD_cCor', 'VEICPROD_xCor', 'VEICPROD_pot', 'VEICPROD_cilin',
+      'VEICPROD_pesoL', 'VEICPROD_pesoB', 'VEICPROD_nSerie', 'VEICPROD_tpComb', 'VEICPROD_nMotor', 'VEICPROD_CMT',
+      'VEICPROD_dist', 'VEICPROD_anoMod', 'VEICPROD_anoFab', 'VEICPROD_tpPint', 'VEICPROD_tpVeic', 'VEICPROD_espVeic',
+      'VEICPROD_VIN', 'VEICPROD_condVeic', 'VEICPROD_cMod', 'VEICPROD_cCorDENATRAN', 'VEICPROD_lota', 'VEICPROD_tpRest',
+      'MED_nLote', 'MED_qLote', 'MED_dFab', 'MED_dVal', 'MED_vPMC', 'MED_cProdANVISA', 'MED_xMotivoIsencao', 'nRECOPI',
+      'IMPOSTO_vTotTrib', 'Tipo_ICMS', 'ICMS_orig', 'ICMS_CSOSN', 'ICMS_pCredSN', 'ICMS_vCredICMSSN', 'ICMS_CST',
+      'ICMS_vBCSTRet', 'ICMS_vICMSSTRet', 'ICMS_vBCSTDest', 'ICMS_vICMSSTDest', 'ICMS_modBC', 'ICMS_modBCST',
+      'ICMS_pRedBC', 'ICMS_cBenefRBC', 'ICMS_vBC', 'ICMS_pICMS', 'ICMS_vICMSOp', 'ICMS_pDif', 'ICMS_vICMSDif',
+      'ICMS_vICMS', 'ICMS_vICMSDeson', 'ICMS_motDesICMS', 'ICMS_pMVAST', 'ICMS_pRedBCST', 'ICMS_vBCST',
+      'ICMS_pICMSST', 'ICMS_vICMSST', 'ICMS_pBCOp', 'ICMS_UFST', 'ICMS_pFCP', 'ICMS_vFCP', 'ICMS_vBCFCP',
+      'ICMS_pFCPST', 'ICMS_vFCPST', 'ICMS_vBCFCPST', 'ICMS_pFCPSTRet', 'ICMS_vFCPSTRet', 'ICMS_vBCFCPSTRet',
+      'ICMS_pRedBCEfet', 'ICMS_vBCEfet', 'ICMS_pICMSEfet', 'ICMS_vICMSEfet', 'ICMS_pST', 'ICMS_qBCMono',
+      'ICMS_adRemICMS', 'ICMS_vICMSMono', 'ICMS_qBCMonoReten', 'ICMS_adRemICMSReten', 'ICMS_vICMSMonoReten',
+      'ICMS_pRedAdRem', 'ICMS_motRedAdRem', 'ICMS_vICMSSTDeson', 'ICMS_indDeduzDeson', 'ICMS_motDesICMSST',
+      'ICMS_pFCPDif', 'ICMS_vFCPDif', 'ICMS_vFCPEfet', 'ICMS_vICMSMonoOp', 'ICMS_vICMSMonoDif', 'ICMS_qBCMonoDif',
+      'ICMS_adRemICMSDif', 'ICMS_vICMSSubstituto', 'ICMS_qBCMonoRet', 'ICMS_adRemICMSRet', 'ICMS_vICMSMonoRet',
+      'IPI_clEnq', 'IPI_CNPJProd', 'IPI_cSelo', 'IPI_qSelo', 'IPI_cEnq', 'IPITRIB_CST', 'IPITRIB_vBC', 'IPITRIB_pIPI',
+      'IPITRIB_qUnid', 'IPITRIB_vUnid', 'IPITRIB_vIPI', 'IPINT_CST', 'II_vBC', 'II_vDespAdu', 'II_vII', 'II_vIOF',
+      'ISSQN_vBC', 'ISSQN_vAliq', 'ISSQN_vISSQN', 'ISSQN_cMunFG', 'ISSQN_cListServ', 'ISSQN_vDeducao', 'ISSQN_vOutro',
+      'ISSQN_vDescIncond', 'ISSQN_vDescCond', 'ISSQN_vISSRet', 'ISSQN_indISS', 'ISSQN_cServico', 'ISSQN_cMun',
+      'ISSQN_cPais', 'ISSQN_nProcesso', 'ISSQN_indIncentivo', 'Tipo_PIS', 'PIS_CST', 'PIS_vBC', 'PIS_pPIS', 'PIS_vPIS',
+      'PIS_qBCProd', 'PIS_vAliqProd', 'Tipo_COFINS', 'COFINS_CST', 'COFINS_vBC', 'COFINS_pCOFINS', 'COFINS_vCOFINS',
+      'COFINS_qBCProd', 'COFINS_vAliqProd', 'ICMSUFDEST_vBCUFDest', 'ICMSUFDEST_vBCFCPUFDest', 'ICMSUFDEST_pFCPUFDest',
+      'ICMSUFDEST_pICMSUFDest', 'ICMSUFDEST_pICMSInter', 'ICMSUFDEST_pICMSInterPart', 'ICMSUFDEST_vFCPUFDest',
+      'ICMSUFDEST_vICMSUFDest', 'ICMSUFDEST_vICMSUFRemet', 'IS_CSTIS', 'IS_cClassTribIS', 'IS_vBCIS', 'IS_pIS',
+      'IS_pISEspec', 'IS_uTrib', 'IS_qTrib', 'IS_vIS', 'IBSCBS_CST', 'IBSCBS_cClassTrib', 'IBSCBS_gIBSCBS_vBC',
+      'IBSCBS_gIBSCBS_gIBSUF_pIBSUF', 'IBSCBS_gIBSCBS_gIBSUF_gDif_pDif', 'IBSCBS_gIBSCBS_gIBSUF_gDif_vDif',
+      'IBSCBS_gIBSCBS_gIBSUF_gDevTrib_vDevTrib', 'IBSCBS_gIBSCBS_gIBSUF_gRed_pRedAliq', 'IBSCBS_gIBSCBS_gIBSUF_gRed_pAliqEfet',
+      'IBSCBS_gIBSCBS_gIBSUF_vIBSUF', 'IBSCBS_gIBSCBS_gIBSMun_pIBSMun', 'IBSCBS_gIBSCBS_gIBSMun_gDif_pDif',
+      'IBSCBS_gIBSCBS_gIBSMun_gDif_vDif', 'IBSCBS_gIBSCBS_gIBSMun_gDevTrib_vDevTrib', 'IBSCBS_gIBSCBS_gIBSMun_gRed_pRedAliq',
+      'IBSCBS_gIBSCBS_gIBSMun_gRed_pAliqEfet', 'IBSCBS_gIBSCBS_gIBSMun_vIBSMun', 'IBSCBS_gIBSCBS_vIBS',
+      'IBSCBS_gIBSCBS_gCBS_pCBS', 'IBSCBS_gIBSCBS_gCBS_gDif_pDif', 'IBSCBS_gIBSCBS_gCBS_gDif_vDif',
+      'IBSCBS_gIBSCBS_gCBS_gDevTrib_vDevTrib', 'IBSCBS_gIBSCBS_gCBS_gRed_pRedAliq', 'IBSCBS_gIBSCBS_gCBS_gRed_pAliqEfet',
+      'IBSCBS_gIBSCBS_gCBS_vCBS', 'IBSCBS_gIBSCBS_gTribRegular_CSTReg', 'IBSCBS_gIBSCBS_gTribRegular_cClassTribReg',
+      'IBSCBS_gIBSCBS_gTribRegular_pAliqEfetRegIBSUF', 'IBSCBS_gIBSCBS_gTribRegular_vTribRegIBSUF',
+      'IBSCBS_gIBSCBS_gTribRegular_pAliqEfetRegIBSMun', 'IBSCBS_gIBSCBS_gTribRegular_vTribRegIBSMun',
+      'IBSCBS_gIBSCBS_gTribRegular_pAliqEfetRegCBS', 'IBSCBS_gIBSCBS_gTribRegular_vTribRegCBS',
+      'IBSCBS_gIBSCBS_gIBSCredPres_cCredPres', 'IBSCBS_gIBSCBS_gIBSCredPres_pCredPres', 'IBSCBS_gIBSCBS_gIBSCredPres_vCredPres',
+      'IBSCBS_gIBSCBS_gIBSCredPres_vCredPresCondSus', 'IBSCBS_gIBSCBS_gCBSCredPres_cCredPres', 'IBSCBS_gIBSCBS_gCBSCredPres_pCredPres',
+      'IBSCBS_gIBSCBS_gCBSCredPres_vCredPres', 'IBSCBS_gIBSCBS_gCBSCredPres_vCredPresCondSus',
+      'IBSCBS_gIBSCBS_gTribCompraGov_pAliqIBSUF', 'IBSCBS_gIBSCBS_gTribCompraGov_vTribIBSUF',
+      'IBSCBS_gIBSCBS_gTribCompraGov_pAliqIBSMun', 'IBSCBS_gIBSCBS_gTribCompraGov_vTribIBSMun',
+      'IBSCBS_gIBSCBS_gTribCompraGov_pAliqCBS', 'IBSCBS_gIBSCBS_gTribCompraGov_vTribCBS',
+      'IBSCBS_gIBSCBSMono_gMonoPadrao_qBCMono', 'IBSCBS_gIBSCBSMono_gMonoPadrao_adRemIBS', 'IBSCBS_gIBSCBSMono_gMonoPadrao_adRemCBS',
+      'IBSCBS_gIBSCBSMono_gMonoPadrao_vIBSMono', 'IBSCBS_gIBSCBSMono_gMonoPadrao_vCBSMono', 'IBSCBS_gIBSCBSMono_gMonoReten_qBCMonoReten',
+      'IBSCBS_gIBSCBSMono_gMonoReten_adRemIBSReten', 'IBSCBS_gIBSCBSMono_gMonoReten_vIBSMonoReten',
+      'IBSCBS_gIBSCBSMono_gMonoReten_adRemCBSReten', 'IBSCBS_gIBSCBSMono_gMonoReten_vCBSMonoReten',
+      'IBSCBS_gIBSCBSMono_gMonoRet_qBCMonoRet', 'IBSCBS_gIBSCBSMono_gMonoRet_adRemIBSRet', 'IBSCBS_gIBSCBSMono_gMonoRet_vIBSMonoRet',
+      'IBSCBS_gIBSCBSMono_gMonoRet_adRemCBSRet', 'IBSCBS_gIBSCBSMono_gMonoRet_vCBSMonoRet', 'IBSCBS_gIBSCBSMono_gMonoDif_pDifIBS',
+      'IBSCBS_gIBSCBSMono_gMonoDif_vIBSMonoDif', 'IBSCBS_gIBSCBSMono_gMonoDif_pDifCBS', 'IBSCBS_gIBSCBSMono_gMonoDif_vCBSMonoDif',
+      'IBSCBS_gIBSCBSMono_vTotIBSMonoItem', 'IBSCBS_gIBSCBSMono_vTotCBSMonoItem', 'IBSCBS_gTransfCred_vIBS',
+      'IBSCBS_gTransfCred_vCBS', 'IBSCBS_gCredPresIBSZFM_tpCredPresIBSZFM', 'IBSCBS_gCredPresIBSZFM_vCredPresIBSZFM',
+      'IMPOSTODEVOL_pDevol', 'IMPOSTODEVOL_vIPIDevol', 'infAdProd', 'OBSITEM_obsCont_xTexto', 'OBSITEM_obsCont_xCampo',
+      'OBSITEM_obsFisco_xTexto', 'OBSITEM_obsFisco_xCampo', 'vItem', 'DFeReferenciado_chaveAcesso', 'DFeReferenciado_nItem'
+    ]];
+    const rowsTotal: (string | number)[][] = [[
+      'Arquivo', 'nNF', 'ICMSTOT_vBC', 'ICMSTOT_vICMS', 'ICMSTOT_vICMSDeson', 'ICMSTOT_vFCPUFDest', 'ICMSTOT_vICMSUFDest',
+      'ICMSTOT_vICMSUFRemet', 'ICMSTOT_vFCP', 'ICMSTOT_vBCST', 'ICMSTOT_vST', 'ICMSTOT_vFCPST', 'ICMSTOT_vFCPSTRet',
+      'ICMSTOT_qBCMono', 'ICMSTOT_vICMSMono', 'ICMSTOT_qBCMonoReten', 'ICMSTOT_vICMSMonoReten', 'ICMSTOT_qBCMonoRet',
+      'ICMSTOT_vICMSMonoRet', 'ICMSTOT_vProd', 'ICMSTOT_vFrete', 'ICMSTOT_vSeg', 'ICMSTOT_vDesc', 'ICMSTOT_vII',
+      'ICMSTOT_vIPI', 'ICMSTOT_vIPIDevol', 'ICMSTOT_vPIS', 'ICMSTOT_vCOFINS', 'ICMSTOT_vOutro', 'ICMSTOT_vNF',
+      'ICMSTOT_vTotTrib', 'ISSQNTOT_vServ', 'ISSQNTOT_vBC', 'ISSQNTOT_vISS', 'ISSQNTOT_vPIS', 'ISSQNTOT_vCOFINS',
+      'ISSQNTOT_dCompet', 'ISSQNTOT_vDeducao', 'ISSQNTOT_vOutro', 'ISSQNTOT_vDescIncond', 'ISSQNTOT_vDescCond',
+      'ISSQNTOT_vISSRet', 'ISSQNTOT_cRegTrib', 'RETTRIB_vRetPIS', 'RETTRIB_vRetCOFINS', 'RETTRIB_vRetCSLL',
+      'RETTRIB_vBCIRRF', 'RETTRIB_vIRRF', 'RETTRIB_vBCRetPrev', 'RETTRIB_vRetPrev', 'ISTot_vIS', 'IBSCBSTot_vBCIBSCBS',
+      'IBSCBSTot_gIBS_gIBSUF_vDif', 'IBSCBSTot_gIBS_gIBSUF_vDevTrib', 'IBSCBSTot_gIBS_gIBSUF_vIBSUF',
+      'IBSCBSTot_gIBS_gIBSMun_vDif', 'IBSCBSTot_gIBS_gIBSMun_vDevTrib', 'IBSCBSTot_gIBS_gIBSMun_vIBSMun',
+      'IBSCBSTot_gIBS_vIBS', 'IBSCBSTot_gIBS_vCredPres', 'IBSCBSTot_gIBS_vCredPresCondSus', 'IBSCBSTot_gCBS_vDif',
+      'IBSCBSTot_gCBS_vDevTrib', 'IBSCBSTot_gCBS_vCBS', 'IBSCBSTot_gCBS_vCredPres', 'IBSCBSTot_gCBS_vCredPresCondSus',
+      'IBSCBSTot_gMono_vIBSMono', 'IBSCBSTot_gMono_vCBSMono', 'IBSCBSTot_gMono_vIBSMonoReten', 'IBSCBSTot_gMono_vCBSMonoReten',
+      'IBSCBSTot_gMono_vIBSMonoRet', 'IBSCBSTot_gMono_vCBSMonoRet', 'vNFTot'
+    ]];
+    const rowsTransp: (string | number)[][] = [[
+      'Arquivo', 'nNF', 'modFrete', 'TRANSPORTA_CNPJ', 'TRANSPORTA_CPF', 'TRANSPORTA_xNome', 'TRANSPORTA_IE',
+      'TRANSPORTA_xEnder', 'TRANSPORTA_xMun', 'TRANSPORTA_UF', 'RETTRANSP_vServ', 'RETTRANSP_vBCRet', 'RETTRANSP_pICMSRet',
+      'RETTRANSP_vICMSRet', 'RETTRANSP_CFOP', 'RETTRANSP_cMunFG', 'VEICTRANSP_placa', 'VEICTRANSP_UF', 'VEICTRANSP_RNTC',
+      'REBOQUE_placa', 'REBOQUE_UF', 'REBOQUE_RNTC', 'vagao', 'balsa', 'VOL_qVol', 'VOL_esp', 'VOL_marca', 'VOL_nVol',
+      'VOL_pesoL', 'VOL_pesoB', 'VOL_nLacre'
+    ]];
+    const rowsPag: (string | number)[][] = [[
+      'Arquivo', 'nNF', 'indPag', 'tPag', 'xPag', 'vPag', 'dPag', 'CNPJPag', 'UFPag', 'CARD_tpIntegra', 'CARD_CNPJ',
+      'CARD_tBand', 'CARD_cAut', 'CARD_CNPJReceb', 'CARD_idTermPag', 'vTroco'
+    ]];
+    const rowsInfAdic: (string | number)[][] = [[
+      'Arquivo', 'nNF', 'infAdFisco', 'infCpl', 'OBSCONT_xCampo', 'OBSCONT_xTexto', 'OBSFISCO_xCampo', 'OBSFISCO_xTexto',
+      'PROCREF_nProc', 'PROCREF_indProc', 'PROCREF_tpAto'
+    ]];
+    const rowsRespTec: (string | number)[][] = [[
+      'Arquivo', 'nNF', 'CNPJ', 'xContato', 'email', 'fone', 'idCSRT', 'hashCSRT'
+    ]];
+    const rowsSupl: (string | number)[][] = [['Arquivo', 'nNF', 'qrCode', 'urlChave']];
+    const rowsAssin: (string | number)[][] = [['Arquivo', 'nNF', 'DigestValue', 'SignatureValue', 'X509Certificate']];
+    const rowsProt: (string | number)[][] = [[
+      'Arquivo', 'nNF', 'tpAmb', 'verAplic', 'chNFe', 'dhRecbto', 'nProt', 'digVal', 'cStat', 'xMotivo'
+    ]];
+
+    notas.forEach(nota => {
+      const doc = parser.parseFromString(nota.rawXml!, 'text/xml');
+      const arquivo = nota.fileName || `${nota.chave || nota.numero}.xml`;
+      const nNF = nota.numero || '';
+      const ide = first(doc, 'ide');
+      const infNFe = doc.getElementsByTagName('infNFe')[0];
+      const versao = infNFe?.getAttribute('versao') || '';
+      const chave = t(doc, 'chNFe') || (infNFe?.getAttribute('Id') || '').replace('NFe', '');
+      const nfRef = ide?.getElementsByTagName('NFref')[0];
+      const refNF = nfRef?.getElementsByTagName('refNF')[0];
+      const refNFP = nfRef?.getElementsByTagName('refNFP')[0];
+      const refECF = nfRef?.getElementsByTagName('refECF')[0];
+
+      rowsIdent.push([
+        arquivo, versao, chave, t(ide, 'cUF'), t(ide, 'cNF'), t(ide, 'natOp'), t(ide, 'indPag'), t(ide, 'mod'),
+        t(ide, 'serie'), t(ide, 'nNF'), t(ide, 'dhEmi'), t(ide, 'dhSaiEnt'), t(ide, 'hSaiEnt'), t(ide, 'tpNF'),
+        t(ide, 'idDest'), t(ide, 'cMunFG'), t(ide, 'tpImp'), t(ide, 'tpEmis'), t(ide, 'cDV'), t(ide, 'tpAmb'),
+        t(ide, 'finNFe'), t(ide, 'indFinal'), t(ide, 'indPres'), t(ide, 'indIntermed'), t(ide, 'procEmi'),
+        t(ide, 'verProc'), t(ide, 'dhCont'), t(ide, 'xJust'),
+        t(nfRef, 'refNFe'), t(refNF, 'cUF'), t(refNF, 'AAMM'), t(refNF, 'CNPJ'), t(refNF, 'mod'), t(refNF, 'serie'), t(refNF, 'nNF'),
+        t(refNFP, 'cUF'), t(refNFP, 'AAMM'), t(refNFP, 'CNPJ'), t(refNFP, 'CPF'), t(refNFP, 'IE'), t(refNFP, 'mod'), t(refNFP, 'serie'), t(refNFP, 'nNF'),
+        t(nfRef, 'refCTe'), t(refECF, 'mod'), t(refECF, 'nECF'), t(refECF, 'nCOO')
+      ]);
+
+      const emit = first(doc, 'emit');
+      const enderEmit = emit?.getElementsByTagName('enderEmit')[0];
+      rowsEmit.push([
+        arquivo, nNF, t(emit, 'CNPJ'), t(emit, 'CPF'), t(emit, 'xNome'), t(emit, 'xFant'),
+        t(enderEmit, 'xLgr'), t(enderEmit, 'nro'), t(enderEmit, 'xCpl'), t(enderEmit, 'xBairro'), t(enderEmit, 'cMun'),
+        t(enderEmit, 'xMun'), t(enderEmit, 'UF'), t(enderEmit, 'CEP'), t(enderEmit, 'cPais'), t(enderEmit, 'xPais'),
+        t(enderEmit, 'fone'), t(emit, 'IE'), t(emit, 'IEST'), t(emit, 'IM'), t(emit, 'CNAE'), t(emit, 'CRT')
+      ]);
+
+      const dest = first(doc, 'dest');
+      if (dest) {
+        const enderDest = dest.getElementsByTagName('enderDest')[0];
+        rowsDest.push([
+          arquivo, nNF, t(dest, 'CNPJ'), t(dest, 'CPF'), t(dest, 'idEstrangeiro'), t(dest, 'xNome'),
+          t(enderDest, 'xLgr'), t(enderDest, 'nro'), t(enderDest, 'xCpl'), t(enderDest, 'xBairro'), t(enderDest, 'cMun'),
+          t(enderDest, 'xMun'), t(enderDest, 'UF'), t(enderDest, 'CEP'), t(enderDest, 'cPais'), t(enderDest, 'xPais'),
+          t(enderDest, 'fone'), t(dest, 'indIEDest'), t(dest, 'IE'), t(dest, 'ISUF'), t(dest, 'IM'), t(dest, 'email')
+        ]);
+      }
+
+      Array.from(doc.getElementsByTagName('det')).forEach(det => {
+        const prod = det.getElementsByTagName('prod')[0];
+        const imposto = det.getElementsByTagName('imposto')[0];
+        const infProdNFF = prod?.getElementsByTagName('NFFProd')[0];
+        const infProdEmb = prod?.getElementsByTagName('gEmb')[0];
+        const veicProd = prod?.getElementsByTagName('veicProd')[0];
+        const med = prod?.getElementsByTagName('med')[0];
+        const icms = imposto?.getElementsByTagName('ICMS')[0];
+        const ipi = imposto?.getElementsByTagName('IPI')[0];
+        const ipiTrib = ipi?.getElementsByTagName('IPITrib')[0];
+        const ipiNT = ipi?.getElementsByTagName('IPINT')[0];
+        const ii = imposto?.getElementsByTagName('II')[0];
+        const issqn = imposto?.getElementsByTagName('ISSQN')[0];
+        const pis = imposto?.getElementsByTagName('PIS')[0];
+        const cofins = imposto?.getElementsByTagName('COFINS')[0];
+        const icmsUFDest = imposto?.getElementsByTagName('ICMSUFDest')[0];
+        const isBlock = imposto?.getElementsByTagName('IS')[0];
+        const ibscbs = imposto?.getElementsByTagName('IBSCBS')[0];
+        const gIbsCbs = ibscbs?.getElementsByTagName('gIBSCBS')[0];
+        const gIbsUF = gIbsCbs?.getElementsByTagName('gIBSUF')[0];
+        const gIbsMun = gIbsCbs?.getElementsByTagName('gIBSMun')[0];
+        const gCBS = gIbsCbs?.getElementsByTagName('gCBS')[0];
+        const gTribRegular = gIbsCbs?.getElementsByTagName('gTribRegular')[0];
+        const gIBSCredPres = gIbsCbs?.getElementsByTagName('gIBSCredPres')[0];
+        const gCBSCredPres = gIbsCbs?.getElementsByTagName('gCBSCredPres')[0];
+        const gTribCompraGov = gIbsCbs?.getElementsByTagName('gTribCompraGov')[0];
+        const gIbsCbsMono = ibscbs?.getElementsByTagName('gIBSCBSMono')[0];
+        const gMonoPadrao = gIbsCbsMono?.getElementsByTagName('gMonoPadrao')[0];
+        const gMonoReten = gIbsCbsMono?.getElementsByTagName('gMonoReten')[0];
+        const gMonoRet = gIbsCbsMono?.getElementsByTagName('gMonoRet')[0];
+        const gMonoDif = gIbsCbsMono?.getElementsByTagName('gMonoDif')[0];
+        const gTransfCred = ibscbs?.getElementsByTagName('gTransfCred')[0];
+        const gCredPresIBSZFM = ibscbs?.getElementsByTagName('gCredPresIBSZFM')[0];
+        const impostoDevol = det.getElementsByTagName('impostoDevol')[0];
+        const obsItem = det.getElementsByTagName('obsItem')[0];
+        const obsCont = obsItem?.getElementsByTagName('obsCont')[0];
+        const obsFisco = obsItem?.getElementsByTagName('obsFisco')[0];
+        const dfeRef = det.getElementsByTagName('DFeReferenciado')[0];
+        // Whichever ICMS/PIS/COFINS variant tag is populated (ICMS00, ICMS60, PISAliq, etc.) —
+        // field names (CST/CSOSN/vBC/pICMS...) are consistent across variants of the same group.
+        const icmsVariant = icms ? Array.from(icms.children).find(c => /^ICMS/.test(c.tagName)) : undefined;
+        const icmsScope = icmsVariant || icms;
+        const pisVariant = pis ? Array.from(pis.children).find(c => /^PIS/.test(c.tagName)) : undefined;
+        const pisScope = pisVariant || pis;
+        const cofinsVariant = cofins ? Array.from(cofins.children).find(c => /^COFINS/.test(c.tagName)) : undefined;
+        const cofinsScope = cofinsVariant || cofins;
+        const tipoIcms = icmsVariant?.tagName || '';
+        const tipoPis = pisVariant?.tagName || '';
+        const tipoCofins = cofinsVariant?.tagName || '';
+
+        rowsItens.push([
+          arquivo, nNF, t(det, 'nItem') || (det.getAttribute('nItem') || ''), t(prod, 'cProd'), t(prod, 'cEAN'),
+          t(prod, 'cBarra'), t(prod, 'xProd'), t(prod, 'NCM'), t(prod, 'CEST'), t(prod, 'indEscala'), t(prod, 'CNPJFab'),
+          t(prod, 'cBenef'), t(prod, 'EXTIPI'), t(prod, 'CFOP'), t(prod, 'uCom'), n(prod, 'qCom'), n(prod, 'vUnCom'),
+          n(prod, 'vProd'), t(prod, 'cEANTrib'), t(prod, 'cBarraTrib'), t(prod, 'uTrib'), n(prod, 'qTrib'), n(prod, 'vUnTrib'),
+          n(prod, 'vFrete'), n(prod, 'vSeg'), n(prod, 'vDesc'), n(prod, 'vOutro'), t(prod, 'indTot'), t(prod, 'indBemMovelUsado'),
+          t(prod, 'xPed'), t(prod, 'nItemPed'), t(prod, 'nFCI'),
+          t(infProdNFF, 'cProdFisco'), t(infProdNFF, 'cOperNFF'),
+          t(infProdEmb, 'xEmb'), n(infProdEmb, 'qVolEmb'), t(infProdEmb, 'uEmb'),
+          t(veicProd, 'tpOp'), t(veicProd, 'chassi'), t(veicProd, 'cCor'), t(veicProd, 'xCor'), t(veicProd, 'pot'),
+          t(veicProd, 'cilin'), t(veicProd, 'pesoL'), t(veicProd, 'pesoB'), t(veicProd, 'nSerie'), t(veicProd, 'tpComb'),
+          t(veicProd, 'nMotor'), t(veicProd, 'CMT'), t(veicProd, 'dist'), t(veicProd, 'anoMod'), t(veicProd, 'anoFab'),
+          t(veicProd, 'tpPint'), t(veicProd, 'tpVeic'), t(veicProd, 'espVeic'), t(veicProd, 'VIN'), t(veicProd, 'condVeic'),
+          t(veicProd, 'cMod'), t(veicProd, 'cCorDENATRAN'), t(veicProd, 'lota'), t(veicProd, 'tpRest'),
+          t(med, 'nLote'), n(med, 'qLote'), t(med, 'dFab'), t(med, 'dVal'), n(med, 'vPMC'), t(med, 'cProdANVISA'), t(med, 'xMotivoIsencao'),
+          t(prod, 'nRECOPI'),
+          n(imposto, 'vTotTrib'), tipoIcms, t(icmsScope, 'orig'), t(icmsScope, 'CSOSN'), n(icmsScope, 'pCredSN'), n(icmsScope, 'vCredICMSSN'),
+          t(icmsScope, 'CST'), n(icmsScope, 'vBCSTRet'), n(icmsScope, 'vICMSSTRet'), n(icmsScope, 'vBCSTDest'), n(icmsScope, 'vICMSSTDest'),
+          t(icmsScope, 'modBC'), t(icmsScope, 'modBCST'), n(icmsScope, 'pRedBC'), t(icmsScope, 'cBenefRBC'), n(icmsScope, 'vBC'),
+          n(icmsScope, 'pICMS'), n(icmsScope, 'vICMSOp'), n(icmsScope, 'pDif'), n(icmsScope, 'vICMSDif'), n(icmsScope, 'vICMS'),
+          n(icmsScope, 'vICMSDeson'), t(icmsScope, 'motDesICMS'), n(icmsScope, 'pMVAST'), n(icmsScope, 'pRedBCST'), n(icmsScope, 'vBCST'),
+          n(icmsScope, 'pICMSST'), n(icmsScope, 'vICMSST'), n(icmsScope, 'pBCOp'), t(icmsScope, 'UFST'), n(icmsScope, 'pFCP'),
+          n(icmsScope, 'vFCP'), n(icmsScope, 'vBCFCP'), n(icmsScope, 'pFCPST'), n(icmsScope, 'vFCPST'), n(icmsScope, 'vBCFCPST'),
+          n(icmsScope, 'pFCPSTRet'), n(icmsScope, 'vFCPSTRet'), n(icmsScope, 'vBCFCPSTRet'), n(icmsScope, 'pRedBCEfet'),
+          n(icmsScope, 'vBCEfet'), n(icmsScope, 'pICMSEfet'), n(icmsScope, 'vICMSEfet'), n(icmsScope, 'pST'), n(icmsScope, 'qBCMono'),
+          n(icmsScope, 'adRemICMS'), n(icmsScope, 'vICMSMono'), n(icmsScope, 'qBCMonoReten'), n(icmsScope, 'adRemICMSReten'),
+          n(icmsScope, 'vICMSMonoReten'), n(icmsScope, 'pRedAdRem'), t(icmsScope, 'motRedAdRem'), n(icmsScope, 'vICMSSTDeson'),
+          t(icmsScope, 'indDeduzDeson'), t(icmsScope, 'motDesICMSST'), n(icmsScope, 'pFCPDif'), n(icmsScope, 'vFCPDif'),
+          n(icmsScope, 'vFCPEfet'), n(icmsScope, 'vICMSMonoOp'), n(icmsScope, 'vICMSMonoDif'), n(icmsScope, 'qBCMonoDif'),
+          n(icmsScope, 'adRemICMSDif'), n(icmsScope, 'vICMSSubstituto'), n(icmsScope, 'qBCMonoRet'), n(icmsScope, 'adRemICMSRet'),
+          n(icmsScope, 'vICMSMonoRet'),
+          t(ipi, 'clEnq'), t(ipi, 'CNPJProd'), t(ipi, 'cSelo'), t(ipi, 'qSelo'), t(ipi, 'cEnq'),
+          t(ipiTrib, 'CST'), n(ipiTrib, 'vBC'), n(ipiTrib, 'pIPI'), n(ipiTrib, 'qUnid'), n(ipiTrib, 'vUnid'), n(ipiTrib, 'vIPI'),
+          t(ipiNT, 'CST'),
+          n(ii, 'vBC'), n(ii, 'vDespAdu'), n(ii, 'vII'), n(ii, 'vIOF'),
+          n(issqn, 'vBC'), n(issqn, 'vAliq'), n(issqn, 'vISSQN'), t(issqn, 'cMunFG'), t(issqn, 'cListServ'), n(issqn, 'vDeducao'),
+          n(issqn, 'vOutro'), n(issqn, 'vDescIncond'), n(issqn, 'vDescCond'), n(issqn, 'vISSRet'), t(issqn, 'indISS'),
+          t(issqn, 'cServico'), t(issqn, 'cMun'), t(issqn, 'cPais'), t(issqn, 'nProcesso'), t(issqn, 'indIncentivo'),
+          tipoPis, t(pisScope, 'CST'), n(pisScope, 'vBC'), n(pisScope, 'pPIS'), n(pisScope, 'vPIS'), n(pisScope, 'qBCProd'), n(pisScope, 'vAliqProd'),
+          tipoCofins, t(cofinsScope, 'CST'), n(cofinsScope, 'vBC'), n(cofinsScope, 'pCOFINS'), n(cofinsScope, 'vCOFINS'), n(cofinsScope, 'qBCProd'), n(cofinsScope, 'vAliqProd'),
+          n(icmsUFDest, 'vBCUFDest'), n(icmsUFDest, 'vBCFCPUFDest'), n(icmsUFDest, 'pFCPUFDest'), n(icmsUFDest, 'pICMSUFDest'),
+          n(icmsUFDest, 'pICMSInter'), n(icmsUFDest, 'pICMSInterPart'), n(icmsUFDest, 'vFCPUFDest'), n(icmsUFDest, 'vICMSUFDest'), n(icmsUFDest, 'vICMSUFRemet'),
+          t(isBlock, 'CST'), t(isBlock, 'cClassTrib'), n(isBlock, 'vBC'), n(isBlock, 'pIS'), n(isBlock, 'pISEspec'), t(isBlock, 'uTrib'), n(isBlock, 'qTrib'), n(isBlock, 'vIS'),
+          t(ibscbs, 'CST'), t(ibscbs, 'cClassTrib'), n(gIbsCbs, 'vBC'),
+          n(gIbsUF, 'pIBSUF'), n(gIbsUF, 'pDif'), n(gIbsUF, 'vDif'), n(gIbsUF, 'vDevTrib'), n(gIbsUF, 'pRedAliq'), n(gIbsUF, 'pAliqEfet'), n(gIbsUF, 'vIBSUF'),
+          n(gIbsMun, 'pIBSMun'), n(gIbsMun, 'pDif'), n(gIbsMun, 'vDif'), n(gIbsMun, 'vDevTrib'), n(gIbsMun, 'pRedAliq'), n(gIbsMun, 'pAliqEfet'), n(gIbsMun, 'vIBSMun'),
+          n(gIbsCbs, 'vIBS'),
+          n(gCBS, 'pCBS'), n(gCBS, 'pDif'), n(gCBS, 'vDif'), n(gCBS, 'vDevTrib'), n(gCBS, 'pRedAliq'), n(gCBS, 'pAliqEfet'), n(gCBS, 'vCBS'),
+          t(gTribRegular, 'CSTReg'), t(gTribRegular, 'cClassTribReg'), n(gTribRegular, 'pAliqEfetRegIBSUF'), n(gTribRegular, 'vTribRegIBSUF'),
+          n(gTribRegular, 'pAliqEfetRegIBSMun'), n(gTribRegular, 'vTribRegIBSMun'), n(gTribRegular, 'pAliqEfetRegCBS'), n(gTribRegular, 'vTribRegCBS'),
+          t(gIBSCredPres, 'cCredPres'), n(gIBSCredPres, 'pCredPres'), n(gIBSCredPres, 'vCredPres'), n(gIBSCredPres, 'vCredPresCondSus'),
+          t(gCBSCredPres, 'cCredPres'), n(gCBSCredPres, 'pCredPres'), n(gCBSCredPres, 'vCredPres'), n(gCBSCredPres, 'vCredPresCondSus'),
+          n(gTribCompraGov, 'pAliqIBSUF'), n(gTribCompraGov, 'vTribIBSUF'), n(gTribCompraGov, 'pAliqIBSMun'), n(gTribCompraGov, 'vTribIBSMun'),
+          n(gTribCompraGov, 'pAliqCBS'), n(gTribCompraGov, 'vTribCBS'),
+          n(gMonoPadrao, 'qBCMono'), n(gMonoPadrao, 'adRemIBS'), n(gMonoPadrao, 'adRemCBS'), n(gMonoPadrao, 'vIBSMono'), n(gMonoPadrao, 'vCBSMono'),
+          n(gMonoReten, 'qBCMonoReten'), n(gMonoReten, 'adRemIBSReten'), n(gMonoReten, 'vIBSMonoReten'), n(gMonoReten, 'adRemCBSReten'), n(gMonoReten, 'vCBSMonoReten'),
+          n(gMonoRet, 'qBCMonoRet'), n(gMonoRet, 'adRemIBSRet'), n(gMonoRet, 'vIBSMonoRet'), n(gMonoRet, 'adRemCBSRet'), n(gMonoRet, 'vCBSMonoRet'),
+          n(gMonoDif, 'pDifIBS'), n(gMonoDif, 'vIBSMonoDif'), n(gMonoDif, 'pDifCBS'), n(gMonoDif, 'vCBSMonoDif'),
+          n(gIbsCbsMono, 'vTotIBSMonoItem'), n(gIbsCbsMono, 'vTotCBSMonoItem'),
+          n(gTransfCred, 'vIBS'), n(gTransfCred, 'vCBS'), t(gCredPresIBSZFM, 'tpCredPresIBSZFM'), n(gCredPresIBSZFM, 'vCredPresIBSZFM'),
+          n(impostoDevol, 'pDevol'), n(impostoDevol, 'vIPIDevol'),
+          t(det, 'infAdProd'), t(obsCont, 'xTexto'), obsCont?.getAttribute('xCampo') || '', t(obsFisco, 'xTexto'), obsFisco?.getAttribute('xCampo') || '',
+          n(det, 'vItem'), t(dfeRef, 'chNFe'), t(dfeRef, 'nItem')
+        ]);
+      });
+
+      const total = first(doc, 'total');
+      const icmsTot = total?.getElementsByTagName('ICMSTot')[0];
+      const issqnTot = total?.getElementsByTagName('ISSQNtot')[0];
+      const retTrib = total?.getElementsByTagName('retTrib')[0];
+      const isTot = total?.getElementsByTagName('ISTot')[0];
+      const ibscbsTot = total?.getElementsByTagName('IBSCBSTot')[0];
+      const gIbsTot = ibscbsTot?.getElementsByTagName('gIBS')[0];
+      const gIbsUFTot = gIbsTot?.getElementsByTagName('gIBSUF')[0];
+      const gIbsMunTot = gIbsTot?.getElementsByTagName('gIBSMun')[0];
+      const gCBSTot = ibscbsTot?.getElementsByTagName('gCBS')[0];
+      const gMonoTot = ibscbsTot?.getElementsByTagName('gMono')[0];
+
+      rowsTotal.push([
+        arquivo, nNF, n(icmsTot, 'vBC'), n(icmsTot, 'vICMS'), n(icmsTot, 'vICMSDeson'), n(icmsTot, 'vFCPUFDest'),
+        n(icmsTot, 'vICMSUFDest'), n(icmsTot, 'vICMSUFRemet'), n(icmsTot, 'vFCP'), n(icmsTot, 'vBCST'), n(icmsTot, 'vST'),
+        n(icmsTot, 'vFCPST'), n(icmsTot, 'vFCPSTRet'), n(icmsTot, 'qBCMono'), n(icmsTot, 'vICMSMono'), n(icmsTot, 'qBCMonoReten'),
+        n(icmsTot, 'vICMSMonoReten'), n(icmsTot, 'qBCMonoRet'), n(icmsTot, 'vICMSMonoRet'), n(icmsTot, 'vProd'), n(icmsTot, 'vFrete'),
+        n(icmsTot, 'vSeg'), n(icmsTot, 'vDesc'), n(icmsTot, 'vII'), n(icmsTot, 'vIPI'), n(icmsTot, 'vIPIDevol'), n(icmsTot, 'vPIS'),
+        n(icmsTot, 'vCOFINS'), n(icmsTot, 'vOutro'), n(icmsTot, 'vNF'), n(icmsTot, 'vTotTrib'),
+        n(issqnTot, 'vServ'), n(issqnTot, 'vBC'), n(issqnTot, 'vISS'), n(issqnTot, 'vPIS'), n(issqnTot, 'vCOFINS'), t(issqnTot, 'dCompet'),
+        n(issqnTot, 'vDeducao'), n(issqnTot, 'vOutro'), n(issqnTot, 'vDescIncond'), n(issqnTot, 'vDescCond'), n(issqnTot, 'vISSRet'), t(issqnTot, 'cRegTrib'),
+        n(retTrib, 'vRetPIS'), n(retTrib, 'vRetCOFINS'), n(retTrib, 'vRetCSLL'), n(retTrib, 'vBCIRRF'), n(retTrib, 'vIRRF'),
+        n(retTrib, 'vBCRetPrev'), n(retTrib, 'vRetPrev'),
+        n(isTot, 'vIS'), n(ibscbsTot, 'vBCIBSCBS'),
+        n(gIbsUFTot, 'vDif'), n(gIbsUFTot, 'vDevTrib'), n(gIbsUFTot, 'vIBSUF'),
+        n(gIbsMunTot, 'vDif'), n(gIbsMunTot, 'vDevTrib'), n(gIbsMunTot, 'vIBSMun'),
+        n(gIbsTot, 'vIBS'), n(gIbsTot, 'vCredPres'), n(gIbsTot, 'vCredPresCondSus'),
+        n(gCBSTot, 'vDif'), n(gCBSTot, 'vDevTrib'), n(gCBSTot, 'vCBS'), n(gCBSTot, 'vCredPres'), n(gCBSTot, 'vCredPresCondSus'),
+        n(gMonoTot, 'vIBSMono'), n(gMonoTot, 'vCBSMono'), n(gMonoTot, 'vIBSMonoReten'), n(gMonoTot, 'vCBSMonoReten'),
+        n(gMonoTot, 'vIBSMonoRet'), n(gMonoTot, 'vCBSMonoRet'),
+        n(total, 'vNF')
+      ]);
+
+      const transp = first(doc, 'transp');
+      if (transp) {
+        const transporta = transp.getElementsByTagName('transporta')[0];
+        const retTransp = transp.getElementsByTagName('retTransp')[0];
+        const veicTransp = transp.getElementsByTagName('veicTransp')[0];
+        const reboque = transp.getElementsByTagName('reboque')[0];
+        const vol = transp.getElementsByTagName('vol')[0];
+        rowsTransp.push([
+          arquivo, nNF, t(transp, 'modFrete'), t(transporta, 'CNPJ'), t(transporta, 'CPF'), t(transporta, 'xNome'),
+          t(transporta, 'IE'), t(transporta, 'xEnder'), t(transporta, 'xMun'), t(transporta, 'UF'),
+          n(retTransp, 'vServ'), n(retTransp, 'vBCRet'), n(retTransp, 'pICMSRet'), n(retTransp, 'vICMSRet'), t(retTransp, 'CFOP'), t(retTransp, 'cMunFG'),
+          t(veicTransp, 'placa'), t(veicTransp, 'UF'), t(veicTransp, 'RNTC'),
+          t(reboque, 'placa'), t(reboque, 'UF'), t(reboque, 'RNTC'),
+          t(transp, 'vagao'), t(transp, 'balsa'),
+          n(vol, 'qVol'), t(vol, 'esp'), t(vol, 'marca'), t(vol, 'nVol'), n(vol, 'pesoL'), n(vol, 'pesoB'), t(vol, 'nLacre')
+        ]);
+      }
+
+      Array.from(doc.getElementsByTagName('detPag')).forEach(detPag => {
+        const card = detPag.getElementsByTagName('card')[0];
+        rowsPag.push([
+          arquivo, nNF, t(ide, 'indPag'), t(detPag, 'tPag'), t(detPag, 'xPag'), n(detPag, 'vPag'), t(detPag, 'dPag'),
+          t(detPag, 'CNPJPag'), t(detPag, 'UFPag'), t(card, 'tpIntegra'), t(card, 'CNPJ'), t(card, 'tBand'), t(card, 'cAut'),
+          t(card, 'CNPJReceb'), t(card, 'idTermPag'), n(doc.getElementsByTagName('pag')[0], 'vTroco')
+        ]);
+      });
+
+      const infAdic = first(doc, 'infAdic');
+      if (infAdic) {
+        const obsCont = infAdic.getElementsByTagName('obsCont')[0];
+        const obsFisco = infAdic.getElementsByTagName('obsFisco')[0];
+        const procRef = infAdic.getElementsByTagName('procRef')[0];
+        rowsInfAdic.push([
+          arquivo, nNF, t(infAdic, 'infAdFisco'), t(infAdic, 'infCpl'),
+          obsCont?.getAttribute('xCampo') || '', t(obsCont, 'xTexto'),
+          obsFisco?.getAttribute('xCampo') || '', t(obsFisco, 'xTexto'),
+          t(procRef, 'nProc'), t(procRef, 'indProc'), t(procRef, 'tpAto')
+        ]);
+      }
+
+      const respTec = first(doc, 'infRespTec');
+      if (respTec) {
+        rowsRespTec.push([
+          arquivo, nNF, t(respTec, 'CNPJ'), t(respTec, 'xContato'), t(respTec, 'email'), t(respTec, 'fone'),
+          t(respTec, 'idCSRT'), t(respTec, 'hashCSRT')
+        ]);
+      }
+
+      const supl = first(doc, 'infNFeSupl');
+      if (supl) {
+        rowsSupl.push([arquivo, nNF, t(supl, 'qrCode'), t(supl, 'urlChave')]);
+      }
+
+      const signature = doc.getElementsByTagName('Signature')[0];
+      if (signature) {
+        rowsAssin.push([
+          arquivo, nNF, t(signature, 'DigestValue'), t(signature, 'SignatureValue'), t(signature, 'X509Certificate')
+        ]);
+      }
+
+      const protNFe = doc.getElementsByTagName('protNFe')[0];
+      const infProt = protNFe?.getElementsByTagName('infProt')[0];
+      if (infProt) {
+        rowsProt.push([
+          arquivo, nNF, t(infProt, 'tpAmb'), t(infProt, 'verAplic'), t(infProt, 'chNFe'), t(infProt, 'dhRecbto'),
+          t(infProt, 'nProt'), t(infProt, 'digVal'), t(infProt, 'cStat'), t(infProt, 'xMotivo')
+        ]);
+      }
+    });
+
+    const wb = XLSX.utils.book_new();
+    const addSheet = (aoa: (string | number)[][], name: string) => {
+      if (aoa.length <= 1) return;
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = aoa[0].map(h => ({ wch: Math.min(30, Math.max(10, String(h).length + 2)) }));
+      XLSX.utils.book_append_sheet(wb, ws, name);
+    };
+    addSheet(rowsIdent, 'Identificação NCFE');
+    addSheet(rowsEmit, 'Emitente');
+    addSheet(rowsDest, 'Destinatário');
+    addSheet(rowsItens, 'Itens');
+    addSheet(rowsTotal, 'Total');
+    addSheet(rowsTransp, 'Transportadora');
+    addSheet(rowsPag, 'Pagamento');
+    addSheet(rowsInfAdic, 'Inf. Adicional');
+    addSheet(rowsRespTec, 'Resp. Tecnico');
+    addSheet(rowsSupl, 'Suplementares NF');
+    addSheet(rowsAssin, 'Assinatura');
+    addSheet(rowsProt, 'Protocolo');
+
+    XLSX.writeFile(wb, nomeArquivoExport('planilha_completa_xml', 'xlsx'));
+  };
+
   const [wasmBinary, setWasmBinary] = useState<ArrayBuffer | null>(null);
   const [extractionStatus, setExtractionStatus] = useState<string | null>(null);
   const [extractionErrors, setExtractionErrors] = useState<string[]>([]);
@@ -4708,10 +5139,17 @@ export default function App() {
                       </button>
                       <button
                         onClick={() => { exportarPlanilhaDetalhadaSimples(); setShowExportOptions(false); }}
-                        className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all"
+                        className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all border-b border-slate-100"
                       >
                         <div className="text-sm font-bold text-slate-900">Confronto Simples</div>
                         <div className="text-xs text-slate-500 mt-0.5">Só Natureza, NCM, Item e Valor Contábil, mais Desconto em diante quando tiver valor.</div>
+                      </button>
+                      <button
+                        onClick={() => { exportarPlanilhaCompletaXML(); setShowExportOptions(false); }}
+                        className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all"
+                      >
+                        <div className="text-sm font-bold text-slate-900">XML → Excel (12 abas)</div>
+                        <div className="text-xs text-slate-500 mt-0.5">Todos os campos do XML, um por coluna, divididos em Identificação/Emitente/Destinatário/Itens/Total/Pagamento/etc — igual a um conversor de XML dedicado.</div>
                       </button>
                     </div>
                   )}
