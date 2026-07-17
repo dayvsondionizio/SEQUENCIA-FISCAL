@@ -1124,6 +1124,71 @@ export default function App() {
     return rows;
   }, [spedData, spedCrossRef, spedCardFiltro, spedSearch]);
 
+  // Nome do filtro ativo, usado tanto no rótulo da aba quanto no nome do arquivo exportado.
+  const spedFiltroNomeArquivo = (): string => {
+    switch (spedCardFiltro) {
+      case 'SemXML': return 'FALTANTE';
+      case 'Canceladas': return 'CANCELADAS';
+      case 'Adicionados': return 'ADICIONADOS';
+      case 'NaoDeclarado': return 'NAO_DECLARADOS';
+      default: return 'COMPLETO';
+    }
+  };
+
+  const exportarSpedTabelaExcel = () => {
+    if (!spedData || !spedCrossRef) return;
+
+    let aoa: (string | number)[][];
+    if (spedCardFiltro === 'NaoDeclarado') {
+      const q = spedSearch.trim().toLowerCase();
+      const rows = q
+        ? spedCrossRef.xmlsNaoDeclarados.filter(x =>
+            (x.numero ?? '').includes(q) || (x.chave ?? '').toLowerCase().includes(q) || (x.data ?? '').includes(q)
+          )
+        : spedCrossRef.xmlsNaoDeclarados;
+      if (rows.length === 0) { alert('Nenhum registro neste filtro para exportar.'); return; }
+      aoa = [
+        ['Data', 'Modelo', 'Série', 'Nº Doc', 'Valor', 'Chave'],
+        ...rows.map(x => [
+          x.data ?? '',
+          x.modelo ?? '',
+          x.serie ?? '',
+          x.numero ?? '',
+          parseFloat(x.valor || '0') || 0,
+          x.chave ?? ''
+        ])
+      ];
+    } else {
+      if (spedRowsFiltradas.length === 0) { alert('Nenhum registro neste filtro para exportar.'); return; }
+      aoa = [
+        ['Data', 'Modelo', 'Série', 'Nº Doc', 'Valor', 'Chave', 'Status'],
+        ...spedRowsFiltradas.map(c => {
+          const falta = c.chave ? spedCrossRef.saidaFaltantesSet.has(c.chave) : false;
+          const cancelada = c.codSit === '02' || c.codSit === '06';
+          const status = cancelada ? 'Cancelada' : falta ? 'Sem XML' : 'Com XML';
+          return [
+            spedCrossRef.formatDt(c.dtDoc),
+            c.codMod,
+            c.ser,
+            c.numDoc,
+            parseFloat(c.vlDoc.replace(',', '.')) || 0,
+            c.chave,
+            status
+          ];
+        })
+      ];
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 46 }, { wch: 12 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'SPED');
+
+    const empresa = sanitizarNomeArquivo(spedData.razaoSocial);
+    const periodo = sanitizarNomeArquivo(spedCrossRef.periodo);
+    XLSX.writeFile(wb, `${empresa}_SPED_XML_${spedFiltroNomeArquivo()}_${periodo}.xlsx`);
+  };
+
   const spedZeradoSaidas = useMemo(() => {
     if (spedData || !analysis?.length) return null;
     const cleanCnpj = (c: string) => c.replace(/\D/g, '');
@@ -3807,6 +3872,14 @@ export default function App() {
                           </button>
                         )}
                       </div>
+                      <button
+                        onClick={exportarSpedTabelaExcel}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-semibold hover:bg-emerald-100 transition-colors shrink-0"
+                        title="Exporta a lista atual (respeitando o filtro e a busca) para Excel"
+                      >
+                        <Download className="w-3 h-3" />
+                        Exportar Excel
+                      </button>
                     </div>
 
                     {/* Tabela com scroll interno */}
