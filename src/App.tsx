@@ -977,6 +977,7 @@ export default function App() {
   const [showCfopBreakdown, setShowCfopBreakdown] = useState(false);
   const [showAnomalias, setShowAnomalias] = useState(false);
   const [showSemAutorizacao, setShowSemAutorizacao] = useState(false);
+  const [showAuditoriaPagamento, setShowAuditoriaPagamento] = useState(false);
   const [showForaDoPrazo, setShowForaDoPrazo] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
   const [showExportXmlMenu, setShowExportXmlMenu] = useState(false);
@@ -1375,6 +1376,91 @@ export default function App() {
 
     return { semProtocolo, semProtocoloAbatidas, foraDoPrazo, numeroDuplicado, semAutorizacaoNaoContingencia: semAutorizacaoComFlag };
   }, [xmlList, inutilizacoes]);
+
+  // Auditoria de meios de pagamento / TEF: verifica o bloco <pag> de cada nota
+  // em busca de inconsistências que geram rejeição SEFAZ (falso TEF, cAut
+  // genérico, CNPJ do cartão = emitente, card presente com dinheiro) e mede
+  // o percentual de vendas em cartão feitas via POS manual (tpIntegra=2) —
+  // o padrão de "sem TEF" que pode gerar multa, em qualquer UF.
+  const auditoriaPagamento = useMemo(() => {
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!mainCnpj) return { problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0 };
+
+    const chavesCanceladas = new Set<string>(
+      xmlList
+        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
+        .map(xml => xml.chave!)
+    );
+
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' &&
+      xml.emitCnpj === mainCnpj &&
+      xml.tpNF !== '0' &&
+      xml.rawXml &&
+      !(xml.chave && chavesCanceladas.has(xml.chave))
+    );
+
+    const tPagLabel: Record<string, string> = {
+      '01': 'Dinheiro', '02': 'Cheque', '03': 'Cartão de Crédito', '04': 'Cartão de Débito',
+      '05': 'Crédito Loja', '10': 'Vale Alimentação', '11': 'Vale Refeição', '12': 'Vale Presente',
+      '13': 'Vale Combustível', '15': 'Boleto Bancário', '16': 'Depósito Bancário', '17': 'PIX',
+      '18': 'Transferência Bancária', '19': 'Programa de Fidelidade', '90': 'Sem Pagamento', '99': 'Outros'
+    };
+    const cAutGenerico = (v: string) => {
+      const t = v.trim().toUpperCase();
+      if (!t) return false;
+      if (/^0+$/.test(t)) return true;
+      if (/^(123456|111111|999999|000001)$/.test(t)) return true;
+      if (t.includes('TESTE') || t.includes('TEST')) return true;
+      return false;
+    };
+
+    const problemas: {
+      xml: XmlData; tPag: string; tPagNome: string; tpIntegra: string;
+      cardCnpj: string; cardTBand: string; cardCAut: string; motivo: string;
+    }[] = [];
+    let totalCartao = 0, totalIntegrado = 0, totalNaoIntegrado = 0;
+
+    saidas.forEach(xml => {
+      const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
+      const detPags = Array.from(doc.getElementsByTagName('detPag'));
+      detPags.forEach(detPag => {
+        const tPag = detPag.getElementsByTagName('tPag')[0]?.textContent?.trim() || '';
+        const isCartao = tPag === '03' || tPag === '04';
+        const card = detPag.getElementsByTagName('card')[0];
+        const tpIntegra = card?.getElementsByTagName('tpIntegra')[0]?.textContent?.trim() || '';
+        const cardCnpj = card?.getElementsByTagName('CNPJ')[0]?.textContent?.trim() || '';
+        const cardTBand = card?.getElementsByTagName('tBand')[0]?.textContent?.trim() || '';
+        const cardCAut = card?.getElementsByTagName('cAut')[0]?.textContent?.trim() || '';
+        const tPagNome = tPagLabel[tPag] || tPag;
+
+        if (isCartao) {
+          totalCartao++;
+          if (tpIntegra === '1') totalIntegrado++;
+          else if (tpIntegra === '2') totalNaoIntegrado++;
+
+          if (tpIntegra === '1' && !cardCAut) {
+            problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: 'Falso TEF: marcado como integrado (tpIntegra=1) mas sem código de autorização' });
+          }
+          if (cardCAut && cAutGenerico(cardCAut)) {
+            problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: `Código de autorização genérico/suspeito: "${cardCAut}"` });
+          }
+          if (cardCnpj && cardCnpj.replace(/\D/g, '') === xml.emitCnpj) {
+            problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: 'CNPJ da adquirente igual ao CNPJ do emitente' });
+          }
+        } else if (tPag === '01' && card) {
+          problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: 'Bloco <card> presente em pagamento em dinheiro' });
+        }
+      });
+    });
+
+    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado };
+  }, [xmlList]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
   // manually confirmed), flagged with cancellation status — the searchable
@@ -4895,6 +4981,89 @@ export default function App() {
                   )}
                 </div>
               )}
+
+              {/* Card: Auditoria de Pagamento (TEF) */}
+              {auditoriaPagamento.totalCartao > 0 && (() => {
+                const pctNaoIntegrado = auditoriaPagamento.totalCartao > 0
+                  ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
+                  : 0;
+                const temProblemasTecnicos = auditoriaPagamento.problemas.length > 0;
+                const corBorda = temProblemasTecnicos ? 'border-l-rose-400' : pctNaoIntegrado >= 50 ? 'border-l-amber-400' : 'border-l-blue-400';
+                return (
+                  <div className={cn("bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 rounded-2xl p-6 mb-6 shadow-sm", corBorda)}>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <span className="text-blue-500 text-xl">💳</span>
+                        <div>
+                          <div className="flex items-baseline gap-3">
+                            <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Auditoria de Pagamento (TEF)</div>
+                            {temProblemasTecnicos && (
+                              <div className="text-sm font-bold text-rose-600 dark:text-rose-400">{auditoriaPagamento.problemas.length} problema(s) técnico(s)</div>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                            {auditoriaPagamento.totalCartao} venda(s) em cartão · {auditoriaPagamento.totalIntegrado} integrada(s) via TEF (tpIntegra=1) · {auditoriaPagamento.totalNaoIntegrado} via POS manual (tpIntegra=2)
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setShowAuditoriaPagamento(!showAuditoriaPagamento)}
+                        className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
+                      >
+                        {showAuditoriaPagamento ? 'Ocultar' : 'Ver detalhes'}
+                      </button>
+                    </div>
+
+                    {showAuditoriaPagamento && (
+                      <div className="space-y-4">
+                        <div className={cn(
+                          "rounded-xl px-4 py-3 text-xs",
+                          pctNaoIntegrado >= 50 ? "bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800"
+                            : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+                        )}>
+                          <span className="font-bold">{pctNaoIntegrado}% das vendas em cartão</span> não passaram pelo TEF (POS manual, tpIntegra=2).
+                          {pctNaoIntegrado >= 50 && (
+                            <span> Esse é o padrão que costuma gerar autuação por falta de integração TEF — vale confirmar com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
+                          )}
+                        </div>
+
+                        {temProblemasTecnicos && (
+                          <div className="overflow-x-auto overflow-y-auto max-h-72">
+                            <table className="w-full text-xs">
+                              <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                                <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                                  <th className="py-1.5 pr-3">Série</th>
+                                  <th className="py-1.5 pr-3">Nº</th>
+                                  <th className="py-1.5 pr-3">Data</th>
+                                  <th className="py-1.5 pr-3">Pagamento</th>
+                                  <th className="py-1.5 pr-3">tpIntegra</th>
+                                  <th className="py-1.5 pr-3">Autorização</th>
+                                  <th className="py-1.5 text-right">Valor</th>
+                                  <th className="py-1.5 pr-3">Motivo</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {auditoriaPagamento.problemas.map((p, i) => (
+                                  <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                    <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{p.xml.serie}</td>
+                                    <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{p.xml.numero}</td>
+                                    <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{p.xml.data ? new Date(p.xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                    <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{p.tPagNome}</td>
+                                    <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{p.tpIntegra || '—'}</td>
+                                    <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-400">{p.cardCAut || '—'}</td>
+                                    <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(parseFloat(p.xml.valor || '0') || 0)}</td>
+                                    <td className="py-1.5 pr-3 text-rose-600 dark:text-rose-400 max-w-[280px]">{p.motivo}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {(() => {
                 const faltantesLiquidos = analysis.reduce((acc, s) => acc + s.faltantes.length, 0);
