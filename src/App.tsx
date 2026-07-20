@@ -1419,32 +1419,40 @@ export default function App() {
     return { crt, label, isSimples };
   }, [xmlList]);
 
-  // Sistema/ERP de emissão: o campo <verProc> (ide) identifica o software que
-  // gerou a NF-e/NFC-e (ex: "Bling 1.1", "ACBrNFe") — só amostra a primeira e
-  // a última nota válida (não o dataset inteiro, que pode ter milhares de
-  // notas e re-parsear tudo isso a cada render seria caro) pra detectar
-  // rapidamente se o cliente trocou de sistema no meio do período.
-  const sistemaEmissao = useMemo(() => {
+  // Responsável Técnico (<infRespTec>): identifica quem desenvolve/mantém o
+  // sistema de automação do cliente — mais confiável que <verProc> (que em
+  // vários sistemas só traz um número de versão, tipo "26.03.04", sem nome
+  // nenhum). Não dá pra puxar a razão social só do CNPJ sem consulta externa,
+  // mas o domínio do e-mail e o contato já dão uma noção de qual empresa é.
+  const responsavelTecnico = useMemo(() => {
+    const vazio = { cnpj: '', cnpjFormatado: '', contato: '', email: '', fone: '', foneFormatado: '', dominio: '' };
     const cnpjCounts: { [cnpj: string]: number } = {};
     xmlList.forEach(xml => {
       if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
       if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
     });
     const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-    if (!mainCnpj) return { nome: '', possivelTroca: false };
+    if (!mainCnpj) return vazio;
 
-    const notasValidas = xmlList.filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml);
-    if (notasValidas.length === 0) return { nome: '', possivelTroca: false };
+    const nota = xmlList.find(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml);
+    if (!nota) return vazio;
 
-    const lerVerProc = (xml: XmlData) => {
-      const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
-      return doc.getElementsByTagName('ide')[0]?.getElementsByTagName('verProc')[0]?.textContent?.trim() || '';
-    };
-    const primeira = lerVerProc(notasValidas[0]);
-    const ultima = lerVerProc(notasValidas[notasValidas.length - 1]);
-    const nome = primeira || ultima;
-    const possivelTroca = !!primeira && !!ultima && primeira !== ultima;
-    return { nome, possivelTroca, primeira, ultima };
+    const doc = parser.parseFromString(nota.rawXml!, 'text/xml');
+    const infRespTec = doc.getElementsByTagName('infRespTec')[0];
+    const cnpj = infRespTec?.getElementsByTagName('CNPJ')[0]?.textContent?.trim() || '';
+    const contato = infRespTec?.getElementsByTagName('xContato')[0]?.textContent?.trim() || '';
+    const email = infRespTec?.getElementsByTagName('email')[0]?.textContent?.trim() || '';
+    const fone = infRespTec?.getElementsByTagName('fone')[0]?.textContent?.trim() || '';
+    const dominio = email.includes('@') ? email.split('@')[1] : '';
+
+    const cnpjFormatado = cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5') || cnpj;
+    const foneFormatado = fone.length === 11
+      ? fone.replace(/^(\d{2})(\d{5})(\d{4})$/, '($1) $2-$3')
+      : fone.length === 10
+        ? fone.replace(/^(\d{2})(\d{4})(\d{4})$/, '($1) $2-$3')
+        : fone;
+
+    return { cnpj, cnpjFormatado, contato, email, fone, foneFormatado, dominio };
   }, [xmlList]);
 
   // Auditoria de meios de pagamento / TEF: verifica o bloco <pag> de cada nota
@@ -4038,29 +4046,6 @@ export default function App() {
                     </>
                   )}
 
-                  {sistemaEmissao.nome && (
-                    <>
-                      <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Sistema:</span>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span
-                          className="inline-flex items-center w-fit px-2.5 py-0.5 rounded-full text-xs font-bold"
-                          style={{background: 'rgba(148,163,184,0.15)', color: '#CBD5E1', border: '1px solid rgba(148,163,184,0.3)'}}
-                          title="Extraído do campo <verProc> do XML (processo de emissão)"
-                        >
-                          {sistemaEmissao.nome}
-                        </span>
-                        {sistemaEmissao.possivelTroca && (
-                          <span
-                            className="text-[11px] font-bold"
-                            style={{color: '#F0B429'}}
-                            title={`Primeira nota: "${sistemaEmissao.primeira}" · Última nota: "${sistemaEmissao.ultima}"`}
-                          >
-                            ⚠ pode ter trocado de sistema no período
-                          </span>
-                        )}
-                      </div>
-                    </>
-                  )}
                 </div>
               </motion.div>
             </div>
@@ -5410,6 +5395,22 @@ export default function App() {
 
                     {showAuditoriaPagamento && (
                       <div className="space-y-4">
+                        {responsavelTecnico.email && (
+                          <div className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-600 dark:text-slate-300">
+                            <div className="font-bold uppercase tracking-wider text-[10px] text-slate-400 dark:text-slate-500 mb-1">Responsável técnico do sistema (extraído do XML)</div>
+                            <div>
+                              {responsavelTecnico.contato && <>Contato: <strong className="text-slate-800 dark:text-slate-100">{responsavelTecnico.contato}</strong> · </>}
+                              E-mail: <strong className="text-slate-800 dark:text-slate-100">{responsavelTecnico.email}</strong>
+                              {responsavelTecnico.foneFormatado && <> · Tel: <strong className="text-slate-800 dark:text-slate-100">{responsavelTecnico.foneFormatado}</strong></>}
+                              {responsavelTecnico.cnpjFormatado && <> · CNPJ: <strong className="text-slate-800 dark:text-slate-100">{responsavelTecnico.cnpjFormatado}</strong></>}
+                            </div>
+                            {responsavelTecnico.dominio && (
+                              <div className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                                Não dá pra puxar a razão social só pelo CNPJ (precisaria de consulta externa à Receita), mas pelo domínio do e-mail (<strong>{responsavelTecnico.dominio}</strong>) e o contato acima já dá pra ter uma noção de qual empresa desenvolve/mantém o sistema de automação desse cliente.
+                              </div>
+                            )}
+                          </div>
+                        )}
                         {auditoriaPagamento.breakdownPorTipoPagamento.length > 0 && (
                           <div>
                             <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
