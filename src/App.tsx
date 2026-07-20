@@ -1432,11 +1432,16 @@ export default function App() {
         .map(xml => xml.chave!)
     );
 
+    // Mesmo critério de "venda válida" do faturamentoTotal (exige protocolo de
+    // autorização SEFAZ) — sem isso, o breakdown por forma de pagamento incluía
+    // notas Sem Autorização/Contingência Não Regularizada que o Total de Saídas
+    // Auditadas exclui, fazendo a soma do breakdown ultrapassar o total oficial.
     const saidas = xmlList.filter(xml =>
       xml.tipo === 'nfe' &&
       xml.emitCnpj === mainCnpj &&
       xml.tpNF !== '0' &&
       xml.rawXml &&
+      !!xml.protocolo &&
       !(xml.chave && chavesCanceladas.has(xml.chave)) &&
       (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
     );
