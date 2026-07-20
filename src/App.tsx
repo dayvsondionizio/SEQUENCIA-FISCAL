@@ -5296,11 +5296,25 @@ export default function App() {
                               const somaPagamentos = auditoriaPagamento.breakdownPorTipoPagamento.reduce((s, b) => s + b.qtd, 0);
                               const diffValor = Math.abs(somaValores - faturamentoTotal);
                               const valorBate = diffValor < 0.05;
+                              // "Sem Pagamento indevido" (venda real com vPag=0 no XML) explica a
+                              // diferença na maior parte das vezes — sem checar isso, o texto genérico
+                              // manda o analista procurar sincronismo/período quando a causa já está
+                              // detectada e listada na tabela de problemas técnicos logo abaixo.
+                              const valorProblemasTPag90 = auditoriaPagamento.problemas
+                                .filter(p => p.motivo.startsWith('Venda normal (finNFe=1)'))
+                                .reduce((s, p) => s + (parseFloat(p.xml.valor || '0') || 0), 0);
+                              const explicadoPorSemPagamento = !valorBate && valorProblemasTPag90 > 0 && Math.abs(diffValor - valorProblemasTPag90) < diffValor * 0.15;
                               return (
                                 <div className="mt-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-xl px-3 py-2.5 text-[11px] text-blue-800 dark:text-blue-200 space-y-1.5">
                                   <div className="font-bold uppercase tracking-wider text-[10px] text-blue-500 dark:text-blue-400">Observação sobre os números acima</div>
                                   <div>
-                                    {valorBate ? '✓' : '⚠'} <strong>Valores:</strong> a soma das formas de pagamento ({formatarMoeda(somaValores)}) {valorBate ? 'bate exatamente' : 'diverge'} com o Total de Saídas Auditadas ({formatarMoeda(faturamentoTotal)}) — {valorBate ? 'confirma que esse resumo usa o mesmo critério de nota válida (com protocolo de autorização, sem cancelamento) do restante do app' : 'verifique se há notas fora do período ou cancelamento não sincronizado'}.
+                                    {valorBate ? '✓' : '⚠'} <strong>Valores:</strong> a soma das formas de pagamento ({formatarMoeda(somaValores)}) {valorBate ? 'bate exatamente' : 'diverge'} com o Total de Saídas Auditadas ({formatarMoeda(faturamentoTotal)})
+                                    {valorBate
+                                      ? <> — confirma que esse resumo usa o mesmo critério de nota válida (com protocolo de autorização, sem cancelamento) do restante do app.</>
+                                      : explicadoPorSemPagamento
+                                        ? <> — essa diferença de {formatarMoeda(diffValor)} <strong>não é erro de sincronismo</strong>: é explicada pelas notas sinalizadas abaixo como "Sem Pagamento" com valor real ({formatarMoeda(valorProblemasTPag90)} em vendas — o XML declara vPag=0 mesmo tendo vNF real, então esse valor não entra na soma das formas de pagamento, mas continua contando no Total de Saídas). Veja a tabela de problemas técnicos pra identificar as notas.</>
+                                        : <> — verifique se há notas fora do período ou cancelamento não sincronizado.</>
+                                    }
                                   </div>
                                   <div>
                                     ℹ <strong>Quantidades:</strong> {somaPagamentos} pagamento(s) somados
