@@ -5150,52 +5150,52 @@ export default function App() {
                       </button>
                     </div>
 
-                    {auditoriaPagamento.breakdownPorTipoPagamento.length > 0 && (
-                      <div className="mb-4">
-                        <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
-                          Por forma de pagamento
-                        </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                          {auditoriaPagamento.breakdownPorTipoPagamento.map(b => {
-                            const temProblemaNesseTipo = auditoriaPagamento.problemas.some(p => p.tPag === b.tPag);
-                            return (
-                              <div
-                                key={b.tPag}
-                                className={cn(
-                                  "border rounded-xl px-3 py-2",
-                                  temProblemaNesseTipo
-                                    ? "bg-rose-50 dark:bg-rose-950 border-rose-200 dark:border-rose-800"
-                                    : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700"
-                                )}
-                              >
-                                <div className={cn(
-                                  "text-[11px] font-semibold truncate flex items-center gap-1",
-                                  temProblemaNesseTipo ? "text-rose-600 dark:text-rose-400" : "text-slate-500 dark:text-slate-400"
-                                )} title={b.tPagNome}>
-                                  {temProblemaNesseTipo && '⚠ '}{b.tPagNome}
-                                </div>
-                                <div className={cn(
-                                  "text-sm font-bold mt-0.5",
-                                  temProblemaNesseTipo ? "text-rose-700 dark:text-rose-300" : "text-slate-800 dark:text-slate-100"
-                                )}>{formatarMoeda(b.valor)}</div>
-                                <div className={cn(
-                                  "text-[11px]",
-                                  temProblemaNesseTipo ? "text-rose-500 dark:text-rose-400" : "text-slate-400 dark:text-slate-500"
-                                )}>{b.qtd} nota{b.qtd !== 1 ? 's' : ''}</div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        {auditoriaPagamento.problemas.some(p => p.tPag === '90') && (
-                          <div className="mt-2 text-[11px] text-rose-600 dark:text-rose-400">
-                            ⚠ "Sem Pagamento" aqui não significa venda sem valor — são notas de venda normal com valor real declaradas com o código errado (90 é só pra Ajuste/Devolução). Veja "Ver detalhes" abaixo.
-                          </div>
-                        )}
-                      </div>
-                    )}
-
                     {showAuditoriaPagamento && (
                       <div className="space-y-4">
+                        {auditoriaPagamento.breakdownPorTipoPagamento.length > 0 && (
+                          <div>
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                              Por forma de pagamento
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                              {auditoriaPagamento.breakdownPorTipoPagamento.map(b => {
+                                const temProblemaNesseTipo = auditoriaPagamento.problemas.some(p => p.tPag === b.tPag);
+                                return (
+                                  <div
+                                    key={b.tPag}
+                                    className={cn(
+                                      "border rounded-xl px-3 py-2",
+                                      temProblemaNesseTipo
+                                        ? "bg-rose-50 dark:bg-rose-950 border-rose-200 dark:border-rose-800"
+                                        : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700"
+                                    )}
+                                  >
+                                    <div className={cn(
+                                      "text-[11px] font-semibold truncate flex items-center gap-1",
+                                      temProblemaNesseTipo ? "text-rose-600 dark:text-rose-400" : "text-slate-500 dark:text-slate-400"
+                                    )} title={b.tPagNome}>
+                                      {temProblemaNesseTipo && '⚠ '}{b.tPagNome}
+                                    </div>
+                                    <div className={cn(
+                                      "text-sm font-bold mt-0.5",
+                                      temProblemaNesseTipo ? "text-rose-700 dark:text-rose-300" : "text-slate-800 dark:text-slate-100"
+                                    )}>{formatarMoeda(b.valor)}</div>
+                                    <div className={cn(
+                                      "text-[11px]",
+                                      temProblemaNesseTipo ? "text-rose-500 dark:text-rose-400" : "text-slate-400 dark:text-slate-500"
+                                    )}>{b.qtd} nota{b.qtd !== 1 ? 's' : ''}</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            {auditoriaPagamento.problemas.some(p => p.tPag === '90') && (
+                              <div className="mt-2 text-[11px] text-rose-600 dark:text-rose-400">
+                                ⚠ "Sem Pagamento" aqui não significa venda sem valor — são notas de venda normal com valor real declaradas com o código errado (90 é só pra Ajuste/Devolução).
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         {auditoriaPagamento.totalCartao === 0 ? (
                           <div className="rounded-xl px-4 py-3 text-xs bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                             Nenhuma venda em cartão dentro do escopo de obrigatoriedade de TEF nesse período
