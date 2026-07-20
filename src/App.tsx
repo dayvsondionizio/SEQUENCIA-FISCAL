@@ -1377,6 +1377,29 @@ export default function App() {
     return { semProtocolo, semProtocoloAbatidas, foraDoPrazo, numeroDuplicado, semAutorizacaoNaoContingencia: semAutorizacaoComFlag };
   }, [xmlList, inutilizacoes]);
 
+  // Regime tributário do emitente principal, lido do <CRT> (Código de Regime
+  // Tributário): 1/2 = Simples Nacional, 3 = Regime Normal. Simples Nacional
+  // não tem obrigatoriedade de TEF; Regime Normal tem, então essa distinção
+  // muda a severidade do alerta na Auditoria de Pagamento (TEF).
+  const regimeTributario = useMemo(() => {
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!mainCnpj) return { crt: '', label: null as string | null, isSimples: false };
+
+    const nota = xmlList.find(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml);
+    if (!nota) return { crt: '', label: null as string | null, isSimples: false };
+
+    const doc = parser.parseFromString(nota.rawXml!, 'text/xml');
+    const crt = doc.getElementsByTagName('emit')[0]?.getElementsByTagName('CRT')[0]?.textContent?.trim() || '';
+    const isSimples = crt === '1' || crt === '2';
+    const label = isSimples ? 'Simples Nacional' : crt === '3' ? 'Regime Normal' : null;
+    return { crt, label, isSimples };
+  }, [xmlList]);
+
   // Auditoria de meios de pagamento / TEF: verifica o bloco <pag> de cada nota
   // em busca de inconsistências que geram rejeição SEFAZ (falso TEF, cAut
   // genérico, CNPJ do cartão = emitente, card presente com dinheiro) e mede
@@ -3706,6 +3729,20 @@ export default function App() {
                     {mesesDisponiveis.length > 0 && mesesDisponiveis.length <= 3 && mesesDisponiveis.join(', ')}
                     {mesesDisponiveis.length > 3 && `${mesesDisponiveis.slice(0, 3).join(', ')} +${mesesDisponiveis.length - 3}`}
                   </span>
+
+                  {regimeTributario.label && (
+                    <>
+                      <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Regime:</span>
+                      <span
+                        className="inline-flex items-center w-fit px-2.5 py-0.5 rounded-full text-xs font-bold"
+                        style={regimeTributario.isSimples
+                          ? {background: 'rgba(240,180,41,0.15)', color: '#F0B429', border: '1px solid rgba(240,180,41,0.35)'}
+                          : {background: 'rgba(148,163,184,0.15)', color: '#CBD5E1', border: '1px solid rgba(148,163,184,0.3)'}}
+                      >
+                        {regimeTributario.label}
+                      </span>
+                    </>
+                  )}
                 </div>
               </motion.div>
             </div>
@@ -4988,7 +5025,12 @@ export default function App() {
                   ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
                   : 0;
                 const temProblemasTecnicos = auditoriaPagamento.problemas.length > 0;
-                const corBorda = temProblemasTecnicos ? 'border-l-rose-400' : pctNaoIntegrado >= 50 ? 'border-l-amber-400' : 'border-l-blue-400';
+                // Regime Normal tem obrigatoriedade de TEF — qualquer POS manual vira alerta real.
+                // Simples Nacional não tem essa obrigatoriedade, então fica só informativo.
+                const riscoObrigatoriedade = !regimeTributario.isSimples && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
+                const corBorda = temProblemasTecnicos || riscoObrigatoriedade
+                  ? 'border-l-rose-400'
+                  : pctNaoIntegrado >= 50 ? 'border-l-amber-400' : 'border-l-blue-400';
                 return (
                   <div className={cn("bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 rounded-2xl p-6 mb-6 shadow-sm", corBorda)}>
                     <div className="flex items-center justify-between mb-4">
@@ -4999,6 +5041,9 @@ export default function App() {
                             <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Auditoria de Pagamento (TEF)</div>
                             {temProblemasTecnicos && (
                               <div className="text-sm font-bold text-rose-600 dark:text-rose-400">{auditoriaPagamento.problemas.length} problema(s) técnico(s)</div>
+                            )}
+                            {riscoObrigatoriedade && (
+                              <div className="text-sm font-bold text-rose-600 dark:text-rose-400">⚠ obrigatoriedade de TEF ({regimeTributario.label})</div>
                             )}
                           </div>
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -5018,11 +5063,18 @@ export default function App() {
                       <div className="space-y-4">
                         <div className={cn(
                           "rounded-xl px-4 py-3 text-xs",
-                          pctNaoIntegrado >= 50 ? "bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800"
+                          riscoObrigatoriedade ? "bg-rose-50 dark:bg-rose-950 text-rose-800 dark:text-rose-200 border border-rose-200 dark:border-rose-800"
+                            : pctNaoIntegrado >= 50 ? "bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800"
                             : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
                         )}>
                           <span className="font-bold">{pctNaoIntegrado}% das vendas em cartão</span> não passaram pelo TEF (POS manual, tpIntegra=2).
-                          {pctNaoIntegrado >= 50 && (
+                          {riscoObrigatoriedade && (
+                            <span> <strong>Alerta: empresa é {regimeTributario.label} — tem obrigatoriedade de TEF.</strong> Esse é o padrão que costuma gerar autuação por falta de integração TEF. Confirme com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
+                          )}
+                          {!riscoObrigatoriedade && regimeTributario.isSimples && auditoriaPagamento.totalNaoIntegrado > 0 && (
+                            <span> Empresa é <strong>Simples Nacional</strong>, que não tem obrigatoriedade de TEF — uso de POS manual aqui não é, por si só, uma infração.</span>
+                          )}
+                          {!riscoObrigatoriedade && !regimeTributario.isSimples && pctNaoIntegrado >= 50 && (
                             <span> Esse é o padrão que costuma gerar autuação por falta de integração TEF — vale confirmar com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
                           )}
                         </div>
