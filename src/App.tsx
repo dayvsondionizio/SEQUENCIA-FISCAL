@@ -1439,7 +1439,7 @@ export default function App() {
       problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalCartaoNaoAplicavel: 0,
       notasNaoIntegradas: [] as XmlData[], breakdownPorTipoPagamento: [] as { tPag: string; tPagNome: string; qtd: number; valor: number }[],
       notasComPagamentoDividido: 0, saidaNaoVendaQtd: 0, saidaNaoVendaValor: 0,
-      foraEscopoAPrazo: 0, foraEscopoNaoPresencial: 0, foraEscopoInterestadual: 0
+      cartaoIndPagSuspeito: 0, foraEscopoNaoPresencial: 0, foraEscopoInterestadual: 0
     };
     if (!mainCnpj) return vazio;
 
@@ -1504,9 +1504,13 @@ export default function App() {
     let saidaNaoVendaQtd = 0, saidaNaoVendaValor = 0;
     // Quebra do "fora do escopo" por motivo — sem isso o analista só via o total
     // combinado e não conseguia saber se a zeragem de "sujeita a TEF" era uma
-    // exclusão legítima (venda a prazo/e-commerce) ou um dado mal configurado
-    // no sistema do cliente (ex: POS gravando indPres errado numa venda presencial).
-    let foraEscopoAPrazo = 0, foraEscopoNaoPresencial = 0, foraEscopoInterestadual = 0;
+    // exclusão legítima (e-commerce/entrega) ou um dado mal configurado no
+    // sistema do cliente (ex: POS gravando indPres errado numa venda presencial).
+    let foraEscopoNaoPresencial = 0, foraEscopoInterestadual = 0;
+    // Cartão com indPag=1 (a prazo) é sempre suspeito: quem parcela no cartão é
+    // o cliente com a operadora, o lojista recebe à vista da adquirente do
+    // mesmo jeito — indPag=1 aqui geralmente indica PDV mal configurado.
+    let cartaoIndPagSuspeito = 0;
 
     saidas.forEach(xml => {
       const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
@@ -1565,12 +1569,15 @@ export default function App() {
         porTipo[tPag].valor += vPag;
 
         if (isCartao) {
-          // TEF só é exigível pra venda em cartão presencial, à vista e dentro
-          // do mesmo estado — fora disso a conciliação é bancária, não por TEF.
-          const sujeitoATef = isAVista && isPresencial && !isInterestadual;
+          // indPag NÃO decide o escopo de TEF pra pagamento em cartão: quem
+          // parcela é o cliente com a operadora, o lojista recebe à vista da
+          // adquirente de qualquer forma — o swipe do cartão já prova por si só
+          // que havia um terminal físico na hora da venda. TEF só fica de fora
+          // pra venda não presencial ou interestadual.
+          const sujeitoATef = isPresencial && !isInterestadual;
+          if (!isAVista) cartaoIndPagSuspeito++;
           if (!sujeitoATef) {
             totalCartaoNaoAplicavel++;
-            if (!isAVista) foraEscopoAPrazo++;
             if (!isPresencial) foraEscopoNaoPresencial++;
             if (isInterestadual) foraEscopoInterestadual++;
           } else {
@@ -1625,7 +1632,7 @@ export default function App() {
     return {
       problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas,
       breakdownPorTipoPagamento, notasComPagamentoDividido, saidaNaoVendaQtd, saidaNaoVendaValor,
-      foraEscopoAPrazo, foraEscopoNaoPresencial, foraEscopoInterestadual
+      cartaoIndPagSuspeito, foraEscopoNaoPresencial, foraEscopoInterestadual
     };
   }, [xmlList, filterMes]);
 
@@ -5326,10 +5333,14 @@ export default function App() {
                             </div>
                             {auditoriaPagamento.totalCartaoNaoAplicavel > 0 && (
                               <ul className="pl-4 list-disc space-y-0.5">
-                                <li className={auditoriaPagamento.foraEscopoAPrazo > 0 ? "font-semibold text-slate-700 dark:text-slate-200" : ""}>{auditoriaPagamento.foraEscopoAPrazo} a prazo (indPag=1 — cobrança faturada, conciliada depois via banco)</li>
                                 <li className={auditoriaPagamento.foraEscopoNaoPresencial > 0 ? "font-semibold text-slate-700 dark:text-slate-200" : ""}>{auditoriaPagamento.foraEscopoNaoPresencial} não presencial (indPres ≠ 1/5 — e-commerce, teleatendimento, entrega; confira se não é presencial mal marcado no PDV)</li>
                                 <li className={auditoriaPagamento.foraEscopoInterestadual > 0 ? "font-semibold text-slate-700 dark:text-slate-200" : ""}>{auditoriaPagamento.foraEscopoInterestadual} interestadual (UF do destinatário ≠ UF do emitente)</li>
                               </ul>
+                            )}
+                            {auditoriaPagamento.cartaoIndPagSuspeito > 0 && (
+                              <div className="mt-1 text-amber-600 dark:text-amber-400">
+                                ⚠ {auditoriaPagamento.cartaoIndPagSuspeito} pagamento(s) em cartão vieram com indPag=1 (a prazo) — tratados aqui como à vista pra fins de TEF, porque cartão é sempre recebido à vista pelo lojista (quem parcela é o cliente com a operadora). Mas esse padrão indica que o PDV do cliente pode estar preenchendo esse campo errado — vale confirmar com o suporte do sistema dele.
+                              </div>
                             )}
                           </div>
                         ) : (
@@ -5348,6 +5359,11 @@ export default function App() {
                             )}
                             {!riscoObrigatoriedade && !regimeTributario.isSimples && pctNaoIntegrado >= 50 && (
                               <span> Esse é o padrão que costuma gerar autuação por falta de integração TEF — vale confirmar com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
+                            )}
+                            {auditoriaPagamento.cartaoIndPagSuspeito > 0 && (
+                              <div className="mt-1.5 text-amber-600 dark:text-amber-400">
+                                ⚠ {auditoriaPagamento.cartaoIndPagSuspeito} pagamento(s) em cartão vieram com indPag=1 (a prazo) — tratados aqui como à vista pra fins de TEF, porque cartão é sempre recebido à vista pelo lojista. Padrão que indica PDV mal configurado; vale confirmar com o suporte do sistema do cliente.
+                              </div>
                             )}
                           </div>
                         )}
