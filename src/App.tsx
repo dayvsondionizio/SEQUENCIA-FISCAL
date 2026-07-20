@@ -994,6 +994,7 @@ export default function App() {
   const [showSemAutorizacao, setShowSemAutorizacao] = useState(false);
   const [showAuditoriaPagamento, setShowAuditoriaPagamento] = useState(false);
   const [auditoriaPagamentoBusca, setAuditoriaPagamentoBusca] = useState('');
+  const [showForaDoEscopoDetalhe, setShowForaDoEscopoDetalhe] = useState(false);
   const [showForaDoPrazo, setShowForaDoPrazo] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
   const [showExportXmlMenu, setShowExportXmlMenu] = useState(false);
@@ -1439,7 +1440,8 @@ export default function App() {
       problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalCartaoNaoAplicavel: 0,
       notasNaoIntegradas: [] as XmlData[], breakdownPorTipoPagamento: [] as { tPag: string; tPagNome: string; qtd: number; valor: number }[],
       notasComPagamentoDividido: 0, saidaNaoVendaQtd: 0, saidaNaoVendaValor: 0,
-      cartaoIndPagSuspeito: 0, foraEscopoNaoPresencial: 0, foraEscopoInterestadual: 0
+      cartaoIndPagSuspeito: 0, foraEscopoNaoPresencial: 0, foraEscopoInterestadual: 0,
+      notasForaDoEscopo: [] as { xml: XmlData; motivo: string }[], totalNotasVendaLiquida: 0
     };
     if (!mainCnpj) return vazio;
 
@@ -1507,6 +1509,11 @@ export default function App() {
     // exclusão legítima (e-commerce/entrega) ou um dado mal configurado no
     // sistema do cliente (ex: POS gravando indPres errado numa venda presencial).
     let foraEscopoNaoPresencial = 0, foraEscopoInterestadual = 0;
+    // Amostra de cada pagamento em cartão fora do escopo de TEF, com o motivo
+    // específico — sem isso o "X fora do escopo" era só um número sem como o
+    // analista conferir quais notas são essas e por quê.
+    const notasForaDoEscopo: { xml: XmlData; motivo: string }[] = [];
+    const forasVistos = new Set<string>();
     // Cartão com indPag=1 (a prazo) é sempre suspeito: quem parcela no cartão é
     // o cliente com a operadora, o lojista recebe à vista da adquirente do
     // mesmo jeito — indPag=1 aqui geralmente indica PDV mal configurado.
@@ -1578,8 +1585,15 @@ export default function App() {
           if (!isAVista) cartaoIndPagSuspeito++;
           if (!sujeitoATef) {
             totalCartaoNaoAplicavel++;
-            if (!isPresencial) foraEscopoNaoPresencial++;
-            if (isInterestadual) foraEscopoInterestadual++;
+            const motivos: string[] = [];
+            if (!isPresencial) { foraEscopoNaoPresencial++; motivos.push(`não presencial (indPres=${indPres || '0'})`); }
+            if (isInterestadual) { foraEscopoInterestadual++; motivos.push(`interestadual (${ufEmit} → ${ufDest})`); }
+            const chaveOuId = xml.chave || `${xml.serie}-${xml.numero}`;
+            const chaveMotivo = `${chaveOuId}|${motivos.join('+')}`;
+            if (!forasVistos.has(chaveMotivo)) {
+              forasVistos.add(chaveMotivo);
+              notasForaDoEscopo.push({ xml, motivo: motivos.join(' e ') });
+            }
           } else {
             totalCartao++;
             if (tpIntegra === '1') totalIntegrado++;
@@ -1632,7 +1646,8 @@ export default function App() {
     return {
       problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas,
       breakdownPorTipoPagamento, notasComPagamentoDividido, saidaNaoVendaQtd, saidaNaoVendaValor,
-      cartaoIndPagSuspeito, foraEscopoNaoPresencial, foraEscopoInterestadual
+      cartaoIndPagSuspeito, foraEscopoNaoPresencial, foraEscopoInterestadual,
+      notasForaDoEscopo, totalNotasVendaLiquida: saidas.length
     };
   }, [xmlList, filterMes]);
 
@@ -5230,9 +5245,14 @@ export default function App() {
                             {auditoriaPagamento.totalCartaoNaoAplicavel > 0 && (
                               <>
                                 <span className="text-slate-300 dark:text-slate-600">·</span>
-                                <span className="text-slate-400 dark:text-slate-500" title="A prazo, não presencial (e-commerce/teleatendimento) ou interestadual — TEF não se aplica">
+                                <button
+                                  onClick={() => { setShowAuditoriaPagamento(true); setShowForaDoEscopoDetalhe(true); }}
+                                  className="text-slate-400 dark:text-slate-500 underline decoration-dotted hover:text-slate-600 dark:hover:text-slate-300 no-print"
+                                  title="Não presencial (e-commerce/teleatendimento) ou interestadual — TEF não se aplica. Clique pra ver quais notas são essas."
+                                >
                                   {auditoriaPagamento.totalCartaoNaoAplicavel} fora do escopo
-                                </span>
+                                </button>
+                                <span className="hidden print:inline text-slate-400 dark:text-slate-500">{auditoriaPagamento.totalCartaoNaoAplicavel} fora do escopo</span>
                               </>
                             )}
                           </div>
@@ -5441,6 +5461,56 @@ export default function App() {
                           </div>
                         )}
 
+                        {showForaDoEscopoDetalhe && auditoriaPagamento.notasForaDoEscopo.length > 0 && (
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
+                                Fora do escopo de TEF — quais notas são essas
+                              </div>
+                              <button
+                                onClick={() => setShowForaDoEscopoDetalhe(false)}
+                                className="text-[11px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 underline no-print"
+                              >
+                                Fechar
+                              </button>
+                            </div>
+                            <div className="overflow-x-auto overflow-y-auto max-h-56">
+                              <table className="w-full text-xs">
+                                <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                                  <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                                    <th className="py-1.5 pr-3">Série</th>
+                                    <th className="py-1.5 pr-3">Nº</th>
+                                    <th className="py-1.5 pr-3">Data</th>
+                                    <th className="py-1.5 pr-3">Motivo</th>
+                                    <th className="py-1.5 text-right pr-3">Valor</th>
+                                    <th className="py-1.5 pr-3">Baixar</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {auditoriaPagamento.notasForaDoEscopo.map((n, i) => (
+                                    <tr key={n.xml.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                      <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.xml.serie}</td>
+                                      <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.xml.numero}</td>
+                                      <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.xml.data ? new Date(n.xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                      <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400 capitalize">{n.motivo}</td>
+                                      <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(parseFloat(n.xml.valor || '0') || 0)}</td>
+                                      <td className="py-1.5 pr-3">
+                                        <button
+                                          onClick={() => baixarXmlEvidencia(n.xml)}
+                                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                        >
+                                          <Download className="w-3 h-3" />
+                                          XML
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
                         {temProblemasTecnicos && (
                           <div className="overflow-x-auto overflow-y-auto max-h-72">
                             <table className="w-full text-xs">
@@ -5485,7 +5555,7 @@ export default function App() {
                 const faltantesBrutos = faltantesLiquidos + totalManual;
 
                 return (
-                  <div className={cn("grid grid-cols-2 gap-4", totalManual > 0 ? "md:grid-cols-3 lg:grid-cols-6" : "md:grid-cols-4")}>
+                  <div className={cn("grid grid-cols-2 gap-4", totalManual > 0 ? "md:grid-cols-4 lg:grid-cols-7" : "md:grid-cols-3 lg:grid-cols-5")}>
                     <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
                       <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Séries</div>
                       <div className="text-4xl font-bold text-slate-900 dark:text-slate-100 mt-2">{analysis.length}</div>
@@ -5521,6 +5591,12 @@ export default function App() {
                       <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Recebidos</div>
                       <div className="text-4xl font-bold text-blue-600 dark:text-blue-400 mt-2">
                         {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
+                      </div>
+                    </div>
+                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm" title="Notas recebidas menos canceladas e sem autorização SEFAZ, no período filtrado — se a soma dos pagamentos parecer menor que o esperado, confira essa diferença antes de estranhar.">
+                      <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Vendas Líquidas</div>
+                      <div className="text-4xl font-bold text-emerald-600 dark:text-emerald-400 mt-2">
+                        {auditoriaPagamento.totalNotasVendaLiquida}
                       </div>
                     </div>
                   </div>
