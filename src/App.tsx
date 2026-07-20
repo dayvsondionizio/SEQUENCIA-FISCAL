@@ -372,6 +372,21 @@ function isAlertCfop(cfop: string): boolean {
   return cfop === '5929';
 }
 
+// Distingue CFOP de venda genuína (5101/5102/5401/6101... etc) de saída que NÃO é
+// venda (transferência x151-x156, devolução de compra x201-x212/x410-x413, remessas/
+// consignação/bonificação/amostra x901-x949) — os últimos 3 dígitos do CFOP definem
+// a natureza da operação de forma consistente entre 5xxx (interno), 6xxx (interestadual)
+// e 7xxx (exterior), então basta olhar o resto da divisão por 1000.
+function isCfopVenda(cfop: string): boolean {
+  if (!/^\d{4}$/.test(cfop)) return false;
+  const resto = parseInt(cfop, 10) % 1000;
+  if (resto >= 151 && resto <= 156) return false;
+  if (resto >= 201 && resto <= 212) return false;
+  if (resto >= 410 && resto <= 413) return false;
+  if (resto >= 901 && resto <= 949) return false;
+  return true;
+}
+
 function parseSped(text: string, fileName: string): SpedData | null {
   const lines = text.split(/\r?\n/);
   if (!lines[0]?.startsWith('|0000|')) return null;
@@ -1423,7 +1438,7 @@ export default function App() {
     const vazio = {
       problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalCartaoNaoAplicavel: 0,
       notasNaoIntegradas: [] as XmlData[], breakdownPorTipoPagamento: [] as { tPag: string; tPagNome: string; qtd: number; valor: number }[],
-      notasComPagamentoDividido: 0
+      notasComPagamentoDividido: 0, saidaNaoVendaQtd: 0, saidaNaoVendaValor: 0
     };
     if (!mainCnpj) return vazio;
 
@@ -1479,6 +1494,7 @@ export default function App() {
     // usou — por isso a soma das "qtd" do breakdown pode passar do total de
     // notas válidas, sem ser erro.
     let notasComPagamentoDividido = 0;
+    let saidaNaoVendaQtd = 0, saidaNaoVendaValor = 0;
 
     saidas.forEach(xml => {
       const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
@@ -1493,8 +1509,17 @@ export default function App() {
       // declarada como "sem pagamento" é inconformidade fiscal, não um dado
       // ausente de verdade — o cliente pode estar escondendo receita ou o
       // sistema de automação não está gravando o meio de pagamento usado.
+      //
+      // Mas nem toda saída com finNFe=1 é venda: remessa, transferência,
+      // devolução de compra e consignação também são finNFe=1 (só Ajuste/
+      // Complementar/Devolução usam 2/3/4) e legitimamente não têm pagamento.
+      // O CFOP predominante da nota (por valor, via cfopValores) decide se ela
+      // é venda de verdade antes de acusar "Sem Pagamento" como inconformidade.
       const finNFe = doc.getElementsByTagName('finNFe')[0]?.textContent?.trim() || '';
       const vNF = parseFloat(doc.getElementsByTagName('vNF')[0]?.textContent?.trim() || '0') || 0;
+      const cfopMap: Record<string, number> = xml.cfopValores || {};
+      const cfopPredominante = Object.entries(cfopMap).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+      const isSaidaVenda = !cfopPredominante || isCfopVenda(cfopPredominante);
 
       const detPags = Array.from(doc.getElementsByTagName('detPag'));
       detPags.forEach(detPag => {
@@ -1542,8 +1567,13 @@ export default function App() {
           if (cardCnpj && cardCnpj.replace(/\D/g, '') === xml.emitCnpj) {
             problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: 'CNPJ da adquirente igual ao CNPJ do emitente' });
           }
-        } else if (tPag === '90' && finNFe === '1' && vNF > 0) {
+        } else if (tPag === '90' && finNFe === '1' && vNF > 0 && isSaidaVenda) {
           problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: `Venda normal (finNFe=1) de ${formatarMoeda(vNF)} declarada como "Sem Pagamento" — código 90 é reservado pra Ajuste/Devolução` });
+        } else if (tPag === '90' && finNFe === '1' && vNF > 0 && !isSaidaVenda) {
+          // Remessa/transferência/devolução de compra/consignação: finNFe=1 mas
+          // CFOP indica que não é venda — "Sem Pagamento" está correto aqui, não é alerta.
+          saidaNaoVendaQtd++;
+          saidaNaoVendaValor += vNF;
         } else if (card && tPag !== '17') {
           // PIX (tPag=17) processado no mesmo terminal/POS legitimamente carrega
           // <card><tpIntegra> também (Cenário D: PIX via TEF) — não é erro.
@@ -1556,7 +1586,7 @@ export default function App() {
       .map(([tPag, v]) => ({ tPag, tPagNome: tPagLabel[tPag] || tPag, qtd: v.qtd, valor: v.valor }))
       .sort((a, b) => b.valor - a.valor);
 
-    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas, breakdownPorTipoPagamento, notasComPagamentoDividido };
+    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas, breakdownPorTipoPagamento, notasComPagamentoDividido, saidaNaoVendaQtd, saidaNaoVendaValor };
   }, [xmlList, filterMes]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
@@ -5140,10 +5170,25 @@ export default function App() {
                               <div className="text-sm font-bold text-rose-600 dark:text-rose-400">⚠ obrigatoriedade de TEF ({regimeTributario.label})</div>
                             )}
                           </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {auditoriaPagamento.totalCartao} venda(s) em cartão sujeita(s) a TEF · {auditoriaPagamento.totalIntegrado} integrada(s) via TEF (tpIntegra=1) · {auditoriaPagamento.totalNaoIntegrado} via POS manual (tpIntegra=2)
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-xs">
+                            <span className="text-slate-500 dark:text-slate-400" title="Vendas em cartão à vista, presenciais e dentro do mesmo estado — únicas sujeitas a TEF">
+                              <strong className="text-slate-700 dark:text-slate-200">{auditoriaPagamento.totalCartao}</strong> sujeita(s) a TEF
+                            </span>
+                            <span className="text-slate-300 dark:text-slate-600">·</span>
+                            <span className={auditoriaPagamento.totalIntegrado > 0 ? "text-emerald-600 dark:text-emerald-400 font-semibold" : "text-slate-400 dark:text-slate-500"} title="tpIntegra=1 — pagamento integrado ao sistema (TEF/POS integrado)">
+                              {auditoriaPagamento.totalIntegrado} integrada(s){auditoriaPagamento.totalIntegrado > 0 && ' ✓'}
+                            </span>
+                            <span className="text-slate-300 dark:text-slate-600">·</span>
+                            <span className={auditoriaPagamento.totalNaoIntegrado > 0 ? "text-amber-600 dark:text-amber-400 font-semibold" : "text-slate-400 dark:text-slate-500"} title="tpIntegra=2 — pagamento não integrado, digitado manualmente no POS">
+                              {auditoriaPagamento.totalNaoIntegrado} POS manual{auditoriaPagamento.totalNaoIntegrado > 0 && ' ⚠'}
+                            </span>
                             {auditoriaPagamento.totalCartaoNaoAplicavel > 0 && (
-                              <span> · {auditoriaPagamento.totalCartaoNaoAplicavel} em cartão fora do escopo (a prazo/não presencial/interestadual)</span>
+                              <>
+                                <span className="text-slate-300 dark:text-slate-600">·</span>
+                                <span className="text-slate-400 dark:text-slate-500" title="A prazo, não presencial (e-commerce/teleatendimento) ou interestadual — TEF não se aplica">
+                                  {auditoriaPagamento.totalCartaoNaoAplicavel} fora do escopo
+                                </span>
+                              </>
                             )}
                           </div>
                           {auditoriaPagamento.totalCartao === 0 && auditoriaPagamento.totalCartaoNaoAplicavel === 0 && (
@@ -5217,6 +5262,11 @@ export default function App() {
                                       : <>, batendo com o total de notas válidas — nenhuma nota teve pagamento dividido neste período.</>
                                     }
                                   </div>
+                                  {auditoriaPagamento.saidaNaoVendaQtd > 0 && (
+                                    <div>
+                                      ✓ <strong>Saída que não é venda:</strong> {auditoriaPagamento.saidaNaoVendaQtd} nota(s) totalizando {formatarMoeda(auditoriaPagamento.saidaNaoVendaValor)} são remessa/transferência/devolução de compra/consignação (identificadas pelo CFOP) — entram no Total de Saídas normalmente, mas o app NÃO as trata como inconformidade por estarem "Sem Pagamento", porque essas operações legitimamente não têm cobrança. Só é sinalizado como problema quando o CFOP indica venda de verdade.
+                                    </div>
+                                  )}
                                 </div>
                               );
                             })()}
