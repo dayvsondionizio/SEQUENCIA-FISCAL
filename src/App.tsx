@@ -1437,7 +1437,8 @@ export default function App() {
       xml.emitCnpj === mainCnpj &&
       xml.tpNF !== '0' &&
       xml.rawXml &&
-      !(xml.chave && chavesCanceladas.has(xml.chave))
+      !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
     );
 
     const tPagLabel: Record<string, string> = {
@@ -1545,7 +1546,7 @@ export default function App() {
       .sort((a, b) => b.valor - a.valor);
 
     return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas, breakdownPorTipoPagamento };
-  }, [xmlList]);
+  }, [xmlList, filterMes]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
   // manually confirmed), flagged with cancellation status — the searchable
