@@ -5395,22 +5395,6 @@ export default function App() {
 
                     {showAuditoriaPagamento && (
                       <div className="space-y-4">
-                        {responsavelTecnico.email && (
-                          <div className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-600 dark:text-slate-300">
-                            <div className="font-bold uppercase tracking-wider text-[10px] text-slate-400 dark:text-slate-500 mb-1">Responsável técnico do sistema (extraído do XML)</div>
-                            <div>
-                              {responsavelTecnico.contato && <>Contato: <strong className="text-slate-800 dark:text-slate-100">{responsavelTecnico.contato}</strong> · </>}
-                              E-mail: <strong className="text-slate-800 dark:text-slate-100">{responsavelTecnico.email}</strong>
-                              {responsavelTecnico.foneFormatado && <> · Tel: <strong className="text-slate-800 dark:text-slate-100">{responsavelTecnico.foneFormatado}</strong></>}
-                              {responsavelTecnico.cnpjFormatado && <> · CNPJ: <strong className="text-slate-800 dark:text-slate-100">{responsavelTecnico.cnpjFormatado}</strong></>}
-                            </div>
-                            {responsavelTecnico.dominio && (
-                              <div className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
-                                Não dá pra puxar a razão social só pelo CNPJ (precisaria de consulta externa à Receita), mas pelo domínio do e-mail (<strong>{responsavelTecnico.dominio}</strong>) e o contato acima já dá pra ter uma noção de qual empresa desenvolve/mantém o sistema de automação desse cliente.
-                              </div>
-                            )}
-                          </div>
-                        )}
                         {auditoriaPagamento.breakdownPorTipoPagamento.length > 0 && (
                           <div>
                             <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
@@ -5687,6 +5671,12 @@ export default function App() {
                             </table>
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {responsavelTecnico.email && (
+                      <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-400 dark:text-slate-500">
+                        Responsável técnico do sistema (XML): {responsavelTecnico.contato && <>{responsavelTecnico.contato} · </>}{responsavelTecnico.email}{responsavelTecnico.foneFormatado && <> · {responsavelTecnico.foneFormatado}</>}{responsavelTecnico.cnpjFormatado && <> · CNPJ {responsavelTecnico.cnpjFormatado}</>}
                       </div>
                     )}
                   </div>
