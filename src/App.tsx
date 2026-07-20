@@ -5335,11 +5335,12 @@ export default function App() {
                                     }
                                   </div>
                                   <div>
-                                    ℹ <strong>Quantidades:</strong> {somaPagamentos} pagamento(s) somados
+                                    ℹ <strong>Quantidades:</strong> {somaPagamentos} pagamento(s) somados sobre <strong>{auditoriaPagamento.totalNotasVendaLiquida} nota(s) de venda líquida</strong> (recebidas, com protocolo de autorização, descontando cancelamento e devolução)
                                     {auditoriaPagamento.notasComPagamentoDividido > 0
-                                      ? <> — esse número passa do total de notas válidas porque {auditoriaPagamento.notasComPagamentoDividido} nota(s) tiveram pagamento dividido em mais de uma forma (ex: parte em dinheiro, parte no cartão), contando uma vez em cada tipo usado. Isso é esperado, não é erro.</>
-                                      : <>, batendo com o total de notas válidas — nenhuma nota teve pagamento dividido neste período.</>
+                                      ? <> — a soma dos pagamentos passa desse total porque {auditoriaPagamento.notasComPagamentoDividido} nota(s) tiveram pagamento dividido em mais de uma forma (ex: parte em dinheiro, parte no cartão), contando uma vez em cada tipo usado. Isso é esperado, não é erro.</>
+                                      : <>, batendo certinho — nenhuma nota teve pagamento dividido neste período.</>
                                     }
+                                    {' '}Se ao somar as formas de pagamento o total vier menor do que você espera, compare com esse número de vendas líquidas (não com o total bruto de notas recebidas, que ainda inclui cancelamento/devolução).
                                   </div>
                                   {auditoriaPagamento.saidaNaoVendaQtd > 0 && (
                                     <div>
@@ -5555,7 +5556,7 @@ export default function App() {
                 const faltantesBrutos = faltantesLiquidos + totalManual;
 
                 return (
-                  <div className={cn("grid grid-cols-2 gap-4", totalManual > 0 ? "md:grid-cols-4 lg:grid-cols-7" : "md:grid-cols-3 lg:grid-cols-5")}>
+                  <div className={cn("grid grid-cols-2 gap-4", totalManual > 0 ? "md:grid-cols-3 lg:grid-cols-6" : "md:grid-cols-4")}>
                     <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
                       <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Séries</div>
                       <div className="text-4xl font-bold text-slate-900 dark:text-slate-100 mt-2">{analysis.length}</div>
@@ -5591,12 +5592,6 @@ export default function App() {
                       <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Recebidos</div>
                       <div className="text-4xl font-bold text-blue-600 dark:text-blue-400 mt-2">
                         {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
-                      </div>
-                    </div>
-                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm" title="Notas recebidas menos canceladas e sem autorização SEFAZ, no período filtrado — se a soma dos pagamentos parecer menor que o esperado, confira essa diferença antes de estranhar.">
-                      <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Vendas Líquidas</div>
-                      <div className="text-4xl font-bold text-emerald-600 dark:text-emerald-400 mt-2">
-                        {auditoriaPagamento.totalNotasVendaLiquida}
                       </div>
                     </div>
                   </div>
