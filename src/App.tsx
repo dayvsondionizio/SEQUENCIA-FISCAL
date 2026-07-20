@@ -32,7 +32,8 @@ import {
   Loader2,
   XCircle,
   Sun,
-  Moon
+  Moon,
+  FileSpreadsheet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -997,6 +998,7 @@ export default function App() {
   const [showForaDoEscopoDetalhe, setShowForaDoEscopoDetalhe] = useState(false);
   const [showForaDoPrazo, setShowForaDoPrazo] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
+  const [exportProgress, setExportProgress] = useState<{ atual: number; total: number; etapa: string } | null>(null);
   const [showExportXmlMenu, setShowExportXmlMenu] = useState(false);
   const [exportPartes, setExportPartes] = useState(1);
   const [notaSearchQuery, setNotaSearchQuery] = useState('');
@@ -2389,7 +2391,7 @@ export default function App() {
   // other exports (which filter to valid/auditable notes), this dumps every
   // note with a rawXml as-is — cancelled, sem autorização, contingência,
   // doesn't matter, since the point here is raw field visibility, not audit.
-  const exportarPlanilhaCompletaXML = () => {
+  const exportarPlanilhaCompletaXML = async () => {
     let notas = notasSaida.filter(n => n.tipo === 'nfe' && n.rawXml);
     if (filterMes !== 'Todos') {
       notas = notas.filter(n => getMonthYear(n.data) === filterMes);
@@ -2528,7 +2530,12 @@ export default function App() {
       'Arquivo', 'nNF', 'tpAmb', 'verAplic', 'chNFe', 'dhRecbto', 'nProt', 'digVal', 'cStat', 'xMotivo'
     ]];
 
-    notas.forEach(nota => {
+    // Processa nota a nota numa função separada (em vez de um único forEach
+    // síncrono) pra poder rodar em lotes com pausas — um dataset de milhares
+    // de notas nesse loop de uma vez só travava a aba inteira (o navegador
+    // chegava a marcar a página como "não responde"), e se o usuário fechasse
+    // achando que travou, o download nunca saía.
+    const processarNota = (nota: XmlData) => {
       const doc = parser.parseFromString(nota.rawXml!, 'text/xml');
       const arquivo = nota.fileName || `${nota.chave || nota.numero}.xml`;
       const nNF = nota.numero || '';
@@ -2789,29 +2796,64 @@ export default function App() {
           t(infProt, 'nProt'), t(infProt, 'digVal'), t(infProt, 'cStat'), t(infProt, 'xMotivo')
         ]);
       }
-    });
-
-    const wb = XLSX.utils.book_new();
-    const addSheet = (aoa: (string | number)[][], name: string) => {
-      if (aoa.length <= 1) return;
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      ws['!cols'] = aoa[0].map(h => ({ wch: Math.min(30, Math.max(10, String(h).length + 2)) }));
-      XLSX.utils.book_append_sheet(wb, ws, name);
     };
-    addSheet(rowsIdent, 'Identificação NCFE');
-    addSheet(rowsEmit, 'Emitente');
-    addSheet(rowsDest, 'Destinatário');
-    addSheet(rowsItens, 'Itens');
-    addSheet(rowsTotal, 'Total');
-    addSheet(rowsTransp, 'Transportadora');
-    addSheet(rowsPag, 'Pagamento');
-    addSheet(rowsInfAdic, 'Inf. Adicional');
-    addSheet(rowsRespTec, 'Resp. Tecnico');
-    addSheet(rowsSupl, 'Suplementares NF');
-    addSheet(rowsAssin, 'Assinatura');
-    addSheet(rowsProt, 'Protocolo');
 
-    XLSX.writeFile(wb, nomeArquivoExport('planilha_completa_xml', 'xlsx'));
+    try {
+      // Lotes de 300 notas com uma pausa (setTimeout 0) entre cada um — dá
+      // tempo do navegador processar a fila de eventos (repintar a tela,
+      // responder ao usuário) em vez de travar tudo num bloco só. O mesmo
+      // padrão já usado na extração de RAR/ZIP aninhado deste app.
+      const LOTE = 300;
+      for (let i = 0; i < notas.length; i += LOTE) {
+        notas.slice(i, i + LOTE).forEach(processarNota);
+        setExportProgress({ atual: Math.min(i + LOTE, notas.length), total: notas.length, etapa: 'Lendo XMLs' });
+        await new Promise(r => setTimeout(r, 0));
+      }
+
+      setExportProgress({ atual: notas.length, total: notas.length, etapa: 'Montando planilha' });
+      await new Promise(r => setTimeout(r, 0));
+
+      const wb = XLSX.utils.book_new();
+      const addSheet = (aoa: (string | number)[][], name: string) => {
+        if (aoa.length <= 1) return;
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = aoa[0].map(h => ({ wch: Math.min(30, Math.max(10, String(h).length + 2)) }));
+        XLSX.utils.book_append_sheet(wb, ws, name);
+      };
+      addSheet(rowsIdent, 'Identificação NCFE');
+      addSheet(rowsEmit, 'Emitente');
+      addSheet(rowsDest, 'Destinatário');
+      addSheet(rowsItens, 'Itens');
+      addSheet(rowsTotal, 'Total');
+      addSheet(rowsTransp, 'Transportadora');
+      addSheet(rowsPag, 'Pagamento');
+      addSheet(rowsInfAdic, 'Inf. Adicional');
+      addSheet(rowsRespTec, 'Resp. Tecnico');
+      addSheet(rowsSupl, 'Suplementares NF');
+      addSheet(rowsAssin, 'Assinatura');
+      addSheet(rowsProt, 'Protocolo');
+
+      setExportProgress({ atual: notas.length, total: notas.length, etapa: 'Gerando arquivo' });
+      await new Promise(r => setTimeout(r, 0));
+
+      // Blob + link manual em vez de XLSX.writeFile: dá pra capturar erro
+      // (ex: estouro de memória em planilha muito grande) e confirmar de
+      // verdade que o arquivo foi montado antes de acionar o download.
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([wbout], { type: 'application/octet-stream' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = nomeArquivoExport('planilha_completa_xml', 'xlsx');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+    } catch (err) {
+      console.error('Erro ao exportar planilha completa:', err);
+      alert('Não foi possível gerar a planilha completa. Isso costuma acontecer quando o período selecionado tem notas demais pro navegador processar de uma vez — tente filtrar por um mês específico e exportar de novo.');
+    } finally {
+      setExportProgress(null);
+    }
   };
 
   const [wasmBinary, setWasmBinary] = useState<ArrayBuffer | null>(null);
@@ -3833,6 +3875,46 @@ export default function App() {
             </div>
             <p className="text-center max-w-md" style={{color: 'rgba(255,255,255,0.6)'}}>
               Lendo {processingProgress.current} de {processingProgress.total} arquivos...
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Export Progress Overlay */}
+      <AnimatePresence>
+        {exportProgress && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] backdrop-blur-sm flex flex-col items-center justify-center text-white p-6"
+            style={{background: 'rgba(10,14,35,0.88)'}}
+          >
+            <div className="relative w-24 h-24 mb-8">
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                className="absolute inset-0 rounded-full"
+                style={{border: '4px solid rgba(240,180,41,0.25)', borderTopColor: '#F0B429'}}
+              />
+              <div className="absolute inset-0 flex items-center justify-center">
+                <FileSpreadsheet className="w-9 h-9" style={{color: '#F0B429'}} />
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold mb-2">Gerando Planilha Completa</h2>
+            <div className="w-64 h-2 rounded-full overflow-hidden mb-4" style={{background: 'rgba(255,255,255,0.1)'}}>
+              <motion.div
+                className="h-full"
+                style={{background: 'linear-gradient(90deg, #F0B429, #f5d060)'}}
+                initial={{ width: 0 }}
+                animate={{ width: `${(exportProgress.atual / exportProgress.total) * 100}%` }}
+              />
+            </div>
+            <p className="text-center max-w-md" style={{color: 'rgba(255,255,255,0.6)'}}>
+              {exportProgress.etapa} — {exportProgress.atual} de {exportProgress.total} notas
+            </p>
+            <p className="text-center max-w-md text-xs mt-2" style={{color: 'rgba(255,255,255,0.4)'}}>
+              Não feche nem atualize a página até o download começar.
             </p>
           </motion.div>
         )}
