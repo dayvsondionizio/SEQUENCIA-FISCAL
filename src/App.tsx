@@ -5475,6 +5475,11 @@ export default function App() {
                                 Fechar
                               </button>
                             </div>
+                            {auditoriaPagamento.totalCartaoNaoAplicavel !== auditoriaPagamento.notasForaDoEscopo.length && (
+                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mb-2">
+                                ℹ {auditoriaPagamento.notasForaDoEscopo.length} nota(s) única(s) somando {auditoriaPagamento.totalCartaoNaoAplicavel} pagamento(s) em cartão fora do escopo — a diferença é porque pelo menos uma nota tem pagamento dividido em mais de uma forma no cartão (ex: parte no crédito, parte no débito), contando uma vez em cada linha da tabela abaixo. Isso é esperado, não é erro.
+                              </div>
+                            )}
                             <div className="overflow-x-auto overflow-y-auto max-h-56">
                               <table className="w-full text-xs">
                                 <thead className="sticky top-0 bg-white dark:bg-slate-900">
