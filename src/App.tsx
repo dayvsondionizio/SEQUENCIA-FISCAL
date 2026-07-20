@@ -3895,11 +3895,9 @@ export default function App() {
                   </div>
 
                   <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Meses:</span>
-                  <span className="font-bold text-sm leading-snug" style={{color: '#F0B429'}}>
-                    {mesesDisponiveis.length === 0 && 'N/A'}
-                    {mesesDisponiveis.length > 0 && mesesDisponiveis.length <= 3 && mesesDisponiveis.join(', ')}
-                    {mesesDisponiveis.length > 3 && `${mesesDisponiveis.slice(0, 3).join(', ')} +${mesesDisponiveis.length - 3}`}
-                  </span>
+                  <div className="min-w-0 overflow-x-auto whitespace-nowrap font-bold text-sm leading-snug pb-0.5" style={{color: '#F0B429'}} title={mesesDisponiveis.join(', ')}>
+                    {mesesDisponiveis.length === 0 ? 'N/A' : mesesDisponiveis.join(', ')}
+                  </div>
 
                   {regimeTributario.label && (
                     <>
