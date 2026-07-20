@@ -1422,7 +1422,8 @@ export default function App() {
     const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     const vazio = {
       problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalCartaoNaoAplicavel: 0,
-      notasNaoIntegradas: [] as XmlData[], breakdownPorTipoPagamento: [] as { tPag: string; tPagNome: string; qtd: number; valor: number }[]
+      notasNaoIntegradas: [] as XmlData[], breakdownPorTipoPagamento: [] as { tPag: string; tPagNome: string; qtd: number; valor: number }[],
+      notasComPagamentoDividido: 0
     };
     if (!mainCnpj) return vazio;
 
@@ -1474,9 +1475,14 @@ export default function App() {
     // prova rápida pro cliente.
     const notasNaoIntegradas: XmlData[] = [];
     const chavesNaoIntegradasVistas = new Set<string>();
+    // Nota com pagamento dividido (2+ detPag) conta uma vez em cada tipo que
+    // usou — por isso a soma das "qtd" do breakdown pode passar do total de
+    // notas válidas, sem ser erro.
+    let notasComPagamentoDividido = 0;
 
     saidas.forEach(xml => {
       const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
+      if (doc.getElementsByTagName('detPag').length > 1) notasComPagamentoDividido++;
       const indPres = doc.getElementsByTagName('indPres')[0]?.textContent?.trim() || '';
       const isPresencial = indPres === '' || indPres === '1' || indPres === '5';
       const ufEmit = doc.getElementsByTagName('enderEmit')[0]?.getElementsByTagName('UF')[0]?.textContent?.trim() || '';
@@ -1550,7 +1556,7 @@ export default function App() {
       .map(([tPag, v]) => ({ tPag, tPagNome: tPagLabel[tPag] || tPag, qtd: v.qtd, valor: v.valor }))
       .sort((a, b) => b.valor - a.valor);
 
-    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas, breakdownPorTipoPagamento };
+    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas, breakdownPorTipoPagamento, notasComPagamentoDividido };
   }, [xmlList, filterMes]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
@@ -5188,11 +5194,16 @@ export default function App() {
                                     <div className={cn(
                                       "text-[11px]",
                                       temProblemaNesseTipo ? "text-rose-500 dark:text-rose-400" : "text-slate-400 dark:text-slate-500"
-                                    )}>{b.qtd} nota{b.qtd !== 1 ? 's' : ''}</div>
+                                    )}>{b.qtd} pagamento{b.qtd !== 1 ? 's' : ''}</div>
                                   </div>
                                 );
                               })}
                             </div>
+                            {auditoriaPagamento.notasComPagamentoDividido > 0 && (
+                              <div className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
+                                {auditoriaPagamento.notasComPagamentoDividido} nota(s) tiveram pagamento dividido em mais de uma forma — por isso a soma dos "pagamentos" acima passa do total de notas válidas.
+                              </div>
+                            )}
                             {auditoriaPagamento.problemas.some(p => p.tPag === '90') && (
                               <div className="mt-2 text-[11px] text-rose-600 dark:text-rose-400">
                                 ⚠ "Sem Pagamento" aqui não significa venda sem valor — são notas de venda normal com valor real declaradas com o código errado (90 é só pra Ajuste/Devolução).
