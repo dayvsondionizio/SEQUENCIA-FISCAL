@@ -5199,11 +5199,27 @@ export default function App() {
                                 );
                               })}
                             </div>
-                            {auditoriaPagamento.notasComPagamentoDividido > 0 && (
-                              <div className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
-                                {auditoriaPagamento.notasComPagamentoDividido} nota(s) tiveram pagamento dividido em mais de uma forma — por isso a soma dos "pagamentos" acima passa do total de notas válidas.
-                              </div>
-                            )}
+                            {(() => {
+                              const somaValores = auditoriaPagamento.breakdownPorTipoPagamento.reduce((s, b) => s + b.valor, 0);
+                              const somaPagamentos = auditoriaPagamento.breakdownPorTipoPagamento.reduce((s, b) => s + b.qtd, 0);
+                              const diffValor = Math.abs(somaValores - faturamentoTotal);
+                              const valorBate = diffValor < 0.05;
+                              return (
+                                <div className="mt-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-xl px-3 py-2.5 text-[11px] text-blue-800 dark:text-blue-200 space-y-1.5">
+                                  <div className="font-bold uppercase tracking-wider text-[10px] text-blue-500 dark:text-blue-400">Observação sobre os números acima</div>
+                                  <div>
+                                    {valorBate ? '✓' : '⚠'} <strong>Valores:</strong> a soma das formas de pagamento ({formatarMoeda(somaValores)}) {valorBate ? 'bate exatamente' : 'diverge'} com o Total de Saídas Auditadas ({formatarMoeda(faturamentoTotal)}) — {valorBate ? 'confirma que esse resumo usa o mesmo critério de nota válida (com protocolo de autorização, sem cancelamento) do restante do app' : 'verifique se há notas fora do período ou cancelamento não sincronizado'}.
+                                  </div>
+                                  <div>
+                                    ℹ <strong>Quantidades:</strong> {somaPagamentos} pagamento(s) somados
+                                    {auditoriaPagamento.notasComPagamentoDividido > 0
+                                      ? <> — esse número passa do total de notas válidas porque {auditoriaPagamento.notasComPagamentoDividido} nota(s) tiveram pagamento dividido em mais de uma forma (ex: parte em dinheiro, parte no cartão), contando uma vez em cada tipo usado. Isso é esperado, não é erro.</>
+                                      : <>, batendo com o total de notas válidas — nenhuma nota teve pagamento dividido neste período.</>
+                                    }
+                                  </div>
+                                </div>
+                              );
+                            })()}
                             {auditoriaPagamento.problemas.some(p => p.tPag === '90') && (
                               <div className="mt-2 text-[11px] text-rose-600 dark:text-rose-400">
                                 ⚠ "Sem Pagamento" aqui não significa venda sem valor — são notas de venda normal com valor real declaradas com o código errado (90 é só pra Ajuste/Devolução).
