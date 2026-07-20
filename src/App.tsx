@@ -1403,9 +1403,16 @@ export default function App() {
 
   // Auditoria de meios de pagamento / TEF: verifica o bloco <pag> de cada nota
   // em busca de inconsistências que geram rejeição SEFAZ (falso TEF, cAut
-  // genérico, CNPJ do cartão = emitente, card presente com dinheiro) e mede
-  // o percentual de vendas em cartão feitas via POS manual (tpIntegra=2) —
-  // o padrão de "sem TEF" que pode gerar multa, em qualquer UF.
+  // genérico, CNPJ do cartão = emitente, card presente em pagamento não-cartão)
+  // e mede o percentual de vendas em cartão feitas via POS manual (tpIntegra=2)
+  // — o padrão de "sem TEF" que pode gerar multa, em qualquer UF.
+  //
+  // A obrigatoriedade de TEF só vale pra venda em cartão PRESENCIAL e à vista.
+  // Por isso ficam de fora da contagem de risco (mas ainda visíveis, à parte):
+  // - indPag=1 (pagamento a prazo/faturado — reconciliado depois via banco, sem
+  //   TEF físico acionado na hora)
+  // - indPres != 1/5 (venda não presencial: e-commerce, teleatendimento, etc.)
+  // - UF do destinatário diferente da UF do emitente (venda interestadual)
   const auditoriaPagamento = useMemo(() => {
     const cnpjCounts: { [cnpj: string]: number } = {};
     xmlList.forEach(xml => {
@@ -1413,7 +1420,8 @@ export default function App() {
       if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
     });
     const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-    if (!mainCnpj) return { problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, notasNaoIntegradas: [] as XmlData[] };
+    const vazio = { problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalCartaoNaoAplicavel: 0, notasNaoIntegradas: [] as XmlData[] };
+    if (!mainCnpj) return vazio;
 
     const chavesCanceladas = new Set<string>(
       xmlList
@@ -1448,17 +1456,26 @@ export default function App() {
       xml: XmlData; tPag: string; tPagNome: string; tpIntegra: string;
       cardCnpj: string; cardTBand: string; cardCAut: string; motivo: string;
     }[] = [];
-    let totalCartao = 0, totalIntegrado = 0, totalNaoIntegrado = 0;
-    // Notas com ao menos um pagamento em cartão via POS manual — servem de
-    // amostra pesquisável pra baixar o XML como prova rápida pro cliente.
+    let totalCartao = 0, totalIntegrado = 0, totalNaoIntegrado = 0, totalCartaoNaoAplicavel = 0;
+    // Notas com ao menos um pagamento em cartão via POS manual (dentro do escopo
+    // de obrigatoriedade) — servem de amostra pesquisável pra baixar o XML como
+    // prova rápida pro cliente.
     const notasNaoIntegradas: XmlData[] = [];
     const chavesNaoIntegradasVistas = new Set<string>();
 
     saidas.forEach(xml => {
       const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
+      const indPres = doc.getElementsByTagName('indPres')[0]?.textContent?.trim() || '';
+      const isPresencial = indPres === '' || indPres === '1' || indPres === '5';
+      const ufEmit = doc.getElementsByTagName('enderEmit')[0]?.getElementsByTagName('UF')[0]?.textContent?.trim() || '';
+      const ufDest = doc.getElementsByTagName('enderDest')[0]?.getElementsByTagName('UF')[0]?.textContent?.trim() || '';
+      const isInterestadual = !!ufEmit && !!ufDest && ufEmit !== ufDest;
+
       const detPags = Array.from(doc.getElementsByTagName('detPag'));
       detPags.forEach(detPag => {
         const tPag = detPag.getElementsByTagName('tPag')[0]?.textContent?.trim() || '';
+        const indPag = detPag.getElementsByTagName('indPag')[0]?.textContent?.trim() || '0';
+        const isAVista = indPag !== '1';
         const isCartao = tPag === '03' || tPag === '04';
         const card = detPag.getElementsByTagName('card')[0];
         const tpIntegra = card?.getElementsByTagName('tpIntegra')[0]?.textContent?.trim() || '';
@@ -1468,14 +1485,21 @@ export default function App() {
         const tPagNome = tPagLabel[tPag] || tPag;
 
         if (isCartao) {
-          totalCartao++;
-          if (tpIntegra === '1') totalIntegrado++;
-          else if (tpIntegra === '2') {
-            totalNaoIntegrado++;
-            const chaveOuId = xml.chave || `${xml.serie}-${xml.numero}`;
-            if (!chavesNaoIntegradasVistas.has(chaveOuId)) {
-              chavesNaoIntegradasVistas.add(chaveOuId);
-              notasNaoIntegradas.push(xml);
+          // TEF só é exigível pra venda em cartão presencial, à vista e dentro
+          // do mesmo estado — fora disso a conciliação é bancária, não por TEF.
+          const sujeitoATef = isAVista && isPresencial && !isInterestadual;
+          if (!sujeitoATef) {
+            totalCartaoNaoAplicavel++;
+          } else {
+            totalCartao++;
+            if (tpIntegra === '1') totalIntegrado++;
+            else if (tpIntegra === '2') {
+              totalNaoIntegrado++;
+              const chaveOuId = xml.chave || `${xml.serie}-${xml.numero}`;
+              if (!chavesNaoIntegradasVistas.has(chaveOuId)) {
+                chavesNaoIntegradasVistas.add(chaveOuId);
+                notasNaoIntegradas.push(xml);
+              }
             }
           }
 
@@ -1488,13 +1512,15 @@ export default function App() {
           if (cardCnpj && cardCnpj.replace(/\D/g, '') === xml.emitCnpj) {
             problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: 'CNPJ da adquirente igual ao CNPJ do emitente' });
           }
-        } else if (tPag === '01' && card) {
-          problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: 'Bloco <card> presente em pagamento em dinheiro' });
+        } else if (card && tPag !== '17') {
+          // PIX (tPag=17) processado no mesmo terminal/POS legitimamente carrega
+          // <card><tpIntegra> também (Cenário D: PIX via TEF) — não é erro.
+          problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: `Bloco <card> presente em pagamento não-cartão (${tPagNome})` });
         }
       });
     });
 
-    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado, notasNaoIntegradas };
+    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas };
   }, [xmlList]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
@@ -5052,7 +5078,7 @@ export default function App() {
               )}
 
               {/* Card: Auditoria de Pagamento (TEF) */}
-              {auditoriaPagamento.totalCartao > 0 && (() => {
+              {(auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0) && (() => {
                 const pctNaoIntegrado = auditoriaPagamento.totalCartao > 0
                   ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
                   : 0;
@@ -5079,7 +5105,10 @@ export default function App() {
                             )}
                           </div>
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {auditoriaPagamento.totalCartao} venda(s) em cartão · {auditoriaPagamento.totalIntegrado} integrada(s) via TEF (tpIntegra=1) · {auditoriaPagamento.totalNaoIntegrado} via POS manual (tpIntegra=2)
+                            {auditoriaPagamento.totalCartao} venda(s) em cartão sujeita(s) a TEF · {auditoriaPagamento.totalIntegrado} integrada(s) via TEF (tpIntegra=1) · {auditoriaPagamento.totalNaoIntegrado} via POS manual (tpIntegra=2)
+                            {auditoriaPagamento.totalCartaoNaoAplicavel > 0 && (
+                              <span> · {auditoriaPagamento.totalCartaoNaoAplicavel} em cartão fora do escopo (a prazo/não presencial/interestadual)</span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -5093,23 +5122,30 @@ export default function App() {
 
                     {showAuditoriaPagamento && (
                       <div className="space-y-4">
-                        <div className={cn(
-                          "rounded-xl px-4 py-3 text-xs",
-                          riscoObrigatoriedade ? "bg-rose-50 dark:bg-rose-950 text-rose-800 dark:text-rose-200 border border-rose-200 dark:border-rose-800"
-                            : pctNaoIntegrado >= 50 ? "bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800"
-                            : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
-                        )}>
-                          <span className="font-bold">{pctNaoIntegrado}% das vendas em cartão</span> não passaram pelo TEF (POS manual, tpIntegra=2).
-                          {riscoObrigatoriedade && (
-                            <span> <strong>Alerta: empresa é {regimeTributario.label} — tem obrigatoriedade de TEF.</strong> Esse é o padrão que costuma gerar autuação por falta de integração TEF. Confirme com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
-                          )}
-                          {!riscoObrigatoriedade && regimeTributario.isSimples && auditoriaPagamento.totalNaoIntegrado > 0 && (
-                            <span> Empresa é <strong>Simples Nacional</strong>, que não tem obrigatoriedade de TEF — uso de POS manual aqui não é, por si só, uma infração.</span>
-                          )}
-                          {!riscoObrigatoriedade && !regimeTributario.isSimples && pctNaoIntegrado >= 50 && (
-                            <span> Esse é o padrão que costuma gerar autuação por falta de integração TEF — vale confirmar com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
-                          )}
-                        </div>
+                        {auditoriaPagamento.totalCartao === 0 ? (
+                          <div className="rounded-xl px-4 py-3 text-xs bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                            Nenhuma venda em cartão dentro do escopo de obrigatoriedade de TEF nesse período
+                            {auditoriaPagamento.totalCartaoNaoAplicavel > 0 && <> — as {auditoriaPagamento.totalCartaoNaoAplicavel} venda(s) em cartão encontradas são a prazo, não presenciais ou interestaduais, então não exigem TEF</>}.
+                          </div>
+                        ) : (
+                          <div className={cn(
+                            "rounded-xl px-4 py-3 text-xs",
+                            riscoObrigatoriedade ? "bg-rose-50 dark:bg-rose-950 text-rose-800 dark:text-rose-200 border border-rose-200 dark:border-rose-800"
+                              : pctNaoIntegrado >= 50 ? "bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800"
+                              : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+                          )}>
+                            <span className="font-bold">{pctNaoIntegrado}% das vendas em cartão sujeitas a TEF</span> não passaram pelo TEF (POS manual, tpIntegra=2).
+                            {riscoObrigatoriedade && (
+                              <span> <strong>Alerta: empresa é {regimeTributario.label} — tem obrigatoriedade de TEF.</strong> Esse é o padrão que costuma gerar autuação por falta de integração TEF. Confirme com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
+                            )}
+                            {!riscoObrigatoriedade && regimeTributario.isSimples && auditoriaPagamento.totalNaoIntegrado > 0 && (
+                              <span> Empresa é <strong>Simples Nacional</strong>, que não tem obrigatoriedade de TEF — uso de POS manual aqui não é, por si só, uma infração.</span>
+                            )}
+                            {!riscoObrigatoriedade && !regimeTributario.isSimples && pctNaoIntegrado >= 50 && (
+                              <span> Esse é o padrão que costuma gerar autuação por falta de integração TEF — vale confirmar com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
+                            )}
+                          </div>
+                        )}
 
                         {auditoriaPagamento.notasNaoIntegradas.length > 0 && (
                           <div>
