@@ -1420,7 +1420,10 @@ export default function App() {
       if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
     });
     const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-    const vazio = { problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalCartaoNaoAplicavel: 0, notasNaoIntegradas: [] as XmlData[] };
+    const vazio = {
+      problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalCartaoNaoAplicavel: 0,
+      notasNaoIntegradas: [] as XmlData[], breakdownPorTipoPagamento: [] as { tPag: string; tPagNome: string; qtd: number; valor: number }[]
+    };
     if (!mainCnpj) return vazio;
 
     const chavesCanceladas = new Set<string>(
@@ -1457,6 +1460,9 @@ export default function App() {
       cardCnpj: string; cardTBand: string; cardCAut: string; motivo: string;
     }[] = [];
     let totalCartao = 0, totalIntegrado = 0, totalNaoIntegrado = 0, totalCartaoNaoAplicavel = 0;
+    // Quantidade e faturamento por forma de pagamento (tPag) — dá visão geral
+    // mesmo quando não há nenhuma venda em cartão pra auditar.
+    const porTipo: Record<string, { qtd: number; valor: number }> = {};
     // Notas com ao menos um pagamento em cartão via POS manual (dentro do escopo
     // de obrigatoriedade) — servem de amostra pesquisável pra baixar o XML como
     // prova rápida pro cliente.
@@ -1483,6 +1489,11 @@ export default function App() {
         const cardTBand = card?.getElementsByTagName('tBand')[0]?.textContent?.trim() || '';
         const cardCAut = card?.getElementsByTagName('cAut')[0]?.textContent?.trim() || '';
         const tPagNome = tPagLabel[tPag] || tPag;
+        const vPag = parseFloat(detPag.getElementsByTagName('vPag')[0]?.textContent?.trim() || '0') || 0;
+
+        if (!porTipo[tPag]) porTipo[tPag] = { qtd: 0, valor: 0 };
+        porTipo[tPag].qtd++;
+        porTipo[tPag].valor += vPag;
 
         if (isCartao) {
           // TEF só é exigível pra venda em cartão presencial, à vista e dentro
@@ -1520,7 +1531,11 @@ export default function App() {
       });
     });
 
-    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas };
+    const breakdownPorTipoPagamento = Object.entries(porTipo)
+      .map(([tPag, v]) => ({ tPag, tPagNome: tPagLabel[tPag] || tPag, qtd: v.qtd, valor: v.valor }))
+      .sort((a, b) => b.valor - a.valor);
+
+    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas, breakdownPorTipoPagamento };
   }, [xmlList]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
@@ -5078,7 +5093,7 @@ export default function App() {
               )}
 
               {/* Card: Auditoria de Pagamento (TEF) */}
-              {(auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0) && (() => {
+              {(auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0) && (() => {
                 const pctNaoIntegrado = auditoriaPagamento.totalCartao > 0
                   ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
                   : 0;
@@ -5119,6 +5134,23 @@ export default function App() {
                         {showAuditoriaPagamento ? 'Ocultar' : 'Ver detalhes'}
                       </button>
                     </div>
+
+                    {auditoriaPagamento.breakdownPorTipoPagamento.length > 0 && (
+                      <div className="mb-4">
+                        <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                          Por forma de pagamento
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                          {auditoriaPagamento.breakdownPorTipoPagamento.map(b => (
+                            <div key={b.tPag} className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2">
+                              <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 truncate" title={b.tPagNome}>{b.tPagNome}</div>
+                              <div className="text-sm font-bold text-slate-800 dark:text-slate-100 mt-0.5">{formatarMoeda(b.valor)}</div>
+                              <div className="text-[11px] text-slate-400 dark:text-slate-500">{b.qtd} nota{b.qtd !== 1 ? 's' : ''}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {showAuditoriaPagamento && (
                       <div className="space-y-4">
