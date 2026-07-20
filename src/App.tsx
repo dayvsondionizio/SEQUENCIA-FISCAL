@@ -1438,7 +1438,8 @@ export default function App() {
     const vazio = {
       problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalCartaoNaoAplicavel: 0,
       notasNaoIntegradas: [] as XmlData[], breakdownPorTipoPagamento: [] as { tPag: string; tPagNome: string; qtd: number; valor: number }[],
-      notasComPagamentoDividido: 0, saidaNaoVendaQtd: 0, saidaNaoVendaValor: 0
+      notasComPagamentoDividido: 0, saidaNaoVendaQtd: 0, saidaNaoVendaValor: 0,
+      foraEscopoAPrazo: 0, foraEscopoNaoPresencial: 0, foraEscopoInterestadual: 0
     };
     if (!mainCnpj) return vazio;
 
@@ -1476,6 +1477,12 @@ export default function App() {
       if (t.includes('TESTE') || t.includes('TEST')) return true;
       return false;
     };
+    // O grupo <card> (YA04) é descrito na NT2023.004 como "Grupo de Cartões, PIX,
+    // Boletos e outros Pagamentos Eletrônicos" — não é exclusivo de cartão de
+    // crédito/débito. Vale Alimentação/Refeição/Presente/Combustível (10-13) e
+    // Crédito Loja (05) também são cartões passados na maquininha, e Boleto (15)
+    // e PIX (17) estão citados explicitamente no texto oficial do campo.
+    const tPagPodeTerCard = new Set(['03', '04', '05', '10', '11', '12', '13', '15', '17']);
 
     const problemas: {
       xml: XmlData; tPag: string; tPagNome: string; tpIntegra: string;
@@ -1495,10 +1502,20 @@ export default function App() {
     // notas válidas, sem ser erro.
     let notasComPagamentoDividido = 0;
     let saidaNaoVendaQtd = 0, saidaNaoVendaValor = 0;
+    // Quebra do "fora do escopo" por motivo — sem isso o analista só via o total
+    // combinado e não conseguia saber se a zeragem de "sujeita a TEF" era uma
+    // exclusão legítima (venda a prazo/e-commerce) ou um dado mal configurado
+    // no sistema do cliente (ex: POS gravando indPres errado numa venda presencial).
+    let foraEscopoAPrazo = 0, foraEscopoNaoPresencial = 0, foraEscopoInterestadual = 0;
 
     saidas.forEach(xml => {
       const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
       if (doc.getElementsByTagName('detPag').length > 1) notasComPagamentoDividido++;
+      // Troco (vTroco) é o valor devolvido ao cliente no pagamento em dinheiro —
+      // entra no vPag do detPag de Dinheiro mas NÃO faz parte do valor da venda
+      // (vNF), senão a soma do breakdown por forma de pagamento ultrapassa o
+      // Total de Saídas Auditadas sempre que há troco.
+      let vTrocoRestante = parseFloat(doc.getElementsByTagName('vTroco')[0]?.textContent?.trim() || '0') || 0;
       const indPres = doc.getElementsByTagName('indPres')[0]?.textContent?.trim() || '';
       const isPresencial = indPres === '' || indPres === '1' || indPres === '5';
       const ufEmit = doc.getElementsByTagName('enderEmit')[0]?.getElementsByTagName('UF')[0]?.textContent?.trim() || '';
@@ -1533,7 +1550,15 @@ export default function App() {
         const cardTBand = card?.getElementsByTagName('tBand')[0]?.textContent?.trim() || '';
         const cardCAut = card?.getElementsByTagName('cAut')[0]?.textContent?.trim() || '';
         const tPagNome = tPagLabel[tPag] || tPag;
-        const vPag = parseFloat(detPag.getElementsByTagName('vPag')[0]?.textContent?.trim() || '0') || 0;
+        const vPagBruto = parseFloat(detPag.getElementsByTagName('vPag')[0]?.textContent?.trim() || '0') || 0;
+        // Desconta o troco (se houver) do pagamento em dinheiro desta nota — só
+        // uma vez, mesmo que o troco seja maior que este detPag específico.
+        let vPag = vPagBruto;
+        if (tPag === '01' && vTrocoRestante > 0) {
+          const desconto = Math.min(vPagBruto, vTrocoRestante);
+          vPag = vPagBruto - desconto;
+          vTrocoRestante -= desconto;
+        }
 
         if (!porTipo[tPag]) porTipo[tPag] = { qtd: 0, valor: 0 };
         porTipo[tPag].qtd++;
@@ -1545,6 +1570,9 @@ export default function App() {
           const sujeitoATef = isAVista && isPresencial && !isInterestadual;
           if (!sujeitoATef) {
             totalCartaoNaoAplicavel++;
+            if (!isAVista) foraEscopoAPrazo++;
+            if (!isPresencial) foraEscopoNaoPresencial++;
+            if (isInterestadual) foraEscopoInterestadual++;
           } else {
             totalCartao++;
             if (tpIntegra === '1') totalIntegrado++;
@@ -1574,19 +1602,31 @@ export default function App() {
           // CFOP indica que não é venda — "Sem Pagamento" está correto aqui, não é alerta.
           saidaNaoVendaQtd++;
           saidaNaoVendaValor += vNF;
-        } else if (card && tPag !== '17') {
-          // PIX (tPag=17) processado no mesmo terminal/POS legitimamente carrega
-          // <card><tpIntegra> também (Cenário D: PIX via TEF) — não é erro.
+        } else if (card && !tPagPodeTerCard.has(tPag)) {
           problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: `Bloco <card> presente em pagamento não-cartão (${tPagNome})` });
         }
       });
+
+      // Troco (vTroco) só existe quando há pagamento em dinheiro de verdade —
+      // se sobrou troco sem nenhum detPag de Dinheiro (tPag=01) pra absorvê-lo,
+      // é inconsistência no próprio sistema de automação do cliente.
+      if (vTrocoRestante > 0.005) {
+        problemas.push({
+          xml, tPag: '', tPagNome: 'Troco', tpIntegra: '', cardCnpj: '', cardTBand: '', cardCAut: '',
+          motivo: `Troco de ${formatarMoeda(vTrocoRestante)} declarado sem pagamento em Dinheiro correspondente`
+        });
+      }
     });
 
     const breakdownPorTipoPagamento = Object.entries(porTipo)
       .map(([tPag, v]) => ({ tPag, tPagNome: tPagLabel[tPag] || tPag, qtd: v.qtd, valor: v.valor }))
       .sort((a, b) => b.valor - a.valor);
 
-    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas, breakdownPorTipoPagamento, notasComPagamentoDividido, saidaNaoVendaQtd, saidaNaoVendaValor };
+    return {
+      problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas,
+      breakdownPorTipoPagamento, notasComPagamentoDividido, saidaNaoVendaQtd, saidaNaoVendaValor,
+      foraEscopoAPrazo, foraEscopoNaoPresencial, foraEscopoInterestadual
+    };
   }, [xmlList, filterMes]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
@@ -5279,9 +5319,18 @@ export default function App() {
                         )}
 
                         {auditoriaPagamento.totalCartao === 0 ? (
-                          <div className="rounded-xl px-4 py-3 text-xs bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                            Nenhuma venda em cartão dentro do escopo de obrigatoriedade de TEF nesse período
-                            {auditoriaPagamento.totalCartaoNaoAplicavel > 0 && <> — as {auditoriaPagamento.totalCartaoNaoAplicavel} venda(s) em cartão encontradas são a prazo, não presenciais ou interestaduais, então não exigem TEF</>}.
+                          <div className="rounded-xl px-4 py-3 text-xs bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 space-y-1">
+                            <div>
+                              Nenhuma venda em cartão dentro do escopo de obrigatoriedade de TEF nesse período
+                              {auditoriaPagamento.totalCartaoNaoAplicavel > 0 && <> — os {auditoriaPagamento.totalCartaoNaoAplicavel} pagamento(s) em cartão encontrados caem em pelo menos um destes motivos:</>}.
+                            </div>
+                            {auditoriaPagamento.totalCartaoNaoAplicavel > 0 && (
+                              <ul className="pl-4 list-disc space-y-0.5">
+                                <li className={auditoriaPagamento.foraEscopoAPrazo > 0 ? "font-semibold text-slate-700 dark:text-slate-200" : ""}>{auditoriaPagamento.foraEscopoAPrazo} a prazo (indPag=1 — cobrança faturada, conciliada depois via banco)</li>
+                                <li className={auditoriaPagamento.foraEscopoNaoPresencial > 0 ? "font-semibold text-slate-700 dark:text-slate-200" : ""}>{auditoriaPagamento.foraEscopoNaoPresencial} não presencial (indPres ≠ 1/5 — e-commerce, teleatendimento, entrega; confira se não é presencial mal marcado no PDV)</li>
+                                <li className={auditoriaPagamento.foraEscopoInterestadual > 0 ? "font-semibold text-slate-700 dark:text-slate-200" : ""}>{auditoriaPagamento.foraEscopoInterestadual} interestadual (UF do destinatário ≠ UF do emitente)</li>
+                              </ul>
+                            )}
                           </div>
                         ) : (
                           <div className={cn(
