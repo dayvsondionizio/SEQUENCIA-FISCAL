@@ -5342,6 +5342,9 @@ export default function App() {
                 const pctNaoIntegrado = auditoriaPagamento.totalCartao > 0
                   ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
                   : 0;
+                const pctIntegrado = auditoriaPagamento.totalCartao > 0
+                  ? Math.round((auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100)
+                  : 0;
                 const temProblemasTecnicos = auditoriaPagamento.problemas.length > 0;
                 // Regime Normal tem obrigatoriedade de TEF — qualquer POS manual vira alerta real.
                 // Simples Nacional não tem essa obrigatoriedade, então fica só informativo.
@@ -5370,11 +5373,11 @@ export default function App() {
                             </span>
                             <span className="text-slate-300 dark:text-slate-600">·</span>
                             <span className={auditoriaPagamento.totalIntegrado > 0 ? "text-emerald-600 dark:text-emerald-400 font-semibold" : "text-slate-400 dark:text-slate-500"} title="tpIntegra=1 — pagamento integrado ao sistema (TEF/POS integrado)">
-                              {auditoriaPagamento.totalIntegrado} integrada(s){auditoriaPagamento.totalIntegrado > 0 && ' ✓'}
+                              {auditoriaPagamento.totalIntegrado} integrada(s){auditoriaPagamento.totalCartao > 0 && ` (${pctIntegrado}%)`}{auditoriaPagamento.totalIntegrado > 0 && ' ✓'}
                             </span>
                             <span className="text-slate-300 dark:text-slate-600">·</span>
                             <span className={auditoriaPagamento.totalNaoIntegrado > 0 ? "text-amber-600 dark:text-amber-400 font-semibold" : "text-slate-400 dark:text-slate-500"} title="tpIntegra=2 — pagamento não integrado, digitado manualmente no POS">
-                              {auditoriaPagamento.totalNaoIntegrado} POS manual{auditoriaPagamento.totalNaoIntegrado > 0 && ' ⚠'}
+                              {auditoriaPagamento.totalNaoIntegrado} POS manual{auditoriaPagamento.totalCartao > 0 && ` (${pctNaoIntegrado}%)`}{auditoriaPagamento.totalNaoIntegrado > 0 && ' ⚠'}
                             </span>
                             {auditoriaPagamento.totalCartaoNaoAplicavel > 0 && (
                               <>
