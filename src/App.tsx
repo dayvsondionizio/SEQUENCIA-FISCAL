@@ -1419,6 +1419,34 @@ export default function App() {
     return { crt, label, isSimples };
   }, [xmlList]);
 
+  // Sistema/ERP de emissão: o campo <verProc> (ide) identifica o software que
+  // gerou a NF-e/NFC-e (ex: "Bling 1.1", "ACBrNFe") — só amostra a primeira e
+  // a última nota válida (não o dataset inteiro, que pode ter milhares de
+  // notas e re-parsear tudo isso a cada render seria caro) pra detectar
+  // rapidamente se o cliente trocou de sistema no meio do período.
+  const sistemaEmissao = useMemo(() => {
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!mainCnpj) return { nome: '', possivelTroca: false };
+
+    const notasValidas = xmlList.filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml);
+    if (notasValidas.length === 0) return { nome: '', possivelTroca: false };
+
+    const lerVerProc = (xml: XmlData) => {
+      const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
+      return doc.getElementsByTagName('ide')[0]?.getElementsByTagName('verProc')[0]?.textContent?.trim() || '';
+    };
+    const primeira = lerVerProc(notasValidas[0]);
+    const ultima = lerVerProc(notasValidas[notasValidas.length - 1]);
+    const nome = primeira || ultima;
+    const possivelTroca = !!primeira && !!ultima && primeira !== ultima;
+    return { nome, possivelTroca, primeira, ultima };
+  }, [xmlList]);
+
   // Auditoria de meios de pagamento / TEF: verifica o bloco <pag> de cada nota
   // em busca de inconsistências que geram rejeição SEFAZ (falso TEF, cAut
   // genérico, CNPJ do cartão = emitente, card presente em pagamento não-cartão)
@@ -4007,6 +4035,30 @@ export default function App() {
                       >
                         {regimeTributario.label}
                       </span>
+                    </>
+                  )}
+
+                  {sistemaEmissao.nome && (
+                    <>
+                      <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Sistema:</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className="inline-flex items-center w-fit px-2.5 py-0.5 rounded-full text-xs font-bold"
+                          style={{background: 'rgba(148,163,184,0.15)', color: '#CBD5E1', border: '1px solid rgba(148,163,184,0.3)'}}
+                          title="Extraído do campo <verProc> do XML (processo de emissão)"
+                        >
+                          {sistemaEmissao.nome}
+                        </span>
+                        {sistemaEmissao.possivelTroca && (
+                          <span
+                            className="text-[11px] font-bold"
+                            style={{color: '#F0B429'}}
+                            title={`Primeira nota: "${sistemaEmissao.primeira}" · Última nota: "${sistemaEmissao.ultima}"`}
+                          >
+                            ⚠ pode ter trocado de sistema no período
+                          </span>
+                        )}
+                      </div>
                     </>
                   )}
                 </div>
