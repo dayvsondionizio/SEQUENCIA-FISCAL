@@ -1476,6 +1476,13 @@ export default function App() {
       const ufEmit = doc.getElementsByTagName('enderEmit')[0]?.getElementsByTagName('UF')[0]?.textContent?.trim() || '';
       const ufDest = doc.getElementsByTagName('enderDest')[0]?.getElementsByTagName('UF')[0]?.textContent?.trim() || '';
       const isInterestadual = !!ufEmit && !!ufDest && ufEmit !== ufDest;
+      // finNFe=1 é venda normal — o código 90 (Sem Pagamento) é reservado pra
+      // Ajuste/Devolução (finNFe 2/3/4). Uma venda normal com valor real
+      // declarada como "sem pagamento" é inconformidade fiscal, não um dado
+      // ausente de verdade — o cliente pode estar escondendo receita ou o
+      // sistema de automação não está gravando o meio de pagamento usado.
+      const finNFe = doc.getElementsByTagName('finNFe')[0]?.textContent?.trim() || '';
+      const vNF = parseFloat(doc.getElementsByTagName('vNF')[0]?.textContent?.trim() || '0') || 0;
 
       const detPags = Array.from(doc.getElementsByTagName('detPag'));
       detPags.forEach(detPag => {
@@ -1523,6 +1530,8 @@ export default function App() {
           if (cardCnpj && cardCnpj.replace(/\D/g, '') === xml.emitCnpj) {
             problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: 'CNPJ da adquirente igual ao CNPJ do emitente' });
           }
+        } else if (tPag === '90' && finNFe === '1' && vNF > 0) {
+          problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: `Venda normal (finNFe=1) de ${formatarMoeda(vNF)} declarada como "Sem Pagamento" — código 90 é reservado pra Ajuste/Devolução` });
         } else if (card && tPag !== '17') {
           // PIX (tPag=17) processado no mesmo terminal/POS legitimamente carrega
           // <card><tpIntegra> também (Cenário D: PIX via TEF) — não é erro.
@@ -5125,6 +5134,11 @@ export default function App() {
                               <span> · {auditoriaPagamento.totalCartaoNaoAplicavel} em cartão fora do escopo (a prazo/não presencial/interestadual)</span>
                             )}
                           </div>
+                          {auditoriaPagamento.totalCartao === 0 && auditoriaPagamento.totalCartaoNaoAplicavel === 0 && (
+                            <div className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">
+                              Os três números acima ficam zerados porque não há nenhuma venda em cartão neste período — não é erro, veja abaixo as formas de pagamento realmente usadas.
+                            </div>
+                          )}
                         </div>
                       </div>
                       <button
@@ -5141,14 +5155,41 @@ export default function App() {
                           Por forma de pagamento
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                          {auditoriaPagamento.breakdownPorTipoPagamento.map(b => (
-                            <div key={b.tPag} className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2">
-                              <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 truncate" title={b.tPagNome}>{b.tPagNome}</div>
-                              <div className="text-sm font-bold text-slate-800 dark:text-slate-100 mt-0.5">{formatarMoeda(b.valor)}</div>
-                              <div className="text-[11px] text-slate-400 dark:text-slate-500">{b.qtd} nota{b.qtd !== 1 ? 's' : ''}</div>
-                            </div>
-                          ))}
+                          {auditoriaPagamento.breakdownPorTipoPagamento.map(b => {
+                            const temProblemaNesseTipo = auditoriaPagamento.problemas.some(p => p.tPag === b.tPag);
+                            return (
+                              <div
+                                key={b.tPag}
+                                className={cn(
+                                  "border rounded-xl px-3 py-2",
+                                  temProblemaNesseTipo
+                                    ? "bg-rose-50 dark:bg-rose-950 border-rose-200 dark:border-rose-800"
+                                    : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700"
+                                )}
+                              >
+                                <div className={cn(
+                                  "text-[11px] font-semibold truncate flex items-center gap-1",
+                                  temProblemaNesseTipo ? "text-rose-600 dark:text-rose-400" : "text-slate-500 dark:text-slate-400"
+                                )} title={b.tPagNome}>
+                                  {temProblemaNesseTipo && '⚠ '}{b.tPagNome}
+                                </div>
+                                <div className={cn(
+                                  "text-sm font-bold mt-0.5",
+                                  temProblemaNesseTipo ? "text-rose-700 dark:text-rose-300" : "text-slate-800 dark:text-slate-100"
+                                )}>{formatarMoeda(b.valor)}</div>
+                                <div className={cn(
+                                  "text-[11px]",
+                                  temProblemaNesseTipo ? "text-rose-500 dark:text-rose-400" : "text-slate-400 dark:text-slate-500"
+                                )}>{b.qtd} nota{b.qtd !== 1 ? 's' : ''}</div>
+                              </div>
+                            );
+                          })}
                         </div>
+                        {auditoriaPagamento.problemas.some(p => p.tPag === '90') && (
+                          <div className="mt-2 text-[11px] text-rose-600 dark:text-rose-400">
+                            ⚠ "Sem Pagamento" aqui não significa venda sem valor — são notas de venda normal com valor real declaradas com o código errado (90 é só pra Ajuste/Devolução). Veja "Ver detalhes" abaixo.
+                          </div>
+                        )}
                       </div>
                     )}
 
