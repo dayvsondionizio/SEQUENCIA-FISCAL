@@ -978,6 +978,7 @@ export default function App() {
   const [showAnomalias, setShowAnomalias] = useState(false);
   const [showSemAutorizacao, setShowSemAutorizacao] = useState(false);
   const [showAuditoriaPagamento, setShowAuditoriaPagamento] = useState(false);
+  const [auditoriaPagamentoBusca, setAuditoriaPagamentoBusca] = useState('');
   const [showForaDoPrazo, setShowForaDoPrazo] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
   const [showExportXmlMenu, setShowExportXmlMenu] = useState(false);
@@ -1412,7 +1413,7 @@ export default function App() {
       if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
     });
     const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-    if (!mainCnpj) return { problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0 };
+    if (!mainCnpj) return { problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, notasNaoIntegradas: [] as XmlData[] };
 
     const chavesCanceladas = new Set<string>(
       xmlList
@@ -1448,6 +1449,10 @@ export default function App() {
       cardCnpj: string; cardTBand: string; cardCAut: string; motivo: string;
     }[] = [];
     let totalCartao = 0, totalIntegrado = 0, totalNaoIntegrado = 0;
+    // Notas com ao menos um pagamento em cartão via POS manual — servem de
+    // amostra pesquisável pra baixar o XML como prova rápida pro cliente.
+    const notasNaoIntegradas: XmlData[] = [];
+    const chavesNaoIntegradasVistas = new Set<string>();
 
     saidas.forEach(xml => {
       const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
@@ -1465,7 +1470,14 @@ export default function App() {
         if (isCartao) {
           totalCartao++;
           if (tpIntegra === '1') totalIntegrado++;
-          else if (tpIntegra === '2') totalNaoIntegrado++;
+          else if (tpIntegra === '2') {
+            totalNaoIntegrado++;
+            const chaveOuId = xml.chave || `${xml.serie}-${xml.numero}`;
+            if (!chavesNaoIntegradasVistas.has(chaveOuId)) {
+              chavesNaoIntegradasVistas.add(chaveOuId);
+              notasNaoIntegradas.push(xml);
+            }
+          }
 
           if (tpIntegra === '1' && !cardCAut) {
             problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: 'Falso TEF: marcado como integrado (tpIntegra=1) mas sem código de autorização' });
@@ -1482,7 +1494,7 @@ export default function App() {
       });
     });
 
-    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado };
+    return { problemas, totalCartao, totalIntegrado, totalNaoIntegrado, notasNaoIntegradas };
   }, [xmlList]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
@@ -3432,6 +3444,26 @@ export default function App() {
     }
   };
 
+  // Baixa o XML bruto de uma nota específica, pra levantar prova rápida
+  // (ex: mostrar pro cliente uma venda que caiu como POS manual/sem TEF).
+  const baixarXmlEvidencia = (nota: XmlData) => {
+    if (!nota.rawXml) {
+      alert('XML original desta nota não está disponível.');
+      return;
+    }
+    const empresa = sanitizarNomeArquivo(nota.razaoSocial || notasSaida[0]?.razaoSocial || '');
+    const periodo = sanitizarNomeArquivo(nota.data ? getMonthYear(nota.data) : periodoParaNomeArquivo());
+    const nomeArquivo = [empresa, periodo, `Serie${nota.serie}`, nota.numero].filter(Boolean).join('_');
+    const blob = new Blob([nota.rawXml], { type: 'application/xml;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${nomeArquivo}.xml`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  };
+
   const toggleSelecaoNota = (chave: string) => {
     setNotasSelecionadas(prev => {
       const next = new Set(prev);
@@ -5078,6 +5110,67 @@ export default function App() {
                             <span> Esse é o padrão que costuma gerar autuação por falta de integração TEF — vale confirmar com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
                           )}
                         </div>
+
+                        {auditoriaPagamento.notasNaoIntegradas.length > 0 && (
+                          <div>
+                            <div className="text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-2">
+                              Amostra pra levantar prova — pesquise e baixe o XML de uma nota via POS manual
+                            </div>
+                            <input
+                              type="text"
+                              value={auditoriaPagamentoBusca}
+                              onChange={e => setAuditoriaPagamentoBusca(e.target.value)}
+                              placeholder="Buscar por número ou série..."
+                              className="w-full max-w-xs mb-2 px-3 py-1.5 text-xs border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-300"
+                            />
+                            <div className="overflow-x-auto overflow-y-auto max-h-56">
+                              <table className="w-full text-xs">
+                                <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                                  <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                                    <th className="py-1.5 pr-3">Série</th>
+                                    <th className="py-1.5 pr-3">Nº</th>
+                                    <th className="py-1.5 pr-3">Data</th>
+                                    <th className="py-1.5 text-right pr-3">Valor</th>
+                                    <th className="py-1.5 pr-3">Baixar</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {auditoriaPagamento.notasNaoIntegradas
+                                    .filter(n => {
+                                      const q = auditoriaPagamentoBusca.trim().toLowerCase();
+                                      if (!q) return true;
+                                      return (n.numero || '').toLowerCase().includes(q) || (n.serie || '').toLowerCase().includes(q);
+                                    })
+                                    .slice(0, 50)
+                                    .map((n, i) => (
+                                      <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                        <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.serie}</td>
+                                        <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero}</td>
+                                        <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                        <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(parseFloat(n.valor || '0') || 0)}</td>
+                                        <td className="py-1.5 pr-3">
+                                          <button
+                                            onClick={() => baixarXmlEvidencia(n)}
+                                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                          >
+                                            <Download className="w-3 h-3" />
+                                            XML
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                </tbody>
+                              </table>
+                              {auditoriaPagamento.notasNaoIntegradas.filter(n => {
+                                const q = auditoriaPagamentoBusca.trim().toLowerCase();
+                                if (!q) return true;
+                                return (n.numero || '').toLowerCase().includes(q) || (n.serie || '').toLowerCase().includes(q);
+                              }).length > 50 && (
+                                <p className="text-[11px] text-slate-400 mt-1.5">Mostrando 50 resultados. Refine a busca por número pra achar uma nota específica.</p>
+                              )}
+                            </div>
+                          </div>
+                        )}
 
                         {temProblemasTecnicos && (
                           <div className="overflow-x-auto overflow-y-auto max-h-72">
