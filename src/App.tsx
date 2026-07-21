@@ -6013,7 +6013,7 @@ export default function App() {
                                   <th className="py-1.5 pr-3">Pagamento</th>
                                   <th className="py-1.5 pr-3">tpIntegra</th>
                                   <th className="py-1.5 pr-3">Autorização</th>
-                                  <th className="py-1.5 text-right">Valor</th>
+                                  <th className="py-1.5 pr-3 text-right">Valor</th>
                                   <th className="py-1.5 pr-3">Motivo</th>
                                 </tr>
                               </thead>
@@ -6026,7 +6026,7 @@ export default function App() {
                                     <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{p.tPagNome}</td>
                                     <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{p.tpIntegra || '—'}</td>
                                     <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-400">{p.cardCAut || '—'}</td>
-                                    <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(parseFloat(p.xml.valor || '0') || 0)}</td>
+                                    <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">{formatarMoeda(parseFloat(p.xml.valor || '0') || 0)}</td>
                                     <td className="py-1.5 pr-3 text-rose-600 dark:text-rose-400 max-w-[280px]">{p.motivo}</td>
                                   </tr>
                                 ))}
