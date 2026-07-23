@@ -858,6 +858,53 @@ export default function App() {
     setTimeout(() => setCopiedHeaderField(null), 1500);
   };
 
+  const [copiedResumoTEF, setCopiedResumoTEF] = useState(false);
+
+  // Monta um resumo em texto do card de Auditoria de Pagamento (TEF) pra
+  // copiar e enviar direto pro cliente — empresa, período, formas de
+  // pagamento e os percentuais de TEF/POS que hoje só existem visualmente.
+  const copiarResumoTEF = () => {
+    const empresa = analysis?.[0]?.razaoSocial || '';
+    const cnpj = analysis?.[0]?.cnpj || '';
+    const ie = analysis?.[0]?.ie || '';
+    const periodo = filterMes !== 'Todos' ? filterMes : mesesDisponiveis.join(', ');
+    const pctIntegrado = auditoriaPagamento.totalCartao > 0
+      ? Math.round((auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100)
+      : 0;
+    const pctNaoIntegrado = auditoriaPagamento.totalCartao > 0
+      ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
+      : 0;
+
+    let texto = `RESUMO — AUDITORIA DE PAGAMENTO (TEF)\n`;
+    texto += `Empresa: ${empresa}\n`;
+    texto += `CNPJ: ${cnpj}\n`;
+    texto += `IE: ${ie}\n`;
+    if (regimeTributario.label) texto += `Regime: ${regimeTributario.label}\n`;
+    texto += `Período: ${periodo}\n\n`;
+
+    texto += `Vendas em cartão sujeitas a TEF: ${auditoriaPagamento.totalCartao}\n`;
+    texto += `  • Integradas (TEF): ${auditoriaPagamento.totalIntegrado} (${pctIntegrado}%)\n`;
+    texto += `  • POS manual (sem TEF): ${auditoriaPagamento.totalNaoIntegrado} (${pctNaoIntegrado}%)\n`;
+    if (auditoriaPagamento.totalCartaoNaoAplicavel > 0) {
+      texto += `  • Fora do escopo de TEF (não presencial/interestadual): ${auditoriaPagamento.totalCartaoNaoAplicavel}\n`;
+    }
+
+    if (auditoriaPagamento.breakdownPorTipoPagamento.length > 0) {
+      texto += `\nPor forma de pagamento:\n`;
+      auditoriaPagamento.breakdownPorTipoPagamento.forEach(b => {
+        texto += `  • ${b.tPagNome}: ${formatarMoeda(b.valor)} (${b.qtd} pagamento${b.qtd !== 1 ? 's' : ''})\n`;
+      });
+    }
+
+    if (auditoriaPagamento.problemas.length > 0) {
+      texto += `\n⚠ ${auditoriaPagamento.problemas.length} problema(s) técnico(s) identificado(s) nessa auditoria.`;
+    }
+
+    navigator.clipboard.writeText(texto.trim());
+    setCopiedResumoTEF(true);
+    setTimeout(() => setCopiedResumoTEF(false), 1500);
+  };
+
   const ThemeToggle = () => (
     <button
       onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
@@ -5215,12 +5262,22 @@ export default function App() {
                           )}
                         </div>
                       </div>
-                      <button
-                        onClick={() => setShowAuditoriaPagamento(!showAuditoriaPagamento)}
-                        className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
-                      >
-                        {showAuditoriaPagamento ? 'Ocultar' : 'Ver detalhes'}
-                      </button>
+                      <div className="flex items-center gap-3 shrink-0 no-print">
+                        <button
+                          onClick={copiarResumoTEF}
+                          className="flex items-center gap-1.5 text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+                          title="Copia um resumo em texto (empresa, período, formas de pagamento, percentuais de TEF/POS) pra colar e enviar ao cliente"
+                        >
+                          {copiedResumoTEF ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                          {copiedResumoTEF ? 'Copiado!' : 'Copiar Resumo'}
+                        </button>
+                        <button
+                          onClick={() => setShowAuditoriaPagamento(!showAuditoriaPagamento)}
+                          className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline"
+                        >
+                          {showAuditoriaPagamento ? 'Ocultar' : 'Ver detalhes'}
+                        </button>
+                      </div>
                     </div>
 
                     {showAuditoriaPagamento && (
