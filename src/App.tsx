@@ -2943,6 +2943,15 @@ export default function App() {
     let finalOthers: XmlData[] = [];
     let foundSped: SpedData | null = null;
     let foundSpedOriginal: SpedData | null = null;
+    // Acumulador local (não o state React) — setExtractionErrors é assíncrono,
+    // então ler o state extractionErrors mais adiante NESTA MESMA execução
+    // pegaria o valor antigo (stale closure). Esse array local reflete tudo
+    // que essa importação específica encontrou, na hora.
+    const extractionErrorsLocal: string[] = [];
+    const registrarExtractionError = (msg: string) => {
+      extractionErrorsLocal.push(msg);
+      setExtractionErrors(prev => [...prev, msg]);
+    };
 
         const checkMagicBytes = (buffer: ArrayBuffer | Uint8Array) => {
       const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
@@ -3027,14 +3036,14 @@ export default function App() {
               const antesCount = results.localTotalCount;
               await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
               if (results.localTotalCount === antesCount) {
-                setExtractionErrors(prev => [...prev, `${currentPath}/${innerArchiveName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`]);
+                registrarExtractionError(`${currentPath}/${innerArchiveName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
               }
             }
           }
           return;
         } catch (e) {
           console.error('Erro ZIP:', e);
-          setExtractionErrors(prev => [...prev, `${currentPath} — falha ao ler ZIP: ${e instanceof Error ? e.message : String(e)}`]);
+          registrarExtractionError(`${currentPath} — falha ao ler ZIP: ${e instanceof Error ? e.message : String(e)}`);
           return;
         }
       }
@@ -3064,7 +3073,7 @@ export default function App() {
               const antesCount = results.localTotalCount;
               await processArchiveRecursively(new Uint8Array(await fileData.arrayBuffer()), results, baseName, currentPath);
               if (results.localTotalCount === antesCount) {
-                setExtractionErrors(prev => [...prev, `${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`]);
+                registrarExtractionError(`${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
               }
             } else {
               const xmlText = await fileData.text();
@@ -3131,7 +3140,7 @@ export default function App() {
                 const antesCount = results.localTotalCount;
                 await processArchiveRecursively(file.extraction, results, baseName, currentPath);
                 if (results.localTotalCount === antesCount) {
-                  setExtractionErrors(prev => [...prev, `${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`]);
+                  registrarExtractionError(`${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
                 }
               } else {
                 const xmlText = new TextDecoder().decode(file.extraction);
@@ -3164,7 +3173,7 @@ export default function App() {
         } catch (rarErr) {
           console.error('Erro RAR final:', rarErr);
           const msg = rarErr instanceof Error ? rarErr.message : String(rarErr);
-          setExtractionErrors(prev => [...prev, `${currentPath} — parou no meio da extração (${msg}). Pode haver notas faltando desse arquivo — geralmente por RAR muito grande/aninhado consumindo toda a memória disponível.`]);
+          registrarExtractionError(`${currentPath} — parou no meio da extração (${msg}). Pode haver notas faltando desse arquivo — geralmente por RAR muito grande/aninhado consumindo toda a memória disponível.`);
         }
         setExtractionStatus(null);
       }
@@ -3230,7 +3239,7 @@ export default function App() {
             const antesCount = res.localTotalCount;
             await processArchiveRecursively(zipData, res, file.name);
             if (res.localTotalCount === antesCount) {
-              setExtractionErrors(prev => [...prev, `${file.name} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`]);
+              registrarExtractionError(`${file.name} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
             }
           } else if (nameLower.endsWith('.txt')) {
             const text = await file.text();
@@ -3361,7 +3370,7 @@ export default function App() {
             return `- CNPJ: ${cnpj}${cnpjNames[cnpj] ? ` (${cnpjNames[cnpj]})` : ''}`;
           });
 
-          const dicaAninhamento = extractionErrors.length > 0
+          const dicaAninhamento = extractionErrorsLocal.length > 0
             ? `\n\n⚠ Foram detectadas falhas ao extrair arquivo(s) aninhado(s) durante essa importação (veja os detalhes acima) — é bem provável que as notas de SAÍDA da empresa principal estejam nesses arquivos que falharam, e por isso só sobrou entrada de fornecedores diferentes, parecendo "várias empresas". Tente extrair o ZIP/RAR manualmente no seu computador e reenviar as pastas/arquivos já descompactados.`
             : `\n\nPara evitar inconsistências, envie apenas arquivos de uma única empresa por vez.`;
           alert(`⚠️ Erro de Importação: Múltiplas Empresas Detectadas!\n\nForam encontrados XMLs de outra empresa que não pertencem à empresa principal sob auditoria:\n${conflictList.join('\n')}${dicaAninhamento}`);
