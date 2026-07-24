@@ -944,6 +944,7 @@ export default function App() {
   const [filterModelo, setFilterModelo] = useState('Todos');
   const [filterMes, setFilterMes] = useState('Todos');
   const [showDaysDetail, setShowDaysDetail] = useState(false);
+  const [notasPorDiaModoResumido, setNotasPorDiaModoResumido] = useState(false);
   const [showCfopBreakdown, setShowCfopBreakdown] = useState(false);
   const [showCfopPorModelo, setShowCfopPorModelo] = useState(false);
   const [showAnomalias, setShowAnomalias] = useState(false);
@@ -1782,7 +1783,7 @@ export default function App() {
       return `${day}/${month}/${year}`;
     };
 
-    const uniqueDays = Array.from(new Set(datas));
+    const uniqueDays: string[] = Array.from(new Set(datas));
     const epochDays = uniqueDays.map(getEpochDay).sort((a, b) => a - b);
     const groupedEpochs = agruparFaixas(epochDays);
     
@@ -1800,6 +1801,20 @@ export default function App() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([data, count]) => ({ data: formatarDataBR(data), count }));
 
+    // Mesma faixa de dias consecutivos do diasDetalhados, mas somando as notas
+    // de cada dia dentro da faixa — visão resumida (ex: "01 a 31") sem perder
+    // a quantidade, só agregada por período em vez de dia a dia.
+    const diasDetalhadosComContagem = groupedEpochs.map(faixa => {
+      const label = faixa.length === 1
+        ? fromEpochDay(faixa[0])
+        : `${fromEpochDay(faixa[0])} a ${fromEpochDay(faixa[faixa.length - 1])}`;
+      const totalFaixa = faixa.reduce((soma, epochDay) => {
+        const dataIso = uniqueDays.find(d => getEpochDay(d) === epochDay);
+        return soma + (dataIso ? (notasPorDia[dataIso] || 0) : 0);
+      }, 0);
+      return { label, totalNotas: totalFaixa, qtdDias: faixa.length };
+    });
+
     return {
       inicio: formatarDataBR(datas[0]),
       fim: formatarDataBR(datas[datas.length - 1]),
@@ -1807,6 +1822,7 @@ export default function App() {
       totalNotas: datas.length,
       diasDetalhados,
       diasComContagem,
+      diasDetalhadosComContagem,
     };
   }, [xmlList]);
 
@@ -4966,22 +4982,40 @@ export default function App() {
 
               {showDaysDetail && periodoAnalise.diasComContagem && periodoAnalise.diasComContagem.length > 0 && (
                 <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm">
-                  <div className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">Notas por Dia</div>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Notas por Dia</div>
+                    <button
+                      onClick={() => setNotasPorDiaModoResumido(v => !v)}
+                      className="flex items-center gap-1.5 text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
+                      title="Alterna entre lista dia a dia e faixas de dias consecutivos (ex: 01 a 31)"
+                    >
+                      {notasPorDiaModoResumido ? 'Ver dia a dia' : 'Ver por período'}
+                    </button>
+                  </div>
                   <div className="overflow-y-auto max-h-72">
                     <table className="w-full text-xs">
                       <thead className="sticky top-0 bg-white dark:bg-slate-900">
                         <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-100 dark:border-slate-800">
-                          <th className="py-1.5 pr-4">Data</th>
+                          <th className="py-1.5 pr-4">{notasPorDiaModoResumido ? 'Período' : 'Data'}</th>
                           <th className="py-1.5 text-right">Notas</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {periodoAnalise.diasComContagem.map((dia, idx) => (
-                          <tr key={idx} className="border-b border-slate-50 dark:border-slate-800 last:border-0">
-                            <td className="py-1.5 pr-4 font-mono text-slate-600 dark:text-slate-400">{dia.data}</td>
-                            <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300">{dia.count}</td>
-                          </tr>
-                        ))}
+                        {notasPorDiaModoResumido ? (
+                          periodoAnalise.diasDetalhadosComContagem?.map((faixa, idx) => (
+                            <tr key={idx} className="border-b border-slate-50 dark:border-slate-800 last:border-0">
+                              <td className="py-1.5 pr-4 font-mono text-slate-600 dark:text-slate-400">{faixa.label}</td>
+                              <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300">{faixa.totalNotas}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          periodoAnalise.diasComContagem.map((dia, idx) => (
+                            <tr key={idx} className="border-b border-slate-50 dark:border-slate-800 last:border-0">
+                              <td className="py-1.5 pr-4 font-mono text-slate-600 dark:text-slate-400">{dia.data}</td>
+                              <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300">{dia.count}</td>
+                            </tr>
+                          ))
+                        )}
                       </tbody>
                       <tfoot className="sticky bottom-0 bg-white dark:bg-slate-900">
                         <tr className="border-t border-slate-200 dark:border-slate-700">
