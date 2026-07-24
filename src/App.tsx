@@ -897,7 +897,19 @@ export default function App() {
     }
 
     if (auditoriaPagamento.problemas.length > 0) {
-      texto += `\n⚠ ${auditoriaPagamento.problemas.length} problema(s) técnico(s) identificado(s) nessa auditoria.`;
+      texto += `\n⚠ ${auditoriaPagamento.problemas.length} problema(s) técnico(s) identificado(s):\n`;
+      auditoriaPagamento.problemas.forEach(p => {
+        const data = p.xml.data ? new Date(p.xml.data).toLocaleDateString('pt-BR') : '—';
+        texto += `  • Série ${p.xml.serie}, Nº ${p.xml.numero} (${data}): ${p.motivo}\n`;
+      });
+
+      const problemasTroco = auditoriaPagamento.problemas.filter(p => p.motivo.startsWith('Troco de'));
+      if (problemasTroco.length > 0) {
+        texto += `\nSobre o(s) troco(s) sem pagamento em Dinheiro correspondente: cartão de crédito/débito e PIX não geram troco — só pagamento em espécie pode. Quando isso aparece, geralmente é por um destes motivos:\n`;
+        texto += `  • Cobrança duplicada no cartão (o valor cobrado ficou maior que o da nota) sem o estorno correto ter sido feito — o sistema jogou a diferença como "troco" em vez de estornar.\n`;
+        texto += `  • Bug/erro de lançamento no PDV ao registrar a forma de pagamento.\n`;
+        texto += `Vale confirmar com o cliente se realmente houve cobrança a mais no cartão do consumidor final nesses casos — não deveria acontecer.`;
+      }
     }
 
     navigator.clipboard.writeText(texto.trim());
