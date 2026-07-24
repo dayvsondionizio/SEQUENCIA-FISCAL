@@ -3019,7 +3019,16 @@ export default function App() {
             } else {
               const innerArchiveName = baseName;
               const innerArchiveData = await entry.async('uint8array');
+              // Se esse arquivo aninhado não render nenhuma nota, avisa — sem
+              // isso, uma falha silenciosa (ex: nota de saída perdida) some
+              // sem deixar rastro, e o app só mostra o resultado incompleto
+              // (ex: parece que a análise é de "várias empresas" porque só
+              // sobrou entrada de fornecedores diferentes).
+              const antesCount = results.localTotalCount;
               await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
+              if (results.localTotalCount === antesCount) {
+                setExtractionErrors(prev => [...prev, `${currentPath}/${innerArchiveName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`]);
+              }
             }
           }
           return;
@@ -3052,7 +3061,11 @@ export default function App() {
             const baseName = name.split('/').pop() || name;
             
             if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
+              const antesCount = results.localTotalCount;
               await processArchiveRecursively(new Uint8Array(await fileData.arrayBuffer()), results, baseName, currentPath);
+              if (results.localTotalCount === antesCount) {
+                setExtractionErrors(prev => [...prev, `${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`]);
+              }
             } else {
               const xmlText = await fileData.text();
               if (xmlText.trimStart().startsWith('|0000|')) {
@@ -3115,7 +3128,11 @@ export default function App() {
                 // nested one — without this, deeply nested RARs can pile up
                 // enough live memory at once to crash the tab.
                 await new Promise(r => setTimeout(r, 0));
+                const antesCount = results.localTotalCount;
                 await processArchiveRecursively(file.extraction, results, baseName, currentPath);
+                if (results.localTotalCount === antesCount) {
+                  setExtractionErrors(prev => [...prev, `${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`]);
+                }
               } else {
                 const xmlText = new TextDecoder().decode(file.extraction);
                 if (xmlText.trimStart().startsWith('|0000|')) {
@@ -3210,7 +3227,11 @@ export default function App() {
             }
           } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
             const zipData = await file.arrayBuffer();
+            const antesCount = res.localTotalCount;
             await processArchiveRecursively(zipData, res, file.name);
+            if (res.localTotalCount === antesCount) {
+              setExtractionErrors(prev => [...prev, `${file.name} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`]);
+            }
           } else if (nameLower.endsWith('.txt')) {
             const text = await file.text();
             if (text.trimStart().startsWith('|0000|')) {
@@ -3340,7 +3361,10 @@ export default function App() {
             return `- CNPJ: ${cnpj}${cnpjNames[cnpj] ? ` (${cnpjNames[cnpj]})` : ''}`;
           });
 
-          alert(`⚠️ Erro de Importação: Múltiplas Empresas Detectadas!\n\nForam encontrados XMLs de outra empresa que não pertencem à empresa principal sob auditoria:\n${conflictList.join('\n')}\n\nPara evitar inconsistências, envie apenas arquivos de uma única empresa por vez.`);
+          const dicaAninhamento = extractionErrors.length > 0
+            ? `\n\n⚠ Foram detectadas falhas ao extrair arquivo(s) aninhado(s) durante essa importação (veja os detalhes acima) — é bem provável que as notas de SAÍDA da empresa principal estejam nesses arquivos que falharam, e por isso só sobrou entrada de fornecedores diferentes, parecendo "várias empresas". Tente extrair o ZIP/RAR manualmente no seu computador e reenviar as pastas/arquivos já descompactados.`
+            : `\n\nPara evitar inconsistências, envie apenas arquivos de uma única empresa por vez.`;
+          alert(`⚠️ Erro de Importação: Múltiplas Empresas Detectadas!\n\nForam encontrados XMLs de outra empresa que não pertencem à empresa principal sob auditoria:\n${conflictList.join('\n')}${dicaAninhamento}`);
 
           setIsProcessing(false);
           if (fileInputRef.current) fileInputRef.current.value = '';
