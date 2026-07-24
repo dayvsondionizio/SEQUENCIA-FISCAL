@@ -948,6 +948,7 @@ export default function App() {
   const [filterMes, setFilterMes] = useState('Todos');
   const [showDaysDetail, setShowDaysDetail] = useState(false);
   const [showCfopBreakdown, setShowCfopBreakdown] = useState(false);
+  const [showCfopPorModelo, setShowCfopPorModelo] = useState(false);
   const [showAnomalias, setShowAnomalias] = useState(false);
   const [showSemAutorizacao, setShowSemAutorizacao] = useState(false);
   const [showAuditoriaPagamento, setShowAuditoriaPagamento] = useState(false);
@@ -1241,6 +1242,53 @@ export default function App() {
         valor
       }))
       .sort((a, b) => a.cfop.localeCompare(b.cfop));
+  }, [xmlList, filterMes]);
+
+  // Mesmo critério do breakdownPorCfop, mas separando o valor de cada CFOP
+  // entre NF-e (mod 55) e NFC-e (mod 65) — só pro botão "detalhar por modelo",
+  // não muda em nada o card original quando não está expandido.
+  const breakdownPorCfopPorModelo = useMemo(() => {
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!mainCnpj) return {};
+
+    const chavesCanceladas = new Set<string>(
+      xmlList
+        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
+        .map(xml => xml.chave!)
+    );
+
+    const totalPorCfopModelo: Record<string, { nfe: number; nfce: number }> = {};
+    xmlList
+      .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0')
+      .forEach(xml => {
+        if (xml.chave && chavesCanceladas.has(xml.chave)) return;
+        if (!xml.protocolo) return;
+        if (filterMes !== 'Todos' && getMonthYear(xml.data) !== filterMes) return;
+        const valorNota = parseFloat(xml.valor || '0') || 0;
+        const itens: Record<string, number> = xml.cfopValores || {};
+        const totalItens = Object.values(itens).reduce((s, v) => s + v, 0);
+        const chave = xml.modelo === '65' ? 'nfce' : 'nfe';
+
+        const addValor = (cfop: string, valor: number) => {
+          if (!totalPorCfopModelo[cfop]) totalPorCfopModelo[cfop] = { nfe: 0, nfce: 0 };
+          totalPorCfopModelo[cfop][chave] += valor;
+        };
+
+        if (totalItens > 0) {
+          Object.entries(itens).forEach(([cfop, valorItem]) => {
+            addValor(cfop, valorNota * (valorItem / totalItens));
+          });
+        } else {
+          addValor(xml.natureza || 'Não identificado', valorNota);
+        }
+      });
+
+    return totalPorCfopModelo;
   }, [xmlList, filterMes]);
 
   // Detects two classes of anomalies in saída notes:
@@ -4918,23 +4966,45 @@ export default function App() {
 
               {showCfopBreakdown && breakdownPorCfop.length > 0 && (
                 <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm mb-6">
-                  <div className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">Totais por Natureza da Operação (CFOP)</div>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Totais por Natureza da Operação (CFOP)</div>
+                    <button
+                      onClick={() => setShowCfopPorModelo(v => !v)}
+                      className="flex items-center gap-1.5 text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
+                      title="Mostra o valor de cada CFOP separado por NF-e (mod 55) e NFC-e (mod 65)"
+                    >
+                      {showCfopPorModelo ? 'Ocultar por modelo' : 'Detalhar por NF-e/NFC-e'}
+                    </button>
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-left text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider border-b border-slate-200 dark:border-slate-700">
                           <th className="py-2 pr-4">CFOP</th>
                           <th className="py-2 pr-4">Natureza</th>
+                          {showCfopPorModelo && (
+                            <>
+                              <th className="py-2 pr-4 text-right whitespace-nowrap">NF-e (mod 55)</th>
+                              <th className="py-2 pr-4 text-right whitespace-nowrap">NFC-e (mod 65)</th>
+                            </>
+                          )}
                           <th className="py-2 pr-4 text-right whitespace-nowrap">Vlr Contábil</th>
                         </tr>
                       </thead>
                       <tbody>
                         {breakdownPorCfop.map(({ cfop, descricao, valor }) => {
                           const alerta = isAlertCfop(cfop);
+                          const porModelo = breakdownPorCfopPorModelo[cfop];
                           return (
                             <tr key={cfop} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
                               <td className={`py-2 pr-4 font-mono font-bold ${alerta ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'}`}>{cfop}</td>
                               <td className={`py-2 pr-4 ${alerta ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-slate-700 dark:text-slate-300'}`}>{descricao}</td>
+                              {showCfopPorModelo && (
+                                <>
+                                  <td className="py-2 pr-4 text-right text-slate-500 dark:text-slate-400">{formatarMoeda(porModelo?.nfe ?? 0)}</td>
+                                  <td className="py-2 pr-4 text-right text-slate-500 dark:text-slate-400">{formatarMoeda(porModelo?.nfce ?? 0)}</td>
+                                </>
+                              )}
                               <td className={`py-2 pr-4 text-right font-semibold ${alerta ? 'text-red-600 dark:text-red-400' : 'text-slate-900 dark:text-slate-100'}`}>{formatarMoeda(valor)}</td>
                             </tr>
                           );
@@ -4942,7 +5012,7 @@ export default function App() {
                       </tbody>
                       <tfoot>
                         <tr>
-                          <td colSpan={2} className="py-3 pr-4 font-black text-slate-900 dark:text-slate-100 uppercase text-xs tracking-wider">Total de Saídas</td>
+                          <td colSpan={showCfopPorModelo ? 4 : 2} className="py-3 pr-4 font-black text-slate-900 dark:text-slate-100 uppercase text-xs tracking-wider">Total de Saídas</td>
                           <td className="py-3 pr-4 text-right font-black text-emerald-600 dark:text-emerald-400">
                             {formatarMoeda(breakdownPorCfop.reduce((acc, item) => acc + item.valor, 0))}
                           </td>
