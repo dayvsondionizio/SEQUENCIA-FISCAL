@@ -950,6 +950,8 @@ export default function App() {
   const [showAnomalias, setShowAnomalias] = useState(false);
   const [showSemAutorizacao, setShowSemAutorizacao] = useState(false);
   const [showAuditoriaPagamento, setShowAuditoriaPagamento] = useState(false);
+  const [showAuditoriaRegime, setShowAuditoriaRegime] = useState(false);
+  const [auditoriaRegimeBusca, setAuditoriaRegimeBusca] = useState('');
   const [auditoriaPagamentoBusca, setAuditoriaPagamentoBusca] = useState('');
   const [showForaDoEscopoDetalhe, setShowForaDoEscopoDetalhe] = useState(false);
   const [showForaDoPrazo, setShowForaDoPrazo] = useState(false);
@@ -1390,6 +1392,100 @@ export default function App() {
     const label = isSimples ? 'Simples Nacional' : crt === '3' ? 'Regime Normal' : null;
     return { crt, label, isSimples };
   }, [xmlList]);
+
+  const crtLabel: Record<string, string> = { '1': 'Simples Nacional', '2': 'Simples Nacional (sublimite)', '3': 'Regime Normal' };
+
+  // Auditoria de Regime: levanta prova de qual regime tributário as próprias
+  // notas declaram (CRT) e se isso é consistente com o jeito que o ICMS é
+  // calculado item a item (CSOSN = padrão Simples, CST = padrão Normal) — um
+  // caso real mostrou uma empresa declarando Simples Nacional em 100% das
+  // notas (CRT=1 + CSOSN em tudo) o ano inteiro, mesmo nunca tendo sido
+  // optante de verdade (erro de cadastro no sistema de emissão do cliente).
+  // Isso o app NÃO detecta sozinho (precisaria consultar a Receita Federal),
+  // mas reúne a evidência pro analista confrontar com o cadastro oficial.
+  const auditoriaRegime = useMemo(() => {
+    const vazio = {
+      totalNotas: 0, crtCounts: [] as { crt: string; label: string; qtd: number; primeira: string; ultima: string }[],
+      crtPredominante: '', crtPredominanteLabel: '', consistente: true, mudouNoPeriodo: false,
+      inconsistencias: [] as { xml: XmlData; motivo: string }[], amostra: [] as XmlData[],
+    };
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!mainCnpj) return vazio;
+
+    const chavesCanceladas = new Set<string>(
+      xmlList
+        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
+        .map(xml => xml.chave!)
+    );
+
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    ).sort((a, b) => (a.data || '').localeCompare(b.data || ''));
+
+    if (saidas.length === 0) return vazio;
+
+    const porCrt: Record<string, { qtd: number; primeira: string; ultima: string }> = {};
+    const inconsistencias: { xml: XmlData; motivo: string }[] = [];
+    const amostraPorCrt = new Map<string, XmlData>();
+
+    saidas.forEach(xml => {
+      const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
+      const crt = doc.getElementsByTagName('emit')[0]?.getElementsByTagName('CRT')[0]?.textContent?.trim() || '';
+      if (!crt) return;
+
+      if (!porCrt[crt]) porCrt[crt] = { qtd: 0, primeira: xml.data || '', ultima: xml.data || '' };
+      porCrt[crt].qtd++;
+      if ((xml.data || '') < porCrt[crt].primeira) porCrt[crt].primeira = xml.data || '';
+      if ((xml.data || '') > porCrt[crt].ultima) porCrt[crt].ultima = xml.data || '';
+      if (!amostraPorCrt.has(crt)) amostraPorCrt.set(crt, xml);
+
+      // Confere se o jeito que o ICMS foi calculado bate com o CRT declarado:
+      // CRT 1/2 (Simples) deveria usar CSOSN em todo item; CRT 3 (Normal)
+      // deveria usar CST. Achar o outro é inconsistência técnica real.
+      const dets = Array.from(doc.getElementsByTagName('det'));
+      let temCsosn = false, temCst = false;
+      dets.forEach(det => {
+        const icmsGroup = det.getElementsByTagName('imposto')[0]?.getElementsByTagName('ICMS')[0];
+        const icmsNode = icmsGroup ? Array.from(icmsGroup.childNodes).find(c => c.nodeType === 1) as Element | undefined : undefined;
+        if (icmsNode?.getElementsByTagName('CSOSN')[0]) temCsosn = true;
+        if (icmsNode?.getElementsByTagName('CST')[0]) temCst = true;
+      });
+      const isSimplesCrt = crt === '1' || crt === '2';
+      if (isSimplesCrt && temCst && !temCsosn) {
+        inconsistencias.push({ xml, motivo: `CRT=${crt} (${crtLabel[crt] || crt}) mas os itens usam CST (padrão Regime Normal) em vez de CSOSN` });
+      } else if (crt === '3' && temCsosn && !temCst) {
+        inconsistencias.push({ xml, motivo: `CRT=3 (Regime Normal) mas os itens usam CSOSN (padrão Simples Nacional) em vez de CST` });
+      }
+    });
+
+    const crtCounts = Object.entries(porCrt)
+      .map(([crt, v]) => ({
+        crt, label: crtLabel[crt] || crt, qtd: v.qtd,
+        primeira: v.primeira ? new Date(v.primeira).toLocaleDateString('pt-BR') : '',
+        ultima: v.ultima ? new Date(v.ultima).toLocaleDateString('pt-BR') : '',
+      }))
+      .sort((a, b) => b.qtd - a.qtd);
+
+    const crtPredominante = crtCounts[0]?.crt || '';
+
+    return {
+      totalNotas: saidas.length,
+      crtCounts,
+      crtPredominante,
+      crtPredominanteLabel: crtLabel[crtPredominante] || crtPredominante,
+      consistente: inconsistencias.length === 0,
+      mudouNoPeriodo: crtCounts.length > 1,
+      inconsistencias,
+      amostra: Array.from(amostraPorCrt.values()),
+    };
+  }, [xmlList, filterMes]);
 
   // Responsável Técnico (<infRespTec>): identifica quem desenvolve/mantém o
   // sistema de automação do cliente — mais confiável que <verProc> (que em
@@ -3976,6 +4072,179 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Auditoria de Regime Modal */}
+      <AnimatePresence>
+        {showAuditoriaRegime && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] backdrop-blur-sm flex items-center justify-center p-6"
+            style={{background: 'rgba(10,14,35,0.6)'}}
+            onClick={() => setShowAuditoriaRegime(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              onClick={e => e.stopPropagation()}
+              className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-6"
+            >
+              <div className="flex items-start justify-between mb-1">
+                <h3 className="text-base font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                  <Search className="w-4 h-4 text-blue-500" />
+                  Auditoria de Regime — Evidências
+                </h3>
+                <button onClick={() => setShowAuditoriaRegime(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+                O badge de Regime vem só do que a própria nota autodeclara (campo CRT) — não é uma consulta independente à Receita Federal. Use essas evidências pra confrontar com o cadastro oficial do cliente.
+              </p>
+
+              {auditoriaRegime.totalNotas === 0 ? (
+                <div className="text-sm text-slate-500 dark:text-slate-400">Sem notas de saída válidas nesse período pra auditar o regime.</div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Regime predominante</div>
+                      <div className="text-sm font-bold text-slate-800 dark:text-slate-100 mt-0.5">{auditoriaRegime.crtPredominanteLabel} (CRT={auditoriaRegime.crtPredominante})</div>
+                    </div>
+                    <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Notas analisadas</div>
+                      <div className="text-sm font-bold text-slate-800 dark:text-slate-100 mt-0.5">{auditoriaRegime.totalNotas}</div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Declaração por CRT ao longo do período</div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                            <th className="py-1.5 pr-3">CRT</th>
+                            <th className="py-1.5 pr-3">Regime declarado</th>
+                            <th className="py-1.5 pr-3 text-right">Notas</th>
+                            <th className="py-1.5 pr-3">De</th>
+                            <th className="py-1.5">Até</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {auditoriaRegime.crtCounts.map(c => (
+                            <tr key={c.crt} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                              <td className="py-1.5 pr-3 font-mono font-bold text-slate-700 dark:text-slate-300">{c.crt}</td>
+                              <td className="py-1.5 pr-3 text-slate-700 dark:text-slate-300">{c.label}</td>
+                              <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300">{c.qtd}</td>
+                              <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{c.primeira}</td>
+                              <td className="py-1.5 text-slate-600 dark:text-slate-400">{c.ultima}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {auditoriaRegime.mudouNoPeriodo ? (
+                      <div className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+                        ⚠ O CRT declarado mudou dentro desse período — pode ser uma transição de regime de verdade ou uma correção no sistema de emissão. Confira as datas de corte acima contra o cadastro oficial do cliente.
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+                        ✓ {auditoriaRegime.crtCounts[0]?.qtd} de {auditoriaRegime.totalNotas} nota(s) (100%) declaram o mesmo CRT de forma consistente nesse período — não é uma nota isolada, é sistemático.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={cn(
+                    "rounded-xl px-3 py-2.5 text-[11px]",
+                    auditoriaRegime.consistente
+                      ? "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
+                      : "bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800"
+                  )}>
+                    {auditoriaRegime.consistente
+                      ? '✓ O cálculo de ICMS item a item (CSOSN vs CST) é consistente com o CRT declarado em todas as notas — não há inconsistência técnica interna.'
+                      : `⚠ ${auditoriaRegime.inconsistencias.length} nota(s) têm o cálculo de ICMS (CSOSN/CST) divergente do CRT declarado — veja a amostra abaixo.`}
+                  </div>
+
+                  {auditoriaRegime.inconsistencias.length > 0 && (
+                    <div>
+                      <div className="text-xs font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wider mb-2">Notas com CRT x CSOSN/CST divergente</div>
+                      <div className="overflow-x-auto max-h-40 overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <tbody>
+                            {auditoriaRegime.inconsistencias.slice(0, 20).map((inc, i) => (
+                              <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300 whitespace-nowrap">Série {inc.xml.serie}, Nº {inc.xml.numero}</td>
+                                <td className="py-1.5 text-rose-600 dark:text-rose-400">{inc.motivo}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Amostra pra levantar prova — baixe o XML de uma nota de cada CRT encontrado</div>
+                    <input
+                      type="text"
+                      value={auditoriaRegimeBusca}
+                      onChange={e => setAuditoriaRegimeBusca(e.target.value)}
+                      placeholder="Buscar por número ou série..."
+                      className="w-full max-w-xs mb-2 px-3 py-1.5 text-xs border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    />
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                            <th className="py-1.5 pr-3">Série</th>
+                            <th className="py-1.5 pr-3">Nº</th>
+                            <th className="py-1.5 pr-3">Data</th>
+                            <th className="py-1.5 pr-3">Valor</th>
+                            <th className="py-1.5">Baixar</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {auditoriaRegime.amostra
+                            .filter(n => {
+                              const q = auditoriaRegimeBusca.trim().toLowerCase();
+                              if (!q) return true;
+                              return (n.numero || '').toLowerCase().includes(q) || (n.serie || '').toLowerCase().includes(q);
+                            })
+                            .map((n, i) => (
+                              <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.serie}</td>
+                                <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero}</td>
+                                <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                <td className="py-1.5 pr-3 font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(parseFloat(n.valor || '0') || 0)}</td>
+                                <td className="py-1.5">
+                                  <button
+                                    onClick={() => baixarXmlEvidencia(n)}
+                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    XML
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {responsavelTecnico.email && (
+                    <div className="pt-3 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-400 dark:text-slate-500">
+                      Responsável técnico do sistema (XML): {responsavelTecnico.contato && <>{responsavelTecnico.contato} · </>}{responsavelTecnico.email}{responsavelTecnico.foneFormatado && <> · {responsavelTecnico.foneFormatado}</>}{responsavelTecnico.cnpjFormatado && <> · CNPJ {responsavelTecnico.cnpjFormatado}</>}
+                    </div>
+                  )}
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <header className="text-white shadow-2xl" style={{background: '#020D2F'}}>
         <div className="max-w-[1650px] mx-auto px-6 py-8 print:px-4 print:py-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
@@ -4055,14 +4324,24 @@ export default function App() {
                   {regimeTributario.label && (
                     <>
                       <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Regime:</span>
-                      <span
-                        className="inline-flex items-center w-fit px-2.5 py-0.5 rounded-full text-xs font-bold"
-                        style={regimeTributario.isSimples
-                          ? {background: 'rgba(240,180,41,0.15)', color: '#F0B429', border: '1px solid rgba(240,180,41,0.35)'}
-                          : {background: 'rgba(148,163,184,0.15)', color: '#CBD5E1', border: '1px solid rgba(148,163,184,0.3)'}}
-                      >
-                        {regimeTributario.label}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="inline-flex items-center w-fit px-2.5 py-0.5 rounded-full text-xs font-bold"
+                          style={regimeTributario.isSimples
+                            ? {background: 'rgba(240,180,41,0.15)', color: '#F0B429', border: '1px solid rgba(240,180,41,0.35)'}
+                            : {background: 'rgba(148,163,184,0.15)', color: '#CBD5E1', border: '1px solid rgba(148,163,184,0.3)'}}
+                        >
+                          {regimeTributario.label}
+                        </span>
+                        <button
+                          onClick={() => setShowAuditoriaRegime(true)}
+                          className="shrink-0 transition-colors no-print"
+                          style={{color: 'rgba(255,255,255,0.3)'}}
+                          title="Auditoria de Regime — ver evidências (CRT, consistência CSOSN/CST, amostra de nota)"
+                        >
+                          <Search className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </>
                   )}
 
