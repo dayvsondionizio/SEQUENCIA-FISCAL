@@ -881,6 +881,9 @@ export default function App() {
     const pctNaoIntegrado = auditoriaPagamento.totalCartao > 0
       ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
       : 0;
+    const pctFalsoTef = auditoriaPagamento.totalCartao > 0
+      ? Math.round((auditoriaPagamento.totalFalsoTef / auditoriaPagamento.totalCartao) * 100)
+      : 0;
 
     let texto = `RESUMO — AUDITORIA DE PAGAMENTO (TEF)\n`;
     texto += `Empresa: ${empresa}\n`;
@@ -890,8 +893,11 @@ export default function App() {
     texto += `Período: ${periodo}\n\n`;
 
     texto += `Vendas em cartão sujeitas a TEF: ${auditoriaPagamento.totalCartao}\n`;
-    texto += `  • Integradas (TEF): ${auditoriaPagamento.totalIntegrado} (${pctIntegrado}%)\n`;
+    texto += `  • Integradas (TEF de verdade, com autorização): ${auditoriaPagamento.totalIntegrado} (${pctIntegrado}%)\n`;
     texto += `  • POS manual (sem TEF): ${auditoriaPagamento.totalNaoIntegrado} (${pctNaoIntegrado}%)\n`;
+    if (auditoriaPagamento.totalFalsoTef > 0) {
+      texto += `  • ⚠ Falso TEF (declara integração mas sem autorização): ${auditoriaPagamento.totalFalsoTef} (${pctFalsoTef}%)\n`;
+    }
     if (auditoriaPagamento.totalCartaoNaoAplicavel > 0) {
       texto += `  • Fora do escopo de TEF (não presencial/interestadual): ${auditoriaPagamento.totalCartaoNaoAplicavel}\n`;
     }
@@ -1624,7 +1630,7 @@ export default function App() {
     });
     const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     const vazio = {
-      problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalCartaoNaoAplicavel: 0,
+      problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalFalsoTef: 0, totalCartaoNaoAplicavel: 0,
       notasNaoIntegradas: [] as XmlData[], breakdownPorTipoPagamento: [] as { tPag: string; tPagNome: string; qtd: number; valor: number }[],
       notasComPagamentoDividido: 0, saidaNaoVendaQtd: 0, saidaNaoVendaValor: 0,
       cartaoIndPagSuspeito: 0, foraEscopoNaoPresencial: 0, foraEscopoInterestadual: 0,
@@ -1677,7 +1683,7 @@ export default function App() {
       xml: XmlData; tPag: string; tPagNome: string; tpIntegra: string;
       cardCnpj: string; cardTBand: string; cardCAut: string; motivo: string;
     }[] = [];
-    let totalCartao = 0, totalIntegrado = 0, totalNaoIntegrado = 0, totalCartaoNaoAplicavel = 0;
+    let totalCartao = 0, totalIntegrado = 0, totalNaoIntegrado = 0, totalFalsoTef = 0, totalCartaoNaoAplicavel = 0;
     // Quantidade e faturamento por forma de pagamento (tPag) — dá visão geral
     // mesmo quando não há nenhuma venda em cartão pra auditar.
     const porTipo: Record<string, { qtd: number; valor: number }> = {};
@@ -1783,8 +1789,16 @@ export default function App() {
             }
           } else {
             totalCartao++;
-            if (tpIntegra === '1') totalIntegrado++;
-            else if (tpIntegra === '2') {
+            // tpIntegra=1 só conta como integração de verdade se veio com o
+            // código de autorização (cAut) que o TEF real sempre devolve —
+            // sem isso é "Falso TEF": a nota AFIRMA integração que os dados
+            // não confirmam, e por isso não entra nem em integrado nem em
+            // POS manual, fica numa contagem própria (mais grave que os dois).
+            if (tpIntegra === '1' && !cardCAut) {
+              totalFalsoTef++;
+            } else if (tpIntegra === '1') {
+              totalIntegrado++;
+            } else if (tpIntegra === '2') {
               totalNaoIntegrado++;
               const chaveOuId = xml.chave || `${xml.serie}-${xml.numero}`;
               if (!chavesNaoIntegradasVistas.has(chaveOuId)) {
@@ -1831,7 +1845,7 @@ export default function App() {
       .sort((a, b) => b.valor - a.valor);
 
     return {
-      problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalCartaoNaoAplicavel, notasNaoIntegradas,
+      problemas, totalCartao, totalIntegrado, totalNaoIntegrado, totalFalsoTef, totalCartaoNaoAplicavel, notasNaoIntegradas,
       breakdownPorTipoPagamento, notasComPagamentoDividido, saidaNaoVendaQtd, saidaNaoVendaValor,
       cartaoIndPagSuspeito, foraEscopoNaoPresencial, foraEscopoInterestadual,
       notasForaDoEscopo, totalNotasVendaLiquida: saidas.length
@@ -4889,6 +4903,11 @@ export default function App() {
                         integrado ao TEF — {auditoriaPagamento.totalNaoIntegrado} POS manual de {auditoriaPagamento.totalCartao} sujeita(s)
                         {temProblemasTecnicos && <span className="text-rose-500 dark:text-rose-400"> · {auditoriaPagamento.problemas.length} problema(s)</span>}
                       </div>
+                      {auditoriaPagamento.totalFalsoTef > 0 && (
+                        <div className="text-xs font-bold text-rose-600 dark:text-rose-400 mt-1">
+                          ⚠ {auditoriaPagamento.totalFalsoTef} Falso TEF
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -5959,6 +5978,9 @@ export default function App() {
                 const pctIntegrado = auditoriaPagamento.totalCartao > 0
                   ? Math.round((auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100)
                   : 0;
+                const pctFalsoTef = auditoriaPagamento.totalCartao > 0
+                  ? Math.round((auditoriaPagamento.totalFalsoTef / auditoriaPagamento.totalCartao) * 100)
+                  : 0;
                 const temProblemasTecnicos = auditoriaPagamento.problemas.length > 0;
                 // Regime Normal tem obrigatoriedade de TEF — qualquer POS manual vira alerta real.
                 // Simples Nacional não tem essa obrigatoriedade, então fica só informativo.
@@ -5980,19 +6002,30 @@ export default function App() {
                             {riscoObrigatoriedade && (
                               <div className="text-sm font-bold text-rose-600 dark:text-rose-400">⚠ obrigatoriedade de TEF ({regimeTributario.label})</div>
                             )}
+                            {auditoriaPagamento.totalFalsoTef > 0 && (
+                              <div className="text-sm font-bold text-rose-600 dark:text-rose-400">⚠ {auditoriaPagamento.totalFalsoTef} Falso TEF</div>
+                            )}
                           </div>
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-xs">
                             <span className="text-slate-500 dark:text-slate-400" title="Vendas em cartão à vista, presenciais e dentro do mesmo estado — únicas sujeitas a TEF">
                               <strong className="text-slate-700 dark:text-slate-200">{auditoriaPagamento.totalCartao}</strong> sujeita(s) a TEF
                             </span>
                             <span className="text-slate-300 dark:text-slate-600">·</span>
-                            <span className={auditoriaPagamento.totalIntegrado > 0 ? "text-emerald-600 dark:text-emerald-400 font-semibold" : "text-slate-400 dark:text-slate-500"} title="tpIntegra=1 — pagamento integrado ao sistema (TEF/POS integrado)">
+                            <span className={auditoriaPagamento.totalIntegrado > 0 ? "text-emerald-600 dark:text-emerald-400 font-semibold" : "text-slate-400 dark:text-slate-500"} title="tpIntegra=1 com código de autorização — pagamento realmente integrado ao sistema (TEF de verdade)">
                               {auditoriaPagamento.totalIntegrado} integrada(s){auditoriaPagamento.totalCartao > 0 && ` (${pctIntegrado}%)`}{auditoriaPagamento.totalIntegrado > 0 && ' ✓'}
                             </span>
                             <span className="text-slate-300 dark:text-slate-600">·</span>
                             <span className={auditoriaPagamento.totalNaoIntegrado > 0 ? "text-amber-600 dark:text-amber-400 font-semibold" : "text-slate-400 dark:text-slate-500"} title="tpIntegra=2 — pagamento não integrado, digitado manualmente no POS">
                               {auditoriaPagamento.totalNaoIntegrado} POS manual{auditoriaPagamento.totalCartao > 0 && ` (${pctNaoIntegrado}%)`}{auditoriaPagamento.totalNaoIntegrado > 0 && ' ⚠'}
                             </span>
+                            {auditoriaPagamento.totalFalsoTef > 0 && (
+                              <>
+                                <span className="text-slate-300 dark:text-slate-600">·</span>
+                                <span className="text-rose-600 dark:text-rose-400 font-semibold" title="tpIntegra=1 SEM código de autorização — a nota declara integração que os dados não confirmam">
+                                  {auditoriaPagamento.totalFalsoTef} Falso TEF ({pctFalsoTef}%) ⚠
+                                </span>
+                              </>
+                            )}
                             {auditoriaPagamento.totalCartaoNaoAplicavel > 0 && (
                               <>
                                 <span className="text-slate-300 dark:text-slate-600">·</span>
@@ -6139,18 +6172,23 @@ export default function App() {
                         ) : (
                           <div className={cn(
                             "rounded-lg px-4 py-3 text-xs",
-                            riscoObrigatoriedade ? "bg-rose-50 dark:bg-rose-950 text-rose-800 dark:text-rose-200 border border-rose-200 dark:border-rose-800"
+                            riscoObrigatoriedade || auditoriaPagamento.totalFalsoTef > 0 ? "bg-rose-50 dark:bg-rose-950 text-rose-800 dark:text-rose-200 border border-rose-200 dark:border-rose-800"
                               : pctNaoIntegrado >= 50 ? "bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800"
                               : pctNaoIntegrado === 0 ? "bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800"
                               : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
                           )}>
-                            {pctNaoIntegrado === 0 ? (
+                            {pctNaoIntegrado === 0 && auditoriaPagamento.totalFalsoTef === 0 ? (
                               <span className="font-bold">✓ 100% das vendas em cartão sujeitas a TEF passaram pelo TEF integrado</span>
                             ) : pctNaoIntegrado === 100 ? (
                               <span className="font-bold">⚠ Nenhuma das vendas em cartão sujeitas a TEF passou pelo TEF integrado — todas foram digitadas manualmente no POS (tpIntegra=2)</span>
-                            ) : (
+                            ) : pctNaoIntegrado > 0 ? (
                               <><span className="font-bold">{pctNaoIntegrado}% ({auditoriaPagamento.totalNaoIntegrado} de {auditoriaPagamento.totalCartao})</span> das vendas em cartão sujeitas a TEF foram digitadas manualmente no POS, sem passar pelo TEF integrado (tpIntegra=2)</>
+                            ) : (
+                              <><span className="font-bold">{pctIntegrado}% ({auditoriaPagamento.totalIntegrado} de {auditoriaPagamento.totalCartao})</span> das vendas em cartão sujeitas a TEF passaram pelo TEF integrado de verdade (com código de autorização)</>
                             )}.
+                            {auditoriaPagamento.totalFalsoTef > 0 && (
+                              <span> <strong>⚠ Alerta grave: {auditoriaPagamento.totalFalsoTef} venda(s) ({pctFalsoTef}%) dizem ter TEF integrado (tpIntegra=1) mas vieram SEM código de autorização</strong> — uma integração de verdade sempre traz esse código junto. Ou o PDV está configurado errado, ou o sistema está declarando integração que não existiu. Isso é mais grave que POS manual comum: é uma declaração que os próprios dados da nota contradizem. Cobre explicação do suporte do sistema do cliente.</span>
+                            )}
                             {riscoObrigatoriedade && (
                               <span> <strong>Alerta: empresa é {regimeTributario.label} — tem obrigatoriedade de TEF.</strong> Esse é o padrão que costuma gerar autuação por falta de integração TEF. Confirme com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
                             )}
@@ -7243,12 +7281,14 @@ export default function App() {
               {(auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0) && (() => {
                 const pctIntegradoPrint = auditoriaPagamento.totalCartao > 0 ? Math.round((auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100) : 0;
                 const pctNaoIntegradoPrint = auditoriaPagamento.totalCartao > 0 ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100) : 0;
+                const pctFalsoTefPrint = auditoriaPagamento.totalCartao > 0 ? Math.round((auditoriaPagamento.totalFalsoTef / auditoriaPagamento.totalCartao) * 100) : 0;
                 const riscoObrigatoriedadePrint = !regimeTributario.isSimples && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
                 return (
                   <div className="print-section">
                     <h3 className="font-serif text-lg font-semibold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de Pagamento (TEF)</h3>
                     <div className="text-sm mb-3">
-                      {auditoriaPagamento.totalCartao} venda(s) em cartão sujeita(s) a TEF: <strong>{auditoriaPagamento.totalIntegrado} integrada(s) ({pctIntegradoPrint}%)</strong>, {auditoriaPagamento.totalNaoIntegrado} via POS manual ({pctNaoIntegradoPrint}%){auditoriaPagamento.totalCartaoNaoAplicavel > 0 && <>, {auditoriaPagamento.totalCartaoNaoAplicavel} fora do escopo de TEF</>}.
+                      {auditoriaPagamento.totalCartao} venda(s) em cartão sujeita(s) a TEF: <strong>{auditoriaPagamento.totalIntegrado} integrada(s) de verdade ({pctIntegradoPrint}%)</strong>, {auditoriaPagamento.totalNaoIntegrado} via POS manual ({pctNaoIntegradoPrint}%){auditoriaPagamento.totalFalsoTef > 0 && <>, {auditoriaPagamento.totalFalsoTef} em Falso TEF ({pctFalsoTefPrint}%)</>}{auditoriaPagamento.totalCartaoNaoAplicavel > 0 && <>, {auditoriaPagamento.totalCartaoNaoAplicavel} fora do escopo de TEF</>}.
+                      {auditoriaPagamento.totalFalsoTef > 0 && <> <strong className="text-red-700">Alerta grave: {auditoriaPagamento.totalFalsoTef} venda(s) dizem ter TEF integrado (tpIntegra=1) mas vieram sem código de autorização — uma integração de verdade sempre traz esse código. É uma declaração que os próprios dados da nota contradizem, mais grave que POS manual comum.</strong></>}
                       {riscoObrigatoriedadePrint && <> <strong className="text-red-700">Alerta: empresa é {regimeTributario.label} — tem obrigatoriedade de TEF, e esse padrão costuma gerar autuação por falta de integração.</strong></>}
                       {!riscoObrigatoriedadePrint && regimeTributario.isSimples && auditoriaPagamento.totalNaoIntegrado > 0 && <> Empresa é Simples Nacional, que não tem obrigatoriedade de TEF.</>}
                     </div>
@@ -7298,6 +7338,8 @@ export default function App() {
                   <tbody>
                     <tr><td className="font-bold" style={{width: '160px'}}>TEF</td><td>Transferência Eletrônica de Fundos — integração automática entre a maquininha de cartão e o sistema/PDV, sem digitação manual.</td></tr>
                     <tr><td className="font-bold">tpIntegra</td><td>Campo do XML que indica se o pagamento em cartão foi integrado (1) ou digitado manualmente no PDV, ou seja, "POS manual" (2).</td></tr>
+                    <tr><td className="font-bold">cAut</td><td>Código de autorização que a operadora do cartão devolve confirmando a transação. Uma integração TEF de verdade sempre traz esse código.</td></tr>
+                    <tr><td className="font-bold">Falso TEF</td><td>Pagamento com tpIntegra=1 (afirma ser integrado) mas sem código de autorização (cAut) — contradição que os próprios dados da nota revelam, indicando PDV mal configurado ou declaração de integração que não ocorreu de fato.</td></tr>
                     <tr><td className="font-bold">CRT</td><td>Código de Regime Tributário declarado pelo emitente: 1 e 2 = Simples Nacional; 3 = Regime Normal (Lucro Presumido ou Real).</td></tr>
                     <tr><td className="font-bold">CSOSN</td><td>Código de Situação da Operação — Simples Nacional. Código de ICMS usado por item quando o emitente é optante pelo Simples (CRT 1 ou 2).</td></tr>
                     <tr><td className="font-bold">CST</td><td>Código de Situação Tributária do ICMS. Usado por item quando o emitente é do Regime Normal (CRT 3).</td></tr>
