@@ -1531,17 +1531,31 @@ export default function App() {
     let notasComGrupo = 0;
     const amostraSemGrupo: XmlData[] = [];
     const amostraComGrupo: XmlData[] = [];
+    // No máximo 1 nota por dia em cada amostra (não as N primeiras da lista) —
+    // assim a amostra cobre o período inteiro e ajuda a enxergar em que dia
+    // o sistema do cliente começou (ou parou) de preencher o grupo IBS/CBS.
+    const diasVistosSemGrupo = new Set<string>();
+    const diasVistosComGrupo = new Set<string>();
 
-    saidas.forEach(xml => {
+    const saidasOrdenadas = [...saidas].sort((a, b) => (a.data || '').localeCompare(b.data || ''));
+
+    saidasOrdenadas.forEach(xml => {
       const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
       const temGrupo = Array.from(doc.getElementsByTagName('det')).some(det =>
         !!det.getElementsByTagName('imposto')[0]?.getElementsByTagName('IBSCBS')[0]
       );
+      const dia = xml.data ? xml.data.slice(0, 10) : '';
       if (temGrupo) {
         notasComGrupo++;
-        if (amostraComGrupo.length < 50) amostraComGrupo.push(xml);
+        if (amostraComGrupo.length < 50 && !diasVistosComGrupo.has(dia)) {
+          diasVistosComGrupo.add(dia);
+          amostraComGrupo.push(xml);
+        }
       } else {
-        if (amostraSemGrupo.length < 50) amostraSemGrupo.push(xml);
+        if (amostraSemGrupo.length < 50 && !diasVistosSemGrupo.has(dia)) {
+          diasVistosSemGrupo.add(dia);
+          amostraSemGrupo.push(xml);
+        }
       }
     });
 
