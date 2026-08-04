@@ -33,7 +33,12 @@ import {
   XCircle,
   Sun,
   Moon,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Receipt,
+  CreditCard,
+  Ban,
+  Clock,
+  AlertTriangle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -5428,7 +5433,7 @@ export default function App() {
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-amber-400 rounded-2xl p-6 mb-6 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <span className="text-amber-500 text-xl">⚠️</span>
+                      <AlertTriangle className="w-5 h-5 text-amber-500" />
                       <div>
                         <div className="flex items-baseline gap-3">
                           <div className="text-sm font-bold text-amber-700 tracking-wide">Contingência Não Regularizada</div>
@@ -5533,7 +5538,7 @@ export default function App() {
                 <div className="bg-white dark:bg-slate-900 border-l-4 border-l-slate-400 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 mb-6 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <span className="text-slate-400 text-xl">🚫</span>
+                      <Ban className="w-5 h-5 text-slate-400 dark:text-slate-500" />
                       <div>
                         <div className="flex items-baseline gap-3">
                           <div className="text-sm font-bold text-slate-600 dark:text-slate-300 tracking-wide">Sem Autorização</div>
@@ -5613,7 +5618,7 @@ export default function App() {
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-orange-400 rounded-2xl p-6 mb-6 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <span className="text-orange-400 text-xl">🕐</span>
+                      <Clock className="w-5 h-5 text-orange-400" />
                       <div>
                         <div className="flex items-baseline gap-3">
                           <div className="text-sm font-bold text-orange-700 tracking-wide">Contingência Regularizada Fora do Prazo</div>
@@ -5690,7 +5695,7 @@ export default function App() {
                   <div className={cn("bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 rounded-2xl p-6 mb-6 shadow-sm", corBordaIbsCbs)}>
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
-                        <span className="text-blue-500 text-xl">🧾</span>
+                        <Receipt className="w-5 h-5 text-blue-500" />
                         <div>
                           <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Auditoria de IBS/CBS (Reforma Tributária)</div>
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -5820,7 +5825,7 @@ export default function App() {
                   <div className={cn("bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 rounded-2xl p-6 mb-6 shadow-sm", corBorda)}>
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
-                        <span className="text-blue-500 text-xl">💳</span>
+                        <CreditCard className="w-5 h-5 text-blue-500" />
                         <div>
                           <div className="flex items-baseline gap-3">
                             <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Auditoria de Pagamento (TEF)</div>
@@ -6379,7 +6384,7 @@ export default function App() {
                 <div className="relative shrink-0">
                   <button
                     onClick={() => setShowExportXmlMenu(v => !v)}
-                    className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer whitespace-nowrap"
+                    className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
                   >
                     <Download className="w-3.5 h-3.5" />
                     Exportar XMLs ({filterMes === 'Todos' ? 'Todos' : filterMes})
@@ -6391,9 +6396,9 @@ export default function App() {
                         <button
                           key={n}
                           onClick={() => { setExportPartes(n); setShowExportXmlMenu(false); exportFilteredXmls(n); }}
-                          className="w-full text-left px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 transition-colors flex items-center gap-2"
+                          className="w-full text-left px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors flex items-center gap-2"
                         >
-                          <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-black flex items-center justify-center">{n}</span>
+                          <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 text-xs font-black flex items-center justify-center">{n}</span>
                           {n === 1 ? '1 arquivo (padrão)' : `${n} arquivos`}
                         </button>
                       ))}
@@ -6403,7 +6408,7 @@ export default function App() {
                 <div className="relative shrink-0">
                   <button
                     onClick={() => setShowExportOptions(!showExportOptions)}
-                    className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer whitespace-nowrap"
+                    className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
                   >
                     <FileText className="w-3.5 h-3.5" />
                     Planilha Detalhada
@@ -6449,7 +6454,7 @@ export default function App() {
                 <button
                   onClick={() => auditoriaInputRef.current?.click()}
                   disabled={auditoriaLoading}
-                  className="flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer disabled:opacity-60 shrink-0 whitespace-nowrap"
+                  className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer disabled:opacity-60 shrink-0 whitespace-nowrap"
                 >
                   {auditoriaLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <GitCompare className="w-3.5 h-3.5" />}
                   {auditoriaLoading ? 'Comparando...' : 'Auditoria de XML'}
@@ -6834,7 +6839,10 @@ export default function App() {
                   return (
                     <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
                       <div className="flex items-center justify-between">
-                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">🧾 IBS/CBS</div>
+                        <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
+                          <Receipt className="w-3.5 h-3.5" />
+                          IBS/CBS
+                        </div>
                         <button
                           onClick={() => setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs)}
                           title="Ver auditoria de IBS/CBS (Reforma Tributária)"
@@ -6866,7 +6874,10 @@ export default function App() {
                   return (
                     <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
                       <div className="flex items-center justify-between">
-                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">💳 TEF</div>
+                        <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
+                          <CreditCard className="w-3.5 h-3.5" />
+                          TEF
+                        </div>
                         <button
                           onClick={() => setShowAuditoriaPagamento(!showAuditoriaPagamento)}
                           title="Ver auditoria de pagamento (TEF)"
