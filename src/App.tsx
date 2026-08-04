@@ -895,6 +895,15 @@ export default function App() {
     texto += `Vendas em cartão sujeitas a TEF: ${auditoriaPagamento.totalCartao}\n`;
     texto += `  • Integradas (TEF de verdade, com autorização): ${auditoriaPagamento.totalIntegrado} (${pctIntegrado}%)\n`;
     texto += `  • POS manual (sem TEF): ${auditoriaPagamento.totalNaoIntegrado} (${pctNaoIntegrado}%)\n`;
+    if (auditoriaPagamento.notasNaoIntegradas.length > 0) {
+      const porFormaPosManual: Record<string, number> = {};
+      auditoriaPagamento.notasNaoIntegradas.forEach(n => {
+        porFormaPosManual[n.tPagNome] = (porFormaPosManual[n.tPagNome] || 0) + 1;
+      });
+      Object.entries(porFormaPosManual).forEach(([forma, qtd]) => {
+        texto += `      - ${forma}: ${qtd} venda${qtd !== 1 ? 's' : ''} sem TEF\n`;
+      });
+    }
     if (auditoriaPagamento.totalFalsoTef > 0) {
       texto += `  • ⚠ Falso TEF (declara integração mas sem autorização): ${auditoriaPagamento.totalFalsoTef} (${pctFalsoTef}%)\n`;
     }
@@ -1631,7 +1640,7 @@ export default function App() {
     const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     const vazio = {
       problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalFalsoTef: 0, totalCartaoNaoAplicavel: 0,
-      notasNaoIntegradas: [] as XmlData[], breakdownPorTipoPagamento: [] as { tPag: string; tPagNome: string; qtd: number; valor: number }[],
+      notasNaoIntegradas: [] as { xml: XmlData; tPagNome: string }[], breakdownPorTipoPagamento: [] as { tPag: string; tPagNome: string; qtd: number; valor: number }[],
       notasComPagamentoDividido: 0, saidaNaoVendaQtd: 0, saidaNaoVendaValor: 0,
       cartaoIndPagSuspeito: 0, foraEscopoNaoPresencial: 0, foraEscopoInterestadual: 0,
       notasForaDoEscopo: [] as { xml: XmlData; motivo: string }[], totalNotasVendaLiquida: 0
@@ -1691,7 +1700,10 @@ export default function App() {
     // Notas com ao menos um pagamento em cartão via POS manual (dentro do escopo
     // de obrigatoriedade) — servem de amostra pesquisável pra baixar o XML como
     // prova rápida pro cliente.
-    const notasNaoIntegradas: XmlData[] = [];
+    const notasNaoIntegradas: { xml: XmlData; tPagNome: string }[] = [];
+    // Chave inclui a forma de pagamento — assim uma nota com pagamento dividido
+    // em mais de um POS manual (ex: débito e crédito ambos manuais) aparece uma
+    // vez por forma, em vez de esconder qual delas realmente ficou de fora.
     const chavesNaoIntegradasVistas = new Set<string>();
     // Nota com pagamento dividido (2+ detPag) conta uma vez em cada tipo que
     // usou — por isso a soma das "qtd" do breakdown pode passar do total de
@@ -1805,10 +1817,10 @@ export default function App() {
               totalIntegrado++;
             } else if (tpIntegra === '2') {
               totalNaoIntegrado++;
-              const chaveOuId = xml.chave || `${xml.serie}-${xml.numero}`;
+              const chaveOuId = `${xml.chave || `${xml.serie}-${xml.numero}`}|${tPag}`;
               if (!chavesNaoIntegradasVistas.has(chaveOuId)) {
                 chavesNaoIntegradasVistas.add(chaveOuId);
-                notasNaoIntegradas.push(xml);
+                notasNaoIntegradas.push({ xml, tPagNome });
               }
             }
           }
@@ -6230,6 +6242,7 @@ export default function App() {
                                     <th className="py-1.5 pr-3">Série</th>
                                     <th className="py-1.5 pr-3">Nº</th>
                                     <th className="py-1.5 pr-3">Data</th>
+                                    <th className="py-1.5 pr-3">Forma de Pagamento</th>
                                     <th className="py-1.5 text-right pr-3">Valor</th>
                                     <th className="py-1.5 pr-3">Baixar</th>
                                   </tr>
@@ -6239,18 +6252,19 @@ export default function App() {
                                     .filter(n => {
                                       const q = auditoriaPagamentoBusca.trim().toLowerCase();
                                       if (!q) return true;
-                                      return (n.numero || '').toLowerCase().includes(q) || (n.serie || '').toLowerCase().includes(q);
+                                      return (n.xml.numero || '').toLowerCase().includes(q) || (n.xml.serie || '').toLowerCase().includes(q);
                                     })
                                     .slice(0, 50)
                                     .map((n, i) => (
-                                      <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
-                                        <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.serie}</td>
-                                        <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero}</td>
-                                        <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
-                                        <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(parseFloat(n.valor || '0') || 0)}</td>
+                                      <tr key={`${n.xml.chave || i}-${n.tPagNome}`} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                        <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.xml.serie}</td>
+                                        <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.xml.numero}</td>
+                                        <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.xml.data ? new Date(n.xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                        <td className="py-1.5 pr-3 font-semibold text-amber-700 dark:text-amber-400">{n.tPagNome}</td>
+                                        <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(parseFloat(n.xml.valor || '0') || 0)}</td>
                                         <td className="py-1.5 pr-3">
                                           <button
-                                            onClick={() => baixarXmlEvidencia(n)}
+                                            onClick={() => baixarXmlEvidencia(n.xml)}
                                             className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
                                           >
                                             <Download className="w-3 h-3" />
@@ -6264,7 +6278,7 @@ export default function App() {
                               {auditoriaPagamento.notasNaoIntegradas.filter(n => {
                                 const q = auditoriaPagamentoBusca.trim().toLowerCase();
                                 if (!q) return true;
-                                return (n.numero || '').toLowerCase().includes(q) || (n.serie || '').toLowerCase().includes(q);
+                                return (n.xml.numero || '').toLowerCase().includes(q) || (n.xml.serie || '').toLowerCase().includes(q);
                               }).length > 50 && (
                                 <p className="text-[11px] text-slate-400 mt-1.5">Mostrando 50 resultados. Refine a busca por número pra achar uma nota específica.</p>
                               )}
