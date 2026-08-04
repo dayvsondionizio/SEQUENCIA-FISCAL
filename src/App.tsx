@@ -4629,11 +4629,11 @@ export default function App() {
               )}
 
               {/* Upload Area - Now becomes smaller if data is present */}
-              <div 
+              <div
                 className={cn(
-                  "relative group bg-white border-4 border-dashed border-slate-200 rounded-3xl transition-all duration-500",
+                  "relative group bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-3xl transition-all duration-500",
                   stats.totalFiles > 0 ? "p-8 opacity-60 hover:opacity-100" : "p-12 text-center",
-                  "hover:border-blue-400 hover:bg-blue-50/30 cursor-pointer"
+                  "hover:border-blue-400 dark:hover:border-blue-500 hover:bg-blue-50/30 dark:hover:bg-blue-950/30 cursor-pointer"
                 )}
                 onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-blue-500', 'bg-blue-50'); }}
                 onDragLeave={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-blue-500', 'bg-blue-50'); }}
@@ -4671,24 +4671,24 @@ export default function App() {
                     stats.totalFiles === 0 && "flex-col"
                   )}>
                     <div className={cn(
-                      "p-5 bg-slate-100 rounded-full text-slate-400 group-hover:text-blue-500 group-hover:bg-blue-100 transition-colors",
+                      "p-5 bg-slate-100 dark:bg-slate-800 rounded-full text-slate-400 dark:text-slate-500 group-hover:text-blue-500 group-hover:bg-blue-100 dark:group-hover:bg-blue-950 transition-colors",
                       stats.totalFiles > 0 && "scale-75"
                     )}>
                       <Upload className="w-8 h-8" />
                     </div>
                     <div className={stats.totalFiles === 0 ? "text-center" : "text-left"}>
                       <h3 className={cn(
-                        "font-bold text-slate-800",
+                        "font-bold text-slate-800 dark:text-slate-100",
                         stats.totalFiles === 0 ? "text-xl" : "text-lg"
                       )}>
                         {stats.totalFiles === 0 ? "Arraste seus arquivos aqui" : "Deseja adicionar mais arquivos?"}
                       </h3>
-                    <p className="text-slate-500 text-sm mt-1">Suporta XMLs individuais, pastas ou arquivos ZIP</p>
+                    <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Suporta XMLs individuais, pastas ou arquivos ZIP</p>
                   </div>
                 </div>
 
                 {extractionStatus && (
-                  <div className="flex items-center gap-3 text-emerald-600 bg-emerald-50 px-6 py-3 rounded-2xl border border-emerald-100 animate-pulse mb-6 shadow-sm">
+                  <div className="flex items-center gap-3 text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950 px-6 py-3 rounded-2xl border border-emerald-100 dark:border-emerald-900 animate-pulse mb-6 shadow-sm">
                     <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-bounce"></div>
                     <span className="text-sm font-black uppercase tracking-wider">{extractionStatus}</span>
                   </div>
@@ -5055,7 +5055,7 @@ export default function App() {
                       </div>
                       <button
                         onClick={exportarSpedTabelaExcel}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-semibold hover:bg-emerald-100 transition-colors shrink-0"
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0"
                         title="Exporta a lista atual (respeitando o filtro e a busca) para Excel"
                       >
                         <Download className="w-3 h-3" />
@@ -6390,15 +6390,15 @@ export default function App() {
                     Exportar XMLs ({filterMes === 'Todos' ? 'Todos' : filterMes})
                   </button>
                   {showExportXmlMenu && (
-                    <div className="absolute left-0 top-full mt-2 z-20 bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden w-52">
-                      <div className="px-4 py-2 text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100">Dividir em quantos arquivos?</div>
+                    <div className="absolute left-0 top-full mt-2 z-20 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-lg overflow-hidden w-52">
+                      <div className="px-4 py-2 text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider border-b border-slate-100 dark:border-slate-800">Dividir em quantos arquivos?</div>
                       {([1, 2, 3] as const).map(n => (
                         <button
                           key={n}
                           onClick={() => { setExportPartes(n); setShowExportXmlMenu(false); exportFilteredXmls(n); }}
-                          className="w-full text-left px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors flex items-center gap-2"
+                          className="w-full text-left px-4 py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center gap-2"
                         >
-                          <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 text-xs font-black flex items-center justify-center">{n}</span>
+                          <span className="w-5 h-5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-black flex items-center justify-center">{n}</span>
                           {n === 1 ? '1 arquivo (padrão)' : `${n} arquivos`}
                         </button>
                       ))}
@@ -6415,27 +6415,27 @@ export default function App() {
                     <ChevronRight className={cn("w-3 h-3 transition-transform duration-300", showExportOptions && "rotate-90")} />
                   </button>
                   {showExportOptions && (
-                    <div className="absolute left-0 top-full mt-2 z-20 w-72 bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden">
+                    <div className="absolute left-0 top-full mt-2 z-20 w-72 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-lg overflow-hidden">
                       <button
                         onClick={() => { exportarPlanilhaDetalhadaCompleta(); setShowExportOptions(false); }}
-                        className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all border-b border-slate-100"
+                        className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all border-b border-slate-100 dark:border-slate-800"
                       >
-                        <div className="text-sm font-bold text-slate-900">Completo</div>
-                        <div className="text-xs text-slate-500 mt-0.5">Layout igual ao Questor, com todas as 46 colunas (ICMS, IPI, ISS, ST, etc).</div>
+                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100">Completo</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Layout igual ao Questor, com todas as 46 colunas (ICMS, IPI, ISS, ST, etc).</div>
                       </button>
                       <button
                         onClick={() => { exportarPlanilhaDetalhadaSimples(); setShowExportOptions(false); }}
-                        className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all border-b border-slate-100"
+                        className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all border-b border-slate-100 dark:border-slate-800"
                       >
-                        <div className="text-sm font-bold text-slate-900">Confronto Simples</div>
-                        <div className="text-xs text-slate-500 mt-0.5">Só Natureza, NCM, Item e Valor Contábil, mais Desconto em diante quando tiver valor.</div>
+                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100">Confronto Simples</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Só Natureza, NCM, Item e Valor Contábil, mais Desconto em diante quando tiver valor.</div>
                       </button>
                       <button
                         onClick={() => { exportarPlanilhaCompletaXML(); setShowExportOptions(false); }}
-                        className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all"
+                        className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
                       >
-                        <div className="text-sm font-bold text-slate-900">XML → Excel (12 abas)</div>
-                        <div className="text-xs text-slate-500 mt-0.5">Todos os campos do XML, um por coluna, divididos em Identificação/Emitente/Destinatário/Itens/Total/Pagamento/etc — igual a um conversor de XML dedicado.</div>
+                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100">XML → Excel (12 abas)</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Todos os campos do XML, um por coluna, divididos em Identificação/Emitente/Destinatário/Itens/Total/Pagamento/etc — igual a um conversor de XML dedicado.</div>
                       </button>
                     </div>
                   )}
@@ -6473,20 +6473,20 @@ export default function App() {
                       <ChevronRight className={cn("w-3 h-3 transition-transform duration-300", showPrintMenu && "rotate-90")} />
                     </button>
                     {showPrintMenu && (
-                      <div className="absolute right-0 top-full mt-2 z-20 w-80 bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden">
+                      <div className="absolute right-0 top-full mt-2 z-20 w-80 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-lg overflow-hidden">
                         <button
                           onClick={() => { setTipoRelatorioPDF('resumido'); setShowPrintMenu(false); setTimeout(() => window.print(), 50); }}
-                          className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all border-b border-slate-100"
+                          className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all border-b border-slate-100 dark:border-slate-800"
                         >
-                          <div className="text-sm font-bold text-slate-900">Resumido</div>
-                          <div className="text-xs text-slate-500 mt-0.5">Resumo de integridade e detalhamento de faltantes, do jeito que já sai hoje.</div>
+                          <div className="text-sm font-bold text-slate-900 dark:text-slate-100">Resumido</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Resumo de integridade e detalhamento de faltantes, do jeito que já sai hoje.</div>
                         </button>
                         <button
                           onClick={() => { setTipoRelatorioPDF('completo'); setShowPrintMenu(false); setTimeout(() => window.print(), 50); }}
-                          className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all"
+                          className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
                         >
-                          <div className="text-sm font-bold text-slate-900">Completo</div>
-                          <div className="text-xs text-slate-500 mt-0.5">Faltantes + CFOP, Anomalias, Auditoria de Regime, IBS/CBS e TEF, com legenda dos termos técnicos.</div>
+                          <div className="text-sm font-bold text-slate-900 dark:text-slate-100">Completo</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Faltantes + CFOP, Anomalias, Auditoria de Regime, IBS/CBS e TEF, com legenda dos termos técnicos.</div>
                         </button>
                       </div>
                     )}
