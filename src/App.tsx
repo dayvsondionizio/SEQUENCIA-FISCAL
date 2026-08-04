@@ -957,6 +957,8 @@ export default function App() {
   const [showForaDoEscopoDetalhe, setShowForaDoEscopoDetalhe] = useState(false);
   const [showForaDoPrazo, setShowForaDoPrazo] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
+  const [showPrintMenu, setShowPrintMenu] = useState(false);
+  const [tipoRelatorioPDF, setTipoRelatorioPDF] = useState<'resumido' | 'completo'>('resumido');
   const [exportProgress, setExportProgress] = useState<{ atual: number; total: number; etapa: string } | null>(null);
   const [showExportXmlMenu, setShowExportXmlMenu] = useState(false);
   const [exportPartes, setExportPartes] = useState(1);
@@ -6453,16 +6455,37 @@ export default function App() {
                   {auditoriaLoading ? 'Comparando...' : 'Auditoria de XML'}
                 </button>
                 {analysis && (
-                  <button
-                    onClick={() => window.print()}
-                    className="flex items-center justify-center text-white p-2.5 rounded-lg transition-all shadow-sm shrink-0"
-                    style={{background: '#020D2F'}}
-                    title={window.self !== window.top
-                      ? 'Imprimir Relatório / Exportar PDF — se não abrir, use o ícone "Abrir em nova aba" no topo.'
-                      : 'Imprimir Relatório / Exportar PDF'}
-                  >
-                    <Printer className="w-4 h-4" />
-                  </button>
+                  <div className="relative shrink-0">
+                    <button
+                      onClick={() => setShowPrintMenu(v => !v)}
+                      className="flex items-center gap-1.5 text-white px-3 py-2.5 rounded-lg transition-all shadow-sm shrink-0"
+                      style={{background: '#020D2F'}}
+                      title={window.self !== window.top
+                        ? 'Imprimir Relatório / Exportar PDF — se não abrir, use o ícone "Abrir em nova aba" no topo.'
+                        : 'Imprimir Relatório / Exportar PDF'}
+                    >
+                      <Printer className="w-4 h-4" />
+                      <ChevronRight className={cn("w-3.5 h-3.5 transition-transform duration-300", showPrintMenu && "rotate-90")} />
+                    </button>
+                    {showPrintMenu && (
+                      <div className="absolute right-0 top-full mt-2 z-20 w-80 bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden">
+                        <button
+                          onClick={() => { setTipoRelatorioPDF('resumido'); setShowPrintMenu(false); setTimeout(() => window.print(), 50); }}
+                          className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all border-b border-slate-100"
+                        >
+                          <div className="text-sm font-bold text-slate-900">Resumido</div>
+                          <div className="text-xs text-slate-500 mt-0.5">Resumo de integridade e detalhamento de faltantes, do jeito que já sai hoje.</div>
+                        </button>
+                        <button
+                          onClick={() => { setTipoRelatorioPDF('completo'); setShowPrintMenu(false); setTimeout(() => window.print(), 50); }}
+                          className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-all"
+                        >
+                          <div className="text-sm font-bold text-slate-900">Completo</div>
+                          <div className="text-xs text-slate-500 mt-0.5">Faltantes + CFOP, Anomalias, Auditoria de Regime, IBS/CBS e TEF, com legenda dos termos técnicos.</div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -6973,6 +6996,276 @@ export default function App() {
               </div>
             )}
           </div>
+
+          {tipoRelatorioPDF === 'completo' && (
+            <>
+              {breakdownPorCfop.length > 0 && (
+                <div className="print-section">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Totais por Natureza da Operação (CFOP)</h3>
+                  <table>
+                    <thead>
+                      <tr><th>CFOP</th><th>Natureza</th><th>Valor Contábil</th></tr>
+                    </thead>
+                    <tbody>
+                      {breakdownPorCfop.map(({ cfop, descricao, valor }) => (
+                        <tr key={cfop}>
+                          <td className="font-mono font-bold">{cfop}</td>
+                          <td>{descricao}</td>
+                          <td className="font-bold">{formatarMoeda(valor)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={2} className="font-black uppercase text-xs">Total de Saídas</td>
+                        <td className="font-black">{formatarMoeda(faturamentoTotal)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+
+              {(notasAnomalias.semProtocolo.length > 0 || notasAnomalias.numeroDuplicado.length > 0 || notasAnomalias.semAutorizacaoNaoContingencia.length > 0 || notasAnomalias.foraDoPrazo.length > 0) && (
+                <div className="print-section">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Anomalias Identificadas</h3>
+
+                  {notasAnomalias.semProtocolo.length > 0 && (
+                    <div className="mb-4">
+                      <div className="text-sm font-bold text-slate-700 mb-2">
+                        Emitidas offline sem autorização SEFAZ ({notasAnomalias.semProtocolo.length}) — {formatarMoeda(notasAnomalias.semProtocolo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
+                      </div>
+                      <table>
+                        <thead><tr><th>Série</th><th>Nº</th><th>Data</th><th>Valor</th></tr></thead>
+                        <tbody>
+                          {notasAnomalias.semProtocolo.slice(0, 25).map((xml, i) => (
+                            <tr key={xml.chave || i}>
+                              <td>{xml.serie}</td><td>{xml.numero}</td>
+                              <td>{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                              <td>{formatarMoeda(parseFloat(xml.valor || '0') || 0)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {notasAnomalias.semProtocolo.length > 25 && (
+                        <div className="text-[10px] text-slate-400 mt-1">Mostrando 25 de {notasAnomalias.semProtocolo.length}.</div>
+                      )}
+                    </div>
+                  )}
+
+                  {notasAnomalias.numeroDuplicado.length > 0 && (
+                    <div className="mb-4">
+                      <div className="text-sm font-bold text-slate-700 mb-2">Números com chave duplicada ({notasAnomalias.numeroDuplicado.length} grupo(s))</div>
+                      <table>
+                        <thead><tr><th>Série</th><th>Número</th><th>Quantas chaves diferentes</th></tr></thead>
+                        <tbody>
+                          {notasAnomalias.numeroDuplicado.slice(0, 25).map((grupo, i) => (
+                            <tr key={i}><td>{grupo[0].serie}</td><td>{grupo[0].numero}</td><td>{grupo.length}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {notasAnomalias.numeroDuplicado.length > 25 && (
+                        <div className="text-[10px] text-slate-400 mt-1">Mostrando 25 de {notasAnomalias.numeroDuplicado.length}.</div>
+                      )}
+                    </div>
+                  )}
+
+                  {notasAnomalias.semAutorizacaoNaoContingencia.length > 0 && (
+                    <div className="mb-4">
+                      <div className="text-sm font-bold text-slate-700 mb-2">
+                        Sem protocolo SEFAZ e sem contingência — excluídas do total válido ({notasAnomalias.semAutorizacaoNaoContingencia.length}) — {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
+                      </div>
+                      <table>
+                        <thead><tr><th>Série</th><th>Nº</th><th>Data</th><th>Valor</th></tr></thead>
+                        <tbody>
+                          {notasAnomalias.semAutorizacaoNaoContingencia.slice(0, 25).map((xml, i) => (
+                            <tr key={xml.chave || i}>
+                              <td>{xml.serie}</td><td>{xml.numero}</td>
+                              <td>{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                              <td>{formatarMoeda(parseFloat(xml.valor || '0') || 0)}{xml.temInutilizacao ? ' ⚠ (série/nº inutilizado)' : ''}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {notasAnomalias.semAutorizacaoNaoContingencia.length > 25 && (
+                        <div className="text-[10px] text-slate-400 mt-1">Mostrando 25 de {notasAnomalias.semAutorizacaoNaoContingencia.length}.</div>
+                      )}
+                      {notasAnomalias.semAutorizacaoNaoContingencia.some(x => x.temInutilizacao) && (
+                        <div className="mt-2 text-xs text-slate-600">⚠ Atenção: uma ou mais notas acima têm o mesmo série/número de uma inutilização registrada. Verifique se a numeração foi reaproveitada indevidamente.</div>
+                      )}
+                    </div>
+                  )}
+
+                  {notasAnomalias.foraDoPrazo.length > 0 && (
+                    <div>
+                      <div className="text-sm font-bold text-slate-700 mb-2">
+                        Emitidas offline e autorizadas com atraso superior a 30 minutos ({notasAnomalias.foraDoPrazo.length}) — {formatarMoeda(notasAnomalias.foraDoPrazo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
+                      </div>
+                      <table>
+                        <thead><tr><th>Série</th><th>Nº</th><th>Data</th><th>Valor</th></tr></thead>
+                        <tbody>
+                          {notasAnomalias.foraDoPrazo.slice(0, 25).map((xml, i) => (
+                            <tr key={xml.chave || i}>
+                              <td>{xml.serie}</td><td>{xml.numero}</td>
+                              <td>{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                              <td>{formatarMoeda(parseFloat(xml.valor || '0') || 0)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {notasAnomalias.foraDoPrazo.length > 25 && (
+                        <div className="text-[10px] text-slate-400 mt-1">Mostrando 25 de {notasAnomalias.foraDoPrazo.length}.</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {auditoriaRegime.totalNotas > 0 && (
+                <div className="print-section">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de Regime Tributário</h3>
+                  <div className="text-sm mb-3">
+                    Regime predominante no período: <strong>{auditoriaRegime.crtPredominanteLabel}</strong> ({auditoriaRegime.totalNotas} nota(s) analisada(s)).
+                    {auditoriaRegime.mudouNoPeriodo && <> O CRT declarado mudou dentro do período analisado — veja a tabela abaixo.</>}
+                  </div>
+                  <table>
+                    <thead><tr><th>CRT</th><th>Regime Declarado</th><th>Qtd. Notas</th><th>Primeira</th><th>Última</th></tr></thead>
+                    <tbody>
+                      {auditoriaRegime.crtCounts.map(c => (
+                        <tr key={c.crt}>
+                          <td className="font-mono">{c.crt}</td><td>{c.label}</td>
+                          <td className="font-bold">{c.qtd}</td><td>{c.primeira}</td><td>{c.ultima}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="mt-3">
+                    {auditoriaRegime.consistente ? (
+                      <div className="text-sm font-bold text-green-700">✓ Nenhuma inconsistência entre o CRT declarado e o código de ICMS (CSOSN/CST) usado nos itens.</div>
+                    ) : (
+                      <>
+                        <div className="text-sm font-bold text-red-700 mb-2">⚠ {auditoriaRegime.inconsistencias.length} nota(s) com inconsistência entre o CRT declarado e o CSOSN/CST usado nos itens:</div>
+                        <table>
+                          <thead><tr><th>Série</th><th>Nº</th><th>Data</th><th>Motivo</th></tr></thead>
+                          <tbody>
+                            {auditoriaRegime.inconsistencias.slice(0, 20).map((inc, i) => (
+                              <tr key={i}>
+                                <td>{inc.xml.serie}</td><td>{inc.xml.numero}</td>
+                                <td>{inc.xml.data ? new Date(inc.xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                <td>{inc.motivo}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {auditoriaRegime.inconsistencias.length > 20 && (
+                          <div className="text-[10px] text-slate-400 mt-1">Mostrando 20 de {auditoriaRegime.inconsistencias.length} — o mesmo padrão se repete nas demais.</div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {auditoriaIbsCbs.totalNotas > 0 && (
+                <div className="print-section">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de IBS/CBS (Reforma Tributária)</h3>
+                  <div className="text-sm mb-3">
+                    <strong>{auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) ({auditoriaIbsCbs.pctComGrupo}%)</strong> já trazem o grupo IBS/CBS preenchido.
+                    {auditoriaIbsCbs.pctComGrupo === 0 && ' Nenhuma nota desse período traz o grupo IBSCBS preenchido — 2026 é o período de teste da Reforma Tributária; vale confirmar com o suporte do sistema do cliente antes de virar obrigatório de verdade.'}
+                    {auditoriaIbsCbs.pctComGrupo === 100 && ' Sistema do cliente parece adaptado à Reforma Tributária.'}
+                    {auditoriaIbsCbs.pctComGrupo > 0 && auditoriaIbsCbs.pctComGrupo < 100 && ' Pode ser uma atualização de sistema no meio do período ou inconsistência a esclarecer com o suporte do sistema.'}
+                  </div>
+                  {auditoriaIbsCbs.amostraSemGrupo.length > 0 && (
+                    <div>
+                      <div className="text-sm font-bold text-slate-700 mb-2">Amostra sem o grupo IBS/CBS</div>
+                      <table>
+                        <thead><tr><th>Série</th><th>Nº</th><th>Data</th></tr></thead>
+                        <tbody>
+                          {auditoriaIbsCbs.amostraSemGrupo.slice(0, 15).map((n, i) => (
+                            <tr key={n.chave || i}>
+                              <td>{n.serie}</td><td>{n.numero}</td>
+                              <td>{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {auditoriaIbsCbs.amostraSemGrupo.length > 15 && (
+                        <div className="text-[10px] text-slate-400 mt-1">Mostrando 15 de {auditoriaIbsCbs.amostraSemGrupo.length}.</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {(auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0) && (() => {
+                const pctIntegradoPrint = auditoriaPagamento.totalCartao > 0 ? Math.round((auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100) : 0;
+                const pctNaoIntegradoPrint = auditoriaPagamento.totalCartao > 0 ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100) : 0;
+                const riscoObrigatoriedadePrint = !regimeTributario.isSimples && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
+                return (
+                  <div className="print-section">
+                    <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de Pagamento (TEF)</h3>
+                    <div className="text-sm mb-3">
+                      {auditoriaPagamento.totalCartao} venda(s) em cartão sujeita(s) a TEF: <strong>{auditoriaPagamento.totalIntegrado} integrada(s) ({pctIntegradoPrint}%)</strong>, {auditoriaPagamento.totalNaoIntegrado} via POS manual ({pctNaoIntegradoPrint}%){auditoriaPagamento.totalCartaoNaoAplicavel > 0 && <>, {auditoriaPagamento.totalCartaoNaoAplicavel} fora do escopo de TEF</>}.
+                      {riscoObrigatoriedadePrint && <> <strong className="text-red-700">Alerta: empresa é {regimeTributario.label} — tem obrigatoriedade de TEF, e esse padrão costuma gerar autuação por falta de integração.</strong></>}
+                      {!riscoObrigatoriedadePrint && regimeTributario.isSimples && auditoriaPagamento.totalNaoIntegrado > 0 && <> Empresa é Simples Nacional, que não tem obrigatoriedade de TEF.</>}
+                    </div>
+                    {auditoriaPagamento.breakdownPorTipoPagamento.length > 0 && (
+                      <table>
+                        <thead><tr><th>Forma de Pagamento</th><th>Valor</th><th>Qtd.</th></tr></thead>
+                        <tbody>
+                          {auditoriaPagamento.breakdownPorTipoPagamento.map(b => (
+                            <tr key={b.tPag}><td>{b.tPagNome}</td><td className="font-bold">{formatarMoeda(b.valor)}</td><td>{b.qtd}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    {auditoriaPagamento.problemas.length > 0 && (
+                      <div className="mt-3">
+                        <div className="text-sm font-bold text-red-700 mb-2">⚠ {auditoriaPagamento.problemas.length} problema(s) técnico(s) identificado(s)</div>
+                        <table>
+                          <thead><tr><th>Série</th><th>Nº</th><th>Data</th><th>Valor</th><th>Motivo</th></tr></thead>
+                          <tbody>
+                            {auditoriaPagamento.problemas.slice(0, 20).map((p, i) => (
+                              <tr key={i}>
+                                <td>{p.xml.serie}</td><td>{p.xml.numero}</td>
+                                <td>{p.xml.data ? new Date(p.xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                <td>{formatarMoeda(parseFloat(p.xml.valor || '0') || 0)}</td>
+                                <td>{p.motivo}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {auditoriaPagamento.problemas.length > 20 && (
+                          <div className="text-[10px] text-slate-400 mt-1">Mostrando 20 de {auditoriaPagamento.problemas.length}.</div>
+                        )}
+                      </div>
+                    )}
+                    {responsavelTecnico.email && (
+                      <div className="mt-3 text-[10px] text-slate-400">
+                        Responsável técnico do sistema (XML): {responsavelTecnico.contato && <>{responsavelTecnico.contato} · </>}{responsavelTecnico.email}{responsavelTecnico.foneFormatado && <> · {responsavelTecnico.foneFormatado}</>}{responsavelTecnico.cnpjFormatado && <> · CNPJ {responsavelTecnico.cnpjFormatado}</>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              <div className="print-section">
+                <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Legenda de Termos Técnicos</h3>
+                <table>
+                  <tbody>
+                    <tr><td className="font-bold" style={{width: '160px'}}>TEF</td><td>Transferência Eletrônica de Fundos — integração automática entre a maquininha de cartão e o sistema/PDV, sem digitação manual.</td></tr>
+                    <tr><td className="font-bold">tpIntegra</td><td>Campo do XML que indica se o pagamento em cartão foi integrado (1) ou digitado manualmente no PDV, ou seja, "POS manual" (2).</td></tr>
+                    <tr><td className="font-bold">CRT</td><td>Código de Regime Tributário declarado pelo emitente: 1 e 2 = Simples Nacional; 3 = Regime Normal (Lucro Presumido ou Real).</td></tr>
+                    <tr><td className="font-bold">CSOSN</td><td>Código de Situação da Operação — Simples Nacional. Código de ICMS usado por item quando o emitente é optante pelo Simples (CRT 1 ou 2).</td></tr>
+                    <tr><td className="font-bold">CST</td><td>Código de Situação Tributária do ICMS. Usado por item quando o emitente é do Regime Normal (CRT 3).</td></tr>
+                    <tr><td className="font-bold">IBS / CBS</td><td>Novos tributos da Reforma Tributária do Consumo (EC 132/2023 + LC 214/2025): IBS (estadual/municipal) substitui ICMS/ISS; CBS (federal) substitui PIS/COFINS. 2026 é o período de teste, com alíquotas simbólicas de 0,1% (IBS) + 0,9% (CBS), compensáveis.</td></tr>
+                    <tr><td className="font-bold">Grupo IBSCBS</td><td>Bloco de campos do XML, informado por item, onde o sistema do emitente registra os valores de IBS e CBS calculados.</td></tr>
+                    <tr><td className="font-bold">CFOP</td><td>Código Fiscal de Operações e Prestações — identifica a natureza da operação (venda, devolução, remessa, etc).</td></tr>
+                    <tr><td className="font-bold">indPres</td><td>Indicador de presença do comprador — usado para saber se a venda foi presencial (sujeita a TEF) ou não (e-commerce, teleatendimento).</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
         );
       })()}
