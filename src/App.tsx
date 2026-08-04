@@ -6350,34 +6350,34 @@ export default function App() {
               })()}
 
               {/* Filters */}
-              <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-wrap items-center gap-4 no-print">
-                <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 font-bold text-sm px-2">
+              <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-nowrap items-center gap-3 overflow-x-auto no-print">
+                <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 font-bold text-sm px-2 shrink-0">
                   <Filter className="w-4 h-4" />
                   FILTROS:
                 </div>
-                <select 
-                  value={filterModelo} 
+                <select
+                  value={filterModelo}
                   onChange={(e) => setFilterModelo(e.target.value)}
-                  className="bg-slate-50 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                  className="bg-slate-50 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none shrink-0"
                 >
                   <option value="Todos">Todos os Modelos</option>
                   <option value="55">Modelo 55 (NF-e)</option>
                   <option value="65">Modelo 65 (NFC-e)</option>
                 </select>
-                <select 
-                  value={filterMes} 
+                <select
+                  value={filterMes}
                   onChange={(e) => setFilterMes(e.target.value)}
-                  className="bg-slate-50 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                  className="bg-slate-50 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none shrink-0"
                 >
                   <option value="Todos">Todos os Meses</option>
                   {mesesDisponiveis.map(m => (
                     <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
-                <div className="relative">
+                <div className="relative shrink-0">
                   <button
                     onClick={() => setShowExportXmlMenu(v => !v)}
-                    className="flex items-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer"
+                    className="flex items-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer whitespace-nowrap"
                   >
                     <Download className="w-4 h-4" />
                     Exportar XMLs ({filterMes === 'Todos' ? 'Todos' : filterMes})
@@ -6398,10 +6398,10 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <div className="relative">
+                <div className="relative shrink-0">
                   <button
                     onClick={() => setShowExportOptions(!showExportOptions)}
-                    className="flex items-center gap-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer"
+                    className="flex items-center gap-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer whitespace-nowrap"
                   >
                     <FileText className="w-4 h-4" />
                     Exportar Planilha Detalhada
@@ -6447,7 +6447,7 @@ export default function App() {
                 <button
                   onClick={() => auditoriaInputRef.current?.click()}
                   disabled={auditoriaLoading}
-                  className="flex items-center gap-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer disabled:opacity-60"
+                  className="flex items-center gap-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer disabled:opacity-60 shrink-0 whitespace-nowrap"
                 >
                   {auditoriaLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <GitCompare className="w-4 h-4" />}
                   {auditoriaLoading ? 'Comparando...' : 'Auditoria de XML'}
