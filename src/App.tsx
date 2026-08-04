@@ -6822,6 +6822,9 @@ export default function App() {
                 })()}
 
                 {(auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0) && (() => {
+                  const pctIntegradoResumo = auditoriaPagamento.totalCartao > 0
+                    ? Math.round((auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100)
+                    : 0;
                   const pctNaoIntegradoResumo = auditoriaPagamento.totalCartao > 0
                     ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
                     : 0;
@@ -6829,7 +6832,7 @@ export default function App() {
                   const riscoObrigatoriedade = !regimeTributario.isSimples && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
                   const corTef = temProblemasTecnicos || riscoObrigatoriedade
                     ? 'text-rose-600 dark:text-rose-400'
-                    : pctNaoIntegradoResumo >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-blue-600 dark:text-blue-400';
+                    : pctNaoIntegradoResumo >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400';
                   return (
                     <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
                       <div className="flex items-center justify-between">
@@ -6842,9 +6845,9 @@ export default function App() {
                           <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showAuditoriaPagamento && "rotate-90")} />
                         </button>
                       </div>
-                      <div className={cn("text-3xl font-bold mt-2", corTef)}>{pctNaoIntegradoResumo}%</div>
+                      <div className={cn("text-3xl font-bold mt-2", corTef)}>{pctIntegradoResumo}%</div>
                       <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mt-1">
-                        {auditoriaPagamento.totalNaoIntegrado} POS manual de {auditoriaPagamento.totalCartao} sujeita(s) a TEF
+                        integrado ao TEF — {auditoriaPagamento.totalNaoIntegrado} POS manual de {auditoriaPagamento.totalCartao} sujeita(s)
                         {temProblemasTecnicos && <span className="text-rose-500 dark:text-rose-400"> · {auditoriaPagamento.problemas.length} problema(s)</span>}
                       </div>
                     </div>
