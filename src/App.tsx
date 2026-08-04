@@ -703,8 +703,10 @@ function SpedValidationPanel({ spedData, crossRef, onClose }: SpedValidationPane
   const { spedSaidasTotal, saidaOk, saidaFaltantes, periodo } = crossRef;
   const temFaltantes = saidaFaltantes.length > 0;
 
+  // Aceita letras nos 12 primeiros caracteres — CNPJ alfanumérico (NT 2026.004);
+  // os 2 dígitos verificadores finais continuam sempre numéricos.
   const formatCnpj = (c: string) =>
-    c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+    c.replace(/^([0-9A-Za-z]{2})([0-9A-Za-z]{3})([0-9A-Za-z]{3})([0-9A-Za-z]{4})(\d{2})$/, '$1.$2.$3/$4-$5');
 
   const formatValor = (v: string) => {
     const n = parseFloat(v.replace(',', '.'));
@@ -1045,7 +1047,9 @@ export default function App() {
     const finAaMm = toAaMm(spedData.dtFin);
     // Filtra apenas NF-e emitidas pela própria empresa (emitCnpj = CNPJ do SPED)
     // tpNF=1 sozinho não basta: XMLs de fornecedor também têm tpNF=1
-    const cleanCnpj = (c: string) => c.replace(/\D/g, '');
+    // Só remove pontuação (não \D inteiro) — o CNPJ alfanumérico (NT 2026.004)
+    // usa letras nos 12 primeiros dígitos, e \D também apagaria essas letras.
+    const cleanCnpj = (c: string) => c.replace(/[.\-/\s]/g, '');
     const companyCnpj = cleanCnpj(spedData.cnpj);
     const xmlSaidasNfe = xmlList.filter(x =>
       x.chave && x.tipo === 'nfe' && cleanCnpj(x.emitCnpj ?? '') === companyCnpj
@@ -1357,7 +1361,8 @@ export default function App() {
 
     // Cross-reference com inutilizações: se o mesmo série+número foi inutilizado,
     // o analista precisa saber — pode indicar numeração reaproveitada indevidamente.
-    const cleanCnpjLocal = (c: string) => c.replace(/\D/g, '');
+    // Só remove pontuação — preserva letras do CNPJ alfanumérico (NT 2026.004).
+    const cleanCnpjLocal = (c: string) => c.replace(/[.\-/\s]/g, '');
     const seriesNumerosInutilizados = new Set<string>(
       inutilizacoes
         .filter(i => cleanCnpjLocal(i.cnpj ?? '') === mainCnpj)
@@ -1575,7 +1580,7 @@ export default function App() {
     const fone = infRespTec?.getElementsByTagName('fone')[0]?.textContent?.trim() || '';
     const dominio = email.includes('@') ? email.split('@')[1] : '';
 
-    const cnpjFormatado = cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5') || cnpj;
+    const cnpjFormatado = cnpj.replace(/^([0-9A-Za-z]{2})([0-9A-Za-z]{3})([0-9A-Za-z]{3})([0-9A-Za-z]{4})(\d{2})$/, '$1.$2.$3/$4-$5') || cnpj;
     const foneFormatado = fone.length === 11
       ? fone.replace(/^(\d{2})(\d{5})(\d{4})$/, '($1) $2-$3')
       : fone.length === 10
@@ -1781,7 +1786,7 @@ export default function App() {
           if (cardCAut && cAutGenerico(cardCAut)) {
             problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: `Código de autorização genérico/suspeito: "${cardCAut}"` });
           }
-          if (cardCnpj && cardCnpj.replace(/\D/g, '') === xml.emitCnpj) {
+          if (cardCnpj && cardCnpj.replace(/[.\-/\s]/g, '') === xml.emitCnpj) {
             problemas.push({ xml, tPag, tPagNome, tpIntegra, cardCnpj, cardTBand, cardCAut, motivo: 'CNPJ da adquirente igual ao CNPJ do emitente' });
           }
         } else if (tPag === '90' && finNFe === '1' && vNF > 0 && isSaidaVenda) {
