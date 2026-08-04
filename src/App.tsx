@@ -4304,7 +4304,7 @@ export default function App() {
 
       {/* Header */}
       <header className="text-white shadow-2xl" style={{background: '#020D2F'}}>
-        <div className="max-w-[1650px] mx-auto px-6 py-8 print:px-4 print:py-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+        <div className="max-w-[1920px] mx-auto px-6 py-8 print:px-4 print:py-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div className="flex items-center gap-5 print:gap-4">
             <img src="/logo-sf.png" alt="Contador de Padarias" className="h-16 print:h-14 object-contain" />
             <div className="hidden md:block w-px h-12 print:h-10 bg-white/15" />
@@ -4409,7 +4409,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-[1650px] mx-auto p-6 lg:p-8 no-print flex-1 w-full">
+      <main className="max-w-[1920px] mx-auto p-6 lg:p-8 no-print flex-1 w-full">
         {extractionErrors.length > 0 && (
           <div className="bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-800 border-l-4 border-l-rose-500 rounded-2xl p-5 mb-6 shadow-sm">
             <div className="flex items-start gap-3">
