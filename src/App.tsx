@@ -1661,8 +1661,9 @@ export default function App() {
     const tPagLabel: Record<string, string> = {
       '01': 'Dinheiro', '02': 'Cheque', '03': 'Cartão de Crédito', '04': 'Cartão de Débito',
       '05': 'Crédito Loja', '10': 'Vale Alimentação', '11': 'Vale Refeição', '12': 'Vale Presente',
-      '13': 'Vale Combustível', '15': 'Boleto Bancário', '16': 'Depósito Bancário', '17': 'PIX',
-      '18': 'Transferência Bancária', '19': 'Programa de Fidelidade', '90': 'Sem Pagamento', '99': 'Outros'
+      '13': 'Vale Combustível', '14': 'Duplicata Mercantil', '15': 'Boleto Bancário', '16': 'Depósito Bancário',
+      '17': 'PIX (Dinâmico)', '18': 'Transferência Bancária', '19': 'Programa de Fidelidade',
+      '20': 'PIX (Estático)', '90': 'Sem Pagamento', '99': 'Outros'
     };
     const cAutGenerico = (v: string) => {
       const t = v.trim().toUpperCase();
@@ -1753,7 +1754,11 @@ export default function App() {
         const cardCnpj = card?.getElementsByTagName('CNPJ')[0]?.textContent?.trim() || '';
         const cardTBand = card?.getElementsByTagName('tBand')[0]?.textContent?.trim() || '';
         const cardCAut = card?.getElementsByTagName('cAut')[0]?.textContent?.trim() || '';
-        const tPagNome = tPagLabel[tPag] || tPag;
+        // xPag é o campo de descrição livre que o próprio layout da NF-e prevê
+        // pra quando o código de tPag não é um dos catalogados aqui — mostra
+        // isso em vez de só o número cru quando não reconhecemos o código.
+        const xPag = detPag.getElementsByTagName('xPag')[0]?.textContent?.trim() || '';
+        const tPagNome = tPagLabel[tPag] || (xPag ? `${xPag} (código ${tPag})` : `Código ${tPag} (não catalogado)`);
         const vPagBruto = parseFloat(detPag.getElementsByTagName('vPag')[0]?.textContent?.trim() || '0') || 0;
         // Desconta o troco (se houver) do pagamento em dinheiro desta nota — só
         // uma vez, mesmo que o troco seja maior que este detPag específico.
