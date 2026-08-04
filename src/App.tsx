@@ -4759,46 +4759,50 @@ export default function App() {
                   const totalManual = analysis.reduce((acc, s) => acc + s.faltantesInutilizadosManual.length, 0);
                   const faltantesBrutos = faltantesLiquidos + totalManual;
 
+                  const tilePad = totalManual > 0 ? "p-3" : "p-6";
+                  const tileLabel = cn("font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide", totalManual > 0 ? "text-[10px] leading-tight" : "text-sm");
+                  const tileNumber = totalManual > 0 ? "text-2xl mt-1" : "text-4xl mt-2";
+
                   return (
-                    <div className="flex-[2] min-w-[420px] bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                    <div className={cn("bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden", totalManual > 0 ? "flex-[2] min-w-[640px]" : "flex-[2] min-w-[420px]")}>
                       <div className={cn(
                         "grid grid-cols-2 h-full divide-y divide-slate-100 dark:divide-slate-800 md:divide-y-0 md:divide-x",
                         totalManual > 0 ? "md:grid-cols-3 lg:grid-cols-6" : "md:grid-cols-4"
                       )}>
-                        <div className="p-6">
-                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Séries</div>
-                          <div className="text-4xl font-bold text-slate-900 dark:text-slate-100 mt-2">{analysis.length}</div>
+                        <div className={tilePad}>
+                          <div className={tileLabel}>Séries</div>
+                          <div className={cn("font-bold text-slate-900 dark:text-slate-100", tileNumber)}>{analysis.length}</div>
                         </div>
-                        <div className="p-6">
-                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Com Quebra</div>
-                          <div className="text-4xl font-bold text-amber-500 dark:text-amber-400 mt-2">
+                        <div className={tilePad}>
+                          <div className={tileLabel}>Com Quebra</div>
+                          <div className={cn("font-bold text-amber-500 dark:text-amber-400", tileNumber)}>
                             {analysis.filter(s => s.faltantes.length > 0).length}
                           </div>
                         </div>
                         {totalManual > 0 ? (
                           <>
-                            <div className="p-6 no-print">
-                              <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Bruto (XML)</div>
-                              <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesBrutos}</div>
+                            <div className={cn(tilePad, "no-print")}>
+                              <div className={tileLabel}>Faltante Bruto</div>
+                              <div className={cn("font-bold text-rose-600 dark:text-rose-400", tileNumber)}>{faltantesBrutos}</div>
                             </div>
-                            <div className="p-6 bg-amber-50/50 dark:bg-amber-950/20 no-print">
-                              <div className="text-sm font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wide">Inutilizadas Sem XML</div>
-                              <div className="text-4xl font-bold text-amber-600 dark:text-amber-400 mt-2">{totalManual}</div>
+                            <div className={cn(tilePad, "bg-amber-50/50 dark:bg-amber-950/20 no-print")}>
+                              <div className={tileLabel}>Inutilizadas</div>
+                              <div className={cn("font-bold text-amber-600 dark:text-amber-400", tileNumber)}>{totalManual}</div>
                             </div>
-                            <div className="p-6">
-                              <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Líquido</div>
-                              <div className="text-4xl font-bold text-slate-500 dark:text-slate-400 mt-2">{faltantesLiquidos}</div>
+                            <div className={tilePad}>
+                              <div className={tileLabel}>Faltante Líquido</div>
+                              <div className={cn("font-bold text-slate-500 dark:text-slate-400", tileNumber)}>{faltantesLiquidos}</div>
                             </div>
                           </>
                         ) : (
-                          <div className="p-6">
-                            <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Faltantes</div>
-                            <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesLiquidos}</div>
+                          <div className={tilePad}>
+                            <div className={tileLabel}>Total Faltantes</div>
+                            <div className={cn("font-bold text-rose-600 dark:text-rose-400", tileNumber)}>{faltantesLiquidos}</div>
                           </div>
                         )}
-                        <div className="p-6">
-                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Recebidos</div>
-                          <div className="text-4xl font-bold text-blue-600 dark:text-blue-400 mt-2">
+                        <div className={tilePad}>
+                          <div className={tileLabel}>Total Recebidos</div>
+                          <div className={cn("font-bold text-blue-600 dark:text-blue-400", tileNumber)}>
                             {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
                           </div>
                         </div>
