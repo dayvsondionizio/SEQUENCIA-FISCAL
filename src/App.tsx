@@ -951,6 +951,7 @@ export default function App() {
   const [showSemAutorizacao, setShowSemAutorizacao] = useState(false);
   const [showAuditoriaPagamento, setShowAuditoriaPagamento] = useState(false);
   const [showAuditoriaRegime, setShowAuditoriaRegime] = useState(false);
+  const [showAuditoriaIbsCbs, setShowAuditoriaIbsCbs] = useState(false);
   const [auditoriaRegimeBusca, setAuditoriaRegimeBusca] = useState('');
   const [auditoriaPagamentoBusca, setAuditoriaPagamentoBusca] = useState('');
   const [showForaDoEscopoDetalhe, setShowForaDoEscopoDetalhe] = useState(false);
@@ -1484,6 +1485,60 @@ export default function App() {
       mudouNoPeriodo: crtCounts.length > 1,
       inconsistencias,
       amostra: Array.from(amostraPorCrt.values()),
+    };
+  }, [xmlList, filterMes]);
+
+  // Auditoria de IBS/CBS (Reforma Tributária — EC 132/2023 + LC 214/2025):
+  // 2026 é o período de teste (0,1% IBS + 0,9% CBS, compensável), quando o
+  // grupo <IBSCBS> por item começa a aparecer no XML. Só confere presença/
+  // ausência do grupo — não audita se a alíquota/valor calculado está
+  // correto (isso mudaria a cada ano da transição até 2033).
+  const auditoriaIbsCbs = useMemo(() => {
+    const vazio = { totalNotas: 0, notasComGrupo: 0, pctComGrupo: 0, amostraSemGrupo: [] as XmlData[], amostraComGrupo: [] as XmlData[] };
+    const cnpjCounts: { [cnpj: string]: number } = {};
+    xmlList.forEach(xml => {
+      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
+      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
+    });
+    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!mainCnpj) return vazio;
+
+    const chavesCanceladas = new Set<string>(
+      xmlList
+        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
+        .map(xml => xml.chave!)
+    );
+
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    if (saidas.length === 0) return vazio;
+
+    let notasComGrupo = 0;
+    const amostraSemGrupo: XmlData[] = [];
+    const amostraComGrupo: XmlData[] = [];
+
+    saidas.forEach(xml => {
+      const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
+      const temGrupo = Array.from(doc.getElementsByTagName('det')).some(det =>
+        !!det.getElementsByTagName('imposto')[0]?.getElementsByTagName('IBSCBS')[0]
+      );
+      if (temGrupo) {
+        notasComGrupo++;
+        if (amostraComGrupo.length < 5) amostraComGrupo.push(xml);
+      } else {
+        if (amostraSemGrupo.length < 5) amostraSemGrupo.push(xml);
+      }
+    });
+
+    return {
+      totalNotas: saidas.length,
+      notasComGrupo,
+      pctComGrupo: Math.round((notasComGrupo / saidas.length) * 100),
+      amostraSemGrupo,
+      amostraComGrupo,
     };
   }, [xmlList, filterMes]);
 
@@ -5623,6 +5678,128 @@ export default function App() {
                   )}
                 </div>
               )}
+
+              {/* Card: Auditoria de IBS/CBS (Reforma Tributária) */}
+              {auditoriaIbsCbs.totalNotas > 0 && (() => {
+                const corBordaIbsCbs = auditoriaIbsCbs.pctComGrupo === 0
+                  ? 'border-l-rose-400'
+                  : auditoriaIbsCbs.pctComGrupo === 100 ? 'border-l-emerald-400' : 'border-l-amber-400';
+                return (
+                  <div className={cn("bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 rounded-2xl p-6 mb-6 shadow-sm", corBordaIbsCbs)}>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <span className="text-blue-500 text-xl">🧾</span>
+                        <div>
+                          <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Auditoria de IBS/CBS (Reforma Tributária)</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                            <strong className={cn(
+                              auditoriaIbsCbs.pctComGrupo === 0 ? "text-rose-600 dark:text-rose-400" : auditoriaIbsCbs.pctComGrupo === 100 ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
+                            )}>{auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) ({auditoriaIbsCbs.pctComGrupo}%)</strong> já trazem o grupo IBS/CBS preenchido
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs)}
+                        className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
+                      >
+                        {showAuditoriaIbsCbs ? 'Ocultar' : 'Ver detalhes'}
+                      </button>
+                    </div>
+
+                    {showAuditoriaIbsCbs && (
+                      <div className="space-y-4">
+                        {auditoriaIbsCbs.pctComGrupo === 0 && (
+                          <div className="rounded-xl px-4 py-3 text-xs bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                            ⚠ Nenhuma nota desse período traz o grupo &lt;IBSCBS&gt; preenchido — 2026 é o período de teste da Reforma Tributária (0,1% IBS + 0,9% CBS, compensável). O sistema de emissão do cliente ainda não parece estar adaptado; vale confirmar com o suporte do sistema antes de virar obrigatório de verdade.
+                          </div>
+                        )}
+                        {auditoriaIbsCbs.pctComGrupo === 100 && (
+                          <div className="rounded-xl px-4 py-3 text-xs bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                            ✓ 100% das notas desse período já trazem o grupo IBS/CBS — sistema do cliente parece adaptado à Reforma Tributária.
+                          </div>
+                        )}
+                        {auditoriaIbsCbs.pctComGrupo > 0 && auditoriaIbsCbs.pctComGrupo < 100 && (
+                          <div className="rounded-xl px-4 py-3 text-xs bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                            ⚠ Só parte das notas traz o grupo IBS/CBS — pode ser uma atualização de sistema no meio do período (confira as datas das amostras abaixo) ou inconsistência a esclarecer com o suporte do sistema.
+                          </div>
+                        )}
+
+                        {auditoriaIbsCbs.amostraSemGrupo.length > 0 && (
+                          <div>
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Amostra sem o grupo IBS/CBS</div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                    <th className="py-1.5 pr-3">Série</th>
+                                    <th className="py-1.5 pr-3">Nº</th>
+                                    <th className="py-1.5 pr-3">Data</th>
+                                    <th className="py-1.5">Baixar</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {auditoriaIbsCbs.amostraSemGrupo.map((n, i) => (
+                                    <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                      <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.serie}</td>
+                                      <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero}</td>
+                                      <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                      <td className="py-1.5">
+                                        <button
+                                          onClick={() => baixarXmlEvidencia(n)}
+                                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                        >
+                                          <Download className="w-3 h-3" />
+                                          XML
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {auditoriaIbsCbs.amostraComGrupo.length > 0 && (
+                          <div>
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Amostra com o grupo IBS/CBS</div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                    <th className="py-1.5 pr-3">Série</th>
+                                    <th className="py-1.5 pr-3">Nº</th>
+                                    <th className="py-1.5 pr-3">Data</th>
+                                    <th className="py-1.5">Baixar</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {auditoriaIbsCbs.amostraComGrupo.map((n, i) => (
+                                    <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                      <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.serie}</td>
+                                      <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero}</td>
+                                      <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                      <td className="py-1.5">
+                                        <button
+                                          onClick={() => baixarXmlEvidencia(n)}
+                                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                        >
+                                          <Download className="w-3 h-3" />
+                                          XML
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Card: Auditoria de Pagamento (TEF) */}
               {(auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0) && (() => {
