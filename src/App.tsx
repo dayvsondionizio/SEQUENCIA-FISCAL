@@ -4734,11 +4734,11 @@ export default function App() {
               key="results"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="flex flex-col lg:flex-row gap-8 items-start"
+              className="flex flex-col gap-6"
             >
-              {/* Sidebar — summary + search, stays in view while the main content scrolls */}
-              <aside className="w-full lg:w-80 shrink-0 lg:sticky lg:top-6 space-y-6">
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+              {/* Faixa de métricas — visão geral, encosta na base do header */}
+              <div className="flex flex-wrap gap-6 items-stretch">
+                <div className="flex-1 min-w-[260px] bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
                   <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total de Saídas Auditadas (Válidas)</div>
                   <div className="text-3xl font-bold text-emerald-600 dark:text-emerald-400 mt-2">
                     {formatarMoeda(faturamentoTotal)}
@@ -4753,8 +4753,129 @@ export default function App() {
                     </button>
                   )}
                 </div>
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700 transition-all">
-                  <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Período Analisado</div>
+
+                {(() => {
+                  const faltantesLiquidos = analysis.reduce((acc, s) => acc + s.faltantes.length, 0);
+                  const totalManual = analysis.reduce((acc, s) => acc + s.faltantesInutilizadosManual.length, 0);
+                  const faltantesBrutos = faltantesLiquidos + totalManual;
+
+                  return (
+                    <div className="flex-[2] min-w-[420px] bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                      <div className={cn(
+                        "grid grid-cols-2 h-full divide-y divide-slate-100 dark:divide-slate-800 md:divide-y-0 md:divide-x",
+                        totalManual > 0 ? "md:grid-cols-3 lg:grid-cols-6" : "md:grid-cols-4"
+                      )}>
+                        <div className="p-6">
+                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Séries</div>
+                          <div className="text-4xl font-bold text-slate-900 dark:text-slate-100 mt-2">{analysis.length}</div>
+                        </div>
+                        <div className="p-6">
+                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Com Quebra</div>
+                          <div className="text-4xl font-bold text-amber-500 dark:text-amber-400 mt-2">
+                            {analysis.filter(s => s.faltantes.length > 0).length}
+                          </div>
+                        </div>
+                        {totalManual > 0 ? (
+                          <>
+                            <div className="p-6 no-print">
+                              <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Bruto (XML)</div>
+                              <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesBrutos}</div>
+                            </div>
+                            <div className="p-6 bg-amber-50/50 dark:bg-amber-950/20 no-print">
+                              <div className="text-sm font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wide">Inutilizadas Sem XML</div>
+                              <div className="text-4xl font-bold text-amber-600 dark:text-amber-400 mt-2">{totalManual}</div>
+                            </div>
+                            <div className="p-6">
+                              <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Líquido</div>
+                              <div className="text-4xl font-bold text-slate-500 dark:text-slate-400 mt-2">{faltantesLiquidos}</div>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="p-6">
+                            <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Faltantes</div>
+                            <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesLiquidos}</div>
+                          </div>
+                        )}
+                        <div className="p-6">
+                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Recebidos</div>
+                          <div className="text-4xl font-bold text-blue-600 dark:text-blue-400 mt-2">
+                            {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {auditoriaIbsCbs.totalNotas > 0 && (() => {
+                  const corIbsCbs = auditoriaIbsCbs.pctComGrupo === 0
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : auditoriaIbsCbs.pctComGrupo === 100 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400';
+                  return (
+                    <div className="flex-1 min-w-[200px] bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
+                          <Receipt className="w-3.5 h-3.5" />
+                          IBS/CBS
+                        </div>
+                        <button
+                          onClick={() => setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs)}
+                          title="Ver auditoria de IBS/CBS (Reforma Tributária)"
+                          className="inline-flex items-center justify-center cursor-pointer no-print"
+                        >
+                          <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showAuditoriaIbsCbs && "rotate-90")} />
+                        </button>
+                      </div>
+                      <div className={cn("text-3xl font-bold mt-2", corIbsCbs)}>{auditoriaIbsCbs.pctComGrupo}%</div>
+                      <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mt-1">
+                        {auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) com o grupo IBS/CBS
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {(auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0) && (() => {
+                  const pctIntegradoResumo = auditoriaPagamento.totalCartao > 0
+                    ? Math.round((auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100)
+                    : 0;
+                  const pctNaoIntegradoResumo = auditoriaPagamento.totalCartao > 0
+                    ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
+                    : 0;
+                  const temProblemasTecnicos = auditoriaPagamento.problemas.length > 0;
+                  const riscoObrigatoriedade = !regimeTributario.isSimples && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
+                  const corTef = temProblemasTecnicos || riscoObrigatoriedade
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : pctNaoIntegradoResumo >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400';
+                  return (
+                    <div className="flex-1 min-w-[200px] bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
+                          <CreditCard className="w-3.5 h-3.5" />
+                          TEF
+                        </div>
+                        <button
+                          onClick={() => setShowAuditoriaPagamento(!showAuditoriaPagamento)}
+                          title="Ver auditoria de pagamento (TEF)"
+                          className="inline-flex items-center justify-center cursor-pointer no-print"
+                        >
+                          <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showAuditoriaPagamento && "rotate-90")} />
+                        </button>
+                      </div>
+                      <div className={cn("text-3xl font-bold mt-2", corTef)}>{pctIntegradoResumo}%</div>
+                      <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mt-1">
+                        integrado ao TEF — {auditoriaPagamento.totalNaoIntegrado} POS manual de {auditoriaPagamento.totalCartao} sujeita(s)
+                        {temProblemasTecnicos && <span className="text-rose-500 dark:text-rose-400"> · {auditoriaPagamento.problemas.length} problema(s)</span>}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Corpo em duas colunas: filtros/utilitários à esquerda, auditoria ao centro */}
+              <div className="flex flex-col lg:flex-row gap-8 items-start">
+                <aside className="w-full lg:w-72 shrink-0 lg:sticky lg:top-6 space-y-6">
+                  <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700 transition-all">
+                    <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Período Analisado</div>
                   <div className="text-xl font-bold text-slate-900 dark:text-slate-100 mt-2">
                     {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
                   </div>
@@ -6184,59 +6305,6 @@ export default function App() {
               })()}
 
               {(() => {
-                const faltantesLiquidos = analysis.reduce((acc, s) => acc + s.faltantes.length, 0);
-                const totalManual = analysis.reduce((acc, s) => acc + s.faltantesInutilizadosManual.length, 0);
-                const faltantesBrutos = faltantesLiquidos + totalManual;
-
-                return (
-                  <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
-                    <div className={cn(
-                      "grid grid-cols-2 divide-y divide-slate-100 dark:divide-slate-800 md:divide-y-0 md:divide-x",
-                      totalManual > 0 ? "md:grid-cols-3 lg:grid-cols-6" : "md:grid-cols-4"
-                    )}>
-                      <div className="p-6">
-                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Séries</div>
-                        <div className="text-4xl font-bold text-slate-900 dark:text-slate-100 mt-2">{analysis.length}</div>
-                      </div>
-                      <div className="p-6">
-                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Com Quebra</div>
-                        <div className="text-4xl font-bold text-amber-500 dark:text-amber-400 mt-2">
-                          {analysis.filter(s => s.faltantes.length > 0).length}
-                        </div>
-                      </div>
-                      {totalManual > 0 ? (
-                        <>
-                          <div className="p-6 no-print">
-                            <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Bruto (XML)</div>
-                            <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesBrutos}</div>
-                          </div>
-                          <div className="p-6 bg-amber-50/50 dark:bg-amber-950/20 no-print">
-                            <div className="text-sm font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wide">Inutilizadas Sem XML</div>
-                            <div className="text-4xl font-bold text-amber-600 dark:text-amber-400 mt-2">{totalManual}</div>
-                          </div>
-                          <div className="p-6">
-                            <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Líquido</div>
-                            <div className="text-4xl font-bold text-slate-500 dark:text-slate-400 mt-2">{faltantesLiquidos}</div>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="p-6">
-                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Faltantes</div>
-                          <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesLiquidos}</div>
-                        </div>
-                      )}
-                      <div className="p-6">
-                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Recebidos</div>
-                        <div className="text-4xl font-bold text-blue-600 dark:text-blue-400 mt-2">
-                          {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {(() => {
                 // Portal buttons only show up automatically while the whole analysis found
                 // zero matching inutilizações (once any is found, XML or manual, the
                 // per-série boxes already cover it). The manual form, likewise, must
@@ -6836,71 +6904,7 @@ export default function App() {
               )}
               </div>
 
-              {/* Sidebar direita — auditorias compactas (IBS/CBS, TEF); clicar abre o detalhe no centro */}
-              <aside className="w-full lg:w-80 shrink-0 lg:sticky lg:top-6 space-y-6">
-                {auditoriaIbsCbs.totalNotas > 0 && (() => {
-                  const corIbsCbs = auditoriaIbsCbs.pctComGrupo === 0
-                    ? 'text-rose-600 dark:text-rose-400'
-                    : auditoriaIbsCbs.pctComGrupo === 100 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400';
-                  return (
-                    <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
-                          <Receipt className="w-3.5 h-3.5" />
-                          IBS/CBS
-                        </div>
-                        <button
-                          onClick={() => setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs)}
-                          title="Ver auditoria de IBS/CBS (Reforma Tributária)"
-                          className="inline-flex items-center justify-center cursor-pointer no-print"
-                        >
-                          <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showAuditoriaIbsCbs && "rotate-90")} />
-                        </button>
-                      </div>
-                      <div className={cn("text-3xl font-bold mt-2", corIbsCbs)}>{auditoriaIbsCbs.pctComGrupo}%</div>
-                      <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mt-1">
-                        {auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) com o grupo IBS/CBS
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {(auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0) && (() => {
-                  const pctIntegradoResumo = auditoriaPagamento.totalCartao > 0
-                    ? Math.round((auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100)
-                    : 0;
-                  const pctNaoIntegradoResumo = auditoriaPagamento.totalCartao > 0
-                    ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
-                    : 0;
-                  const temProblemasTecnicos = auditoriaPagamento.problemas.length > 0;
-                  const riscoObrigatoriedade = !regimeTributario.isSimples && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
-                  const corTef = temProblemasTecnicos || riscoObrigatoriedade
-                    ? 'text-rose-600 dark:text-rose-400'
-                    : pctNaoIntegradoResumo >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400';
-                  return (
-                    <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
-                          <CreditCard className="w-3.5 h-3.5" />
-                          TEF
-                        </div>
-                        <button
-                          onClick={() => setShowAuditoriaPagamento(!showAuditoriaPagamento)}
-                          title="Ver auditoria de pagamento (TEF)"
-                          className="inline-flex items-center justify-center cursor-pointer no-print"
-                        >
-                          <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showAuditoriaPagamento && "rotate-90")} />
-                        </button>
-                      </div>
-                      <div className={cn("text-3xl font-bold mt-2", corTef)}>{pctIntegradoResumo}%</div>
-                      <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mt-1">
-                        integrado ao TEF — {auditoriaPagamento.totalNaoIntegrado} POS manual de {auditoriaPagamento.totalCartao} sujeita(s)
-                        {temProblemasTecnicos && <span className="text-rose-500 dark:text-rose-400"> · {auditoriaPagamento.problemas.length} problema(s)</span>}
-                      </div>
-                    </div>
-                  );
-                })()}
-              </aside>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
