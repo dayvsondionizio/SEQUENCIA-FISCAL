@@ -4050,7 +4050,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col font-sans text-slate-900 dark:text-slate-100 relative bg-[#f0f4f8] dark:bg-slate-950">
+    <div className="min-h-screen flex flex-col font-sans text-slate-900 dark:text-slate-100 relative bg-[#f7f5ef] dark:bg-slate-950 bg-[radial-gradient(ellipse_1400px_520px_at_50%_-8%,rgba(2,13,47,0.05),transparent_65%)] dark:bg-[radial-gradient(ellipse_1400px_520px_at_50%_-8%,rgba(240,180,41,0.05),transparent_65%)]">
       {/* Loading Overlay */}
       <AnimatePresence>
         {isProcessing && (
@@ -4153,7 +4153,7 @@ export default function App() {
               className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-6"
             >
               <div className="flex items-start justify-between mb-1">
-                <h3 className="text-base font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <h3 className="font-serif text-base font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                   <Search className="w-4 h-4 text-blue-500" />
                   Auditoria de Regime — Evidências
                 </h3>
@@ -4314,7 +4314,7 @@ export default function App() {
             <img src="/logo-sf.png" alt="Contador de Padarias" className="h-16 print:h-14 object-contain" />
             <div className="hidden md:block w-px h-12 print:h-10 bg-white/15" />
             <div>
-              <h1 className="text-3xl print:text-2xl font-black tracking-tight text-white mb-0.5 print:mb-0.5">Sequência Fiscal</h1>
+              <h1 className="font-serif text-3xl print:text-2xl font-semibold tracking-tight text-white mb-0.5 print:mb-0.5">Sequência Fiscal</h1>
               <p className="font-medium text-[0.95rem] print:text-sm" style={{color: 'rgba(240,180,41,0.8)'}}>Auditoria de Sequência de Vendas e Saídas</p>
             </div>
           </div>
@@ -6188,42 +6188,47 @@ export default function App() {
                 const faltantesBrutos = faltantesLiquidos + totalManual;
 
                 return (
-                  <div className={cn("grid grid-cols-2 gap-4", totalManual > 0 ? "md:grid-cols-3 lg:grid-cols-6" : "md:grid-cols-4")}>
-                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
-                      <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Séries</div>
-                      <div className="text-4xl font-bold text-slate-900 dark:text-slate-100 mt-2">{analysis.length}</div>
-                    </div>
-                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
-                      <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Com Quebra</div>
-                      <div className="text-4xl font-bold text-amber-500 dark:text-amber-400 mt-2">
-                        {analysis.filter(s => s.faltantes.length > 0).length}
+                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+                    <div className={cn(
+                      "grid grid-cols-2 divide-y divide-slate-100 dark:divide-slate-800 md:divide-y-0 md:divide-x",
+                      totalManual > 0 ? "md:grid-cols-3 lg:grid-cols-6" : "md:grid-cols-4"
+                    )}>
+                      <div className="p-6">
+                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Séries</div>
+                        <div className="text-4xl font-bold text-slate-900 dark:text-slate-100 mt-2">{analysis.length}</div>
                       </div>
-                    </div>
-                    {totalManual > 0 ? (
-                      <>
-                        <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm no-print">
-                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Bruto (XML)</div>
-                          <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesBrutos}</div>
+                      <div className="p-6">
+                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Com Quebra</div>
+                        <div className="text-4xl font-bold text-amber-500 dark:text-amber-400 mt-2">
+                          {analysis.filter(s => s.faltantes.length > 0).length}
                         </div>
-                        <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-amber-200 dark:border-amber-800 shadow-sm no-print">
-                          <div className="text-sm font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wide">Inutilizadas Sem XML</div>
-                          <div className="text-4xl font-bold text-amber-600 dark:text-amber-400 mt-2">{totalManual}</div>
-                        </div>
-                        <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
-                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Líquido</div>
-                          <div className="text-4xl font-bold text-slate-500 dark:text-slate-400 mt-2">{faltantesLiquidos}</div>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
-                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Faltantes</div>
-                        <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesLiquidos}</div>
                       </div>
-                    )}
-                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
-                      <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Recebidos</div>
-                      <div className="text-4xl font-bold text-blue-600 dark:text-blue-400 mt-2">
-                        {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
+                      {totalManual > 0 ? (
+                        <>
+                          <div className="p-6 no-print">
+                            <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Bruto (XML)</div>
+                            <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesBrutos}</div>
+                          </div>
+                          <div className="p-6 bg-amber-50/50 dark:bg-amber-950/20 no-print">
+                            <div className="text-sm font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wide">Inutilizadas Sem XML</div>
+                            <div className="text-4xl font-bold text-amber-600 dark:text-amber-400 mt-2">{totalManual}</div>
+                          </div>
+                          <div className="p-6">
+                            <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Faltante Líquido</div>
+                            <div className="text-4xl font-bold text-slate-500 dark:text-slate-400 mt-2">{faltantesLiquidos}</div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="p-6">
+                          <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Faltantes</div>
+                          <div className="text-4xl font-bold text-rose-600 dark:text-rose-400 mt-2">{faltantesLiquidos}</div>
+                        </div>
+                      )}
+                      <div className="p-6">
+                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total Recebidos</div>
+                        <div className="text-4xl font-bold text-blue-600 dark:text-blue-400 mt-2">
+                          {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -6521,7 +6526,7 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <GitCompare className="w-5 h-5 text-amber-600" />
                         <div>
-                          <h4 className="font-bold text-slate-800">Auditoria de XML — Divergências</h4>
+                          <h4 className="font-serif font-semibold text-slate-800">Auditoria de XML — Divergências</h4>
                           <div className="text-xs text-slate-400 font-medium">Comparado com: {auditoriaNomeArquivo}</div>
                         </div>
                       </div>
@@ -6781,7 +6786,7 @@ export default function App() {
                 <div className="bg-white rounded-3xl border-2 border-blue-600 p-8 shadow-xl no-print">
                   <div className="flex justify-between items-center mb-6">
                     <div>
-                      <h2 className="text-2xl font-bold text-slate-900">Relatório Consolidado</h2>
+                      <h2 className="font-serif text-2xl font-semibold text-slate-900">Relatório Consolidado</h2>
                       <p className="text-slate-500 mt-1">Edite a mensagem completa abaixo antes de enviar.</p>
                     </div>
                     <div className="flex items-center gap-3">
@@ -6822,7 +6827,7 @@ export default function App() {
                   <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
                     <CheckCircle2 className="w-10 h-10" />
                   </div>
-                  <h2 className="text-3xl font-black text-emerald-900">Sequência Totalmente Íntegra</h2>
+                  <h2 className="font-serif text-3xl font-semibold text-emerald-900">Sequência Totalmente Íntegra</h2>
                   <p className="text-emerald-700 font-medium max-w-xl mx-auto text-lg">
                     Parabéns! Todos os documentos fiscais foram identificados e a sequência numérica está completa para todas as séries analisadas.
                   </p>
@@ -6911,7 +6916,7 @@ export default function App() {
         <div className="hidden print:block print:px-3">
           <div className="print-header">
             <div className="flex items-baseline justify-between gap-6">
-              <div className="print-title" style={{color: '#020D2F'}}>Relatório de Auditoria de Sequência (Vendas/Saídas)</div>
+              <div className="print-title font-serif" style={{color: '#020D2F'}}>Relatório de Auditoria de Sequência (Vendas/Saídas)</div>
               <span className="shrink-0 text-[9px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full whitespace-nowrap" style={{background: '#f1f5f9', color: '#475569'}}>Cópia de Auditoria</span>
             </div>
             <div className="mt-2 flex flex-wrap items-baseline gap-x-8 gap-y-1 text-[11px]">
@@ -6931,7 +6936,7 @@ export default function App() {
           </div>
 
           <div className="print-section">
-            <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Resumo da Integridade</h3>
+            <h3 className="font-serif text-lg font-semibold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Resumo da Integridade</h3>
             <table>
               <thead>
                 <tr>
@@ -6974,7 +6979,7 @@ export default function App() {
           </div>
 
           <div className="print-section">
-            <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Detalhamento de Faltantes</h3>
+            <h3 className="font-serif text-lg font-semibold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Detalhamento de Faltantes</h3>
             {analysis.some(s => s.faltantes.length > 0) ? (
               <div className="space-y-6">
                 {analysis.filter(s => s.faltantes.length > 0).map((s, idx) => (
@@ -7012,7 +7017,7 @@ export default function App() {
             <>
               {breakdownPorCfop.length > 0 && (
                 <div className="print-section">
-                  <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Totais por Natureza da Operação (CFOP)</h3>
+                  <h3 className="font-serif text-lg font-semibold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Totais por Natureza da Operação (CFOP)</h3>
                   <table>
                     <thead>
                       <tr><th>CFOP</th><th>Natureza</th><th>Valor Contábil</th></tr>
@@ -7038,7 +7043,7 @@ export default function App() {
 
               {(notasAnomalias.semProtocolo.length > 0 || notasAnomalias.numeroDuplicado.length > 0 || notasAnomalias.semAutorizacaoNaoContingencia.length > 0 || notasAnomalias.foraDoPrazo.length > 0) && (
                 <div className="print-section">
-                  <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Anomalias Identificadas</h3>
+                  <h3 className="font-serif text-lg font-semibold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Anomalias Identificadas</h3>
 
                   {notasAnomalias.semProtocolo.length > 0 && (
                     <div className="mb-4">
@@ -7133,7 +7138,7 @@ export default function App() {
 
               {auditoriaRegime.totalNotas > 0 && (
                 <div className="print-section">
-                  <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de Regime Tributário</h3>
+                  <h3 className="font-serif text-lg font-semibold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de Regime Tributário</h3>
                   <div className="text-sm mb-3">
                     Regime predominante no período: <strong>{auditoriaRegime.crtPredominanteLabel}</strong> ({auditoriaRegime.totalNotas} nota(s) analisada(s)).
                     {auditoriaRegime.mudouNoPeriodo && <> O CRT declarado mudou dentro do período analisado — veja a tabela abaixo.</>}
@@ -7178,7 +7183,7 @@ export default function App() {
 
               {auditoriaIbsCbs.totalNotas > 0 && (
                 <div className="print-section">
-                  <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de IBS/CBS (Reforma Tributária)</h3>
+                  <h3 className="font-serif text-lg font-semibold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de IBS/CBS (Reforma Tributária)</h3>
                   <div className="text-sm mb-3">
                     <strong>{auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) ({auditoriaIbsCbs.pctComGrupo}%)</strong> já trazem o grupo IBS/CBS preenchido.
                     {auditoriaIbsCbs.pctComGrupo === 0 && ' Nenhuma nota desse período traz o grupo IBSCBS preenchido — 2026 é o período de teste da Reforma Tributária; vale confirmar com o suporte do sistema do cliente antes de virar obrigatório de verdade.'}
@@ -7213,7 +7218,7 @@ export default function App() {
                 const riscoObrigatoriedadePrint = !regimeTributario.isSimples && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
                 return (
                   <div className="print-section">
-                    <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de Pagamento (TEF)</h3>
+                    <h3 className="font-serif text-lg font-semibold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de Pagamento (TEF)</h3>
                     <div className="text-sm mb-3">
                       {auditoriaPagamento.totalCartao} venda(s) em cartão sujeita(s) a TEF: <strong>{auditoriaPagamento.totalIntegrado} integrada(s) ({pctIntegradoPrint}%)</strong>, {auditoriaPagamento.totalNaoIntegrado} via POS manual ({pctNaoIntegradoPrint}%){auditoriaPagamento.totalCartaoNaoAplicavel > 0 && <>, {auditoriaPagamento.totalCartaoNaoAplicavel} fora do escopo de TEF</>}.
                       {riscoObrigatoriedadePrint && <> <strong className="text-red-700">Alerta: empresa é {regimeTributario.label} — tem obrigatoriedade de TEF, e esse padrão costuma gerar autuação por falta de integração.</strong></>}
@@ -7260,7 +7265,7 @@ export default function App() {
               })()}
 
               <div className="print-section">
-                <h3 className="text-lg font-bold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Legenda de Termos Técnicos</h3>
+                <h3 className="font-serif text-lg font-semibold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Legenda de Termos Técnicos</h3>
                 <table>
                   <tbody>
                     <tr><td className="font-bold" style={{width: '160px'}}>TEF</td><td>Transferência Eletrônica de Fundos — integração automática entre a maquininha de cartão e o sistema/PDV, sem digitação manual.</td></tr>
