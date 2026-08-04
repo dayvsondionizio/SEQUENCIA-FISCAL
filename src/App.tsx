@@ -6352,15 +6352,15 @@ export default function App() {
               })()}
 
               {/* Filters */}
-              <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-nowrap items-center gap-3 overflow-x-auto no-print">
-                <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 font-bold text-sm px-2 shrink-0">
-                  <Filter className="w-4 h-4" />
+              <div className="bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-nowrap items-center gap-2 no-print">
+                <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 font-bold text-xs px-1 shrink-0">
+                  <Filter className="w-3.5 h-3.5" />
                   FILTROS:
                 </div>
                 <select
                   value={filterModelo}
                   onChange={(e) => setFilterModelo(e.target.value)}
-                  className="bg-slate-50 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none shrink-0"
+                  className="bg-slate-50 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1.5 text-xs font-medium focus:ring-2 focus:ring-blue-500 outline-none shrink-0"
                 >
                   <option value="Todos">Todos os Modelos</option>
                   <option value="55">Modelo 55 (NF-e)</option>
@@ -6369,7 +6369,7 @@ export default function App() {
                 <select
                   value={filterMes}
                   onChange={(e) => setFilterMes(e.target.value)}
-                  className="bg-slate-50 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none shrink-0"
+                  className="bg-slate-50 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1.5 text-xs font-medium focus:ring-2 focus:ring-blue-500 outline-none shrink-0"
                 >
                   <option value="Todos">Todos os Meses</option>
                   {mesesDisponiveis.map(m => (
@@ -6379,9 +6379,9 @@ export default function App() {
                 <div className="relative shrink-0">
                   <button
                     onClick={() => setShowExportXmlMenu(v => !v)}
-                    className="flex items-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer whitespace-nowrap"
+                    className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer whitespace-nowrap"
                   >
-                    <Download className="w-4 h-4" />
+                    <Download className="w-3.5 h-3.5" />
                     Exportar XMLs ({filterMes === 'Todos' ? 'Todos' : filterMes})
                   </button>
                   {showExportXmlMenu && (
@@ -6403,11 +6403,11 @@ export default function App() {
                 <div className="relative shrink-0">
                   <button
                     onClick={() => setShowExportOptions(!showExportOptions)}
-                    className="flex items-center gap-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer whitespace-nowrap"
+                    className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer whitespace-nowrap"
                   >
-                    <FileText className="w-4 h-4" />
-                    Exportar Planilha Detalhada
-                    <ChevronRight className={cn("w-3.5 h-3.5 transition-transform duration-300", showExportOptions && "rotate-90")} />
+                    <FileText className="w-3.5 h-3.5" />
+                    Planilha Detalhada
+                    <ChevronRight className={cn("w-3 h-3 transition-transform duration-300", showExportOptions && "rotate-90")} />
                   </button>
                   {showExportOptions && (
                     <div className="absolute left-0 top-full mt-2 z-20 w-72 bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden">
@@ -6449,23 +6449,23 @@ export default function App() {
                 <button
                   onClick={() => auditoriaInputRef.current?.click()}
                   disabled={auditoriaLoading}
-                  className="flex items-center gap-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm cursor-pointer disabled:opacity-60 shrink-0 whitespace-nowrap"
+                  className="flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer disabled:opacity-60 shrink-0 whitespace-nowrap"
                 >
-                  {auditoriaLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <GitCompare className="w-4 h-4" />}
+                  {auditoriaLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <GitCompare className="w-3.5 h-3.5" />}
                   {auditoriaLoading ? 'Comparando...' : 'Auditoria de XML'}
                 </button>
                 {analysis && (
                   <div className="relative shrink-0">
                     <button
                       onClick={() => setShowPrintMenu(v => !v)}
-                      className="flex items-center gap-1.5 text-white px-3 py-2.5 rounded-lg transition-all shadow-sm shrink-0"
+                      className="flex items-center gap-1 text-white px-2.5 py-1.5 rounded-lg transition-all shadow-sm shrink-0"
                       style={{background: '#020D2F'}}
                       title={window.self !== window.top
                         ? 'Imprimir Relatório / Exportar PDF — se não abrir, use o ícone "Abrir em nova aba" no topo.'
                         : 'Imprimir Relatório / Exportar PDF'}
                     >
-                      <Printer className="w-4 h-4" />
-                      <ChevronRight className={cn("w-3.5 h-3.5 transition-transform duration-300", showPrintMenu && "rotate-90")} />
+                      <Printer className="w-3.5 h-3.5" />
+                      <ChevronRight className={cn("w-3 h-3 transition-transform duration-300", showPrintMenu && "rotate-90")} />
                     </button>
                     {showPrintMenu && (
                       <div className="absolute right-0 top-full mt-2 z-20 w-80 bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden">
