@@ -903,6 +903,12 @@ export default function App() {
       Object.entries(porFormaPosManual).forEach(([forma, qtd]) => {
         texto += `      - ${forma}: ${qtd} venda${qtd !== 1 ? 's' : ''} sem TEF\n`;
       });
+      // Aqui é contagem de VENDAS (uma por forma usada), enquanto o número de
+      // POS manual acima é contagem de PAGAMENTOS — evita a dúvida de "por que
+      // a soma da lista não bate com o total lá em cima".
+      if (auditoriaPagamento.notasNaoIntegradas.length !== auditoriaPagamento.totalNaoIntegrado) {
+        texto += `      (contagem por venda; o total de ${auditoriaPagamento.totalNaoIntegrado} acima é por pagamento — pode diferir se alguma venda teve mais de um pagamento manual na mesma forma)\n`;
+      }
     }
     if (auditoriaPagamento.totalFalsoTef > 0) {
       texto += `  • ⚠ Falso TEF (declara integração mas sem autorização): ${auditoriaPagamento.totalFalsoTef} (${pctFalsoTef}%)\n`;
@@ -6281,6 +6287,11 @@ export default function App() {
                                 return (n.xml.numero || '').toLowerCase().includes(q) || (n.xml.serie || '').toLowerCase().includes(q);
                               }).length > 50 && (
                                 <p className="text-[11px] text-slate-400 mt-1.5">Mostrando 50 resultados. Refine a busca por número pra achar uma nota específica.</p>
+                              )}
+                              {auditoriaPagamento.notasNaoIntegradas.length !== auditoriaPagamento.totalNaoIntegrado && (
+                                <p className="text-[11px] text-slate-400 mt-1.5">
+                                  ℹ Essa tabela conta por venda; o total de {auditoriaPagamento.totalNaoIntegrado} POS manual no topo do card conta por pagamento — pode diferir se alguma venda teve mais de um pagamento manual na mesma forma. Isso é esperado, não é erro.
+                                </p>
                               )}
                             </div>
                           </div>
