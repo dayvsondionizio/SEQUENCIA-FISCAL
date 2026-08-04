@@ -1527,9 +1527,9 @@ export default function App() {
       );
       if (temGrupo) {
         notasComGrupo++;
-        if (amostraComGrupo.length < 5) amostraComGrupo.push(xml);
+        if (amostraComGrupo.length < 50) amostraComGrupo.push(xml);
       } else {
-        if (amostraSemGrupo.length < 5) amostraSemGrupo.push(xml);
+        if (amostraSemGrupo.length < 50) amostraSemGrupo.push(xml);
       }
     });
 
@@ -5679,8 +5679,8 @@ export default function App() {
                 </div>
               )}
 
-              {/* Card: Auditoria de IBS/CBS (Reforma Tributária) */}
-              {auditoriaIbsCbs.totalNotas > 0 && (() => {
+              {/* Card: Auditoria de IBS/CBS (Reforma Tributária) — aberto pelo card compacto na lateral direita */}
+              {showAuditoriaIbsCbs && auditoriaIbsCbs.totalNotas > 0 && (() => {
                 const corBordaIbsCbs = auditoriaIbsCbs.pctComGrupo === 0
                   ? 'border-l-rose-400'
                   : auditoriaIbsCbs.pctComGrupo === 100 ? 'border-l-emerald-400' : 'border-l-amber-400';
@@ -5699,15 +5699,14 @@ export default function App() {
                         </div>
                       </div>
                       <button
-                        onClick={() => setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs)}
+                        onClick={() => setShowAuditoriaIbsCbs(false)}
                         className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
                       >
-                        {showAuditoriaIbsCbs ? 'Ocultar' : 'Ver detalhes'}
+                        Ocultar
                       </button>
                     </div>
 
-                    {showAuditoriaIbsCbs && (
-                      <div className="space-y-4">
+                    <div className="space-y-4">
                         {auditoriaIbsCbs.pctComGrupo === 0 && (
                           <div className="rounded-xl px-4 py-3 text-xs bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
                             ⚠ Nenhuma nota desse período traz o grupo &lt;IBSCBS&gt; preenchido — 2026 é o período de teste da Reforma Tributária (0,1% IBS + 0,9% CBS, compensável). O sistema de emissão do cliente ainda não parece estar adaptado; vale confirmar com o suporte do sistema antes de virar obrigatório de verdade.
@@ -5726,10 +5725,10 @@ export default function App() {
 
                         {auditoriaIbsCbs.amostraSemGrupo.length > 0 && (
                           <div>
-                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Amostra sem o grupo IBS/CBS</div>
-                            <div className="overflow-x-auto">
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Amostra sem o grupo IBS/CBS ({auditoriaIbsCbs.amostraSemGrupo.length})</div>
+                            <div className="overflow-x-auto overflow-y-auto max-h-56">
                               <table className="w-full text-xs">
-                                <thead>
+                                <thead className="sticky top-0 bg-white dark:bg-slate-900">
                                   <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
                                     <th className="py-1.5 pr-3">Série</th>
                                     <th className="py-1.5 pr-3">Nº</th>
@@ -5762,10 +5761,10 @@ export default function App() {
 
                         {auditoriaIbsCbs.amostraComGrupo.length > 0 && (
                           <div>
-                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Amostra com o grupo IBS/CBS</div>
-                            <div className="overflow-x-auto">
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Amostra com o grupo IBS/CBS ({auditoriaIbsCbs.amostraComGrupo.length})</div>
+                            <div className="overflow-x-auto overflow-y-auto max-h-56">
                               <table className="w-full text-xs">
-                                <thead>
+                                <thead className="sticky top-0 bg-white dark:bg-slate-900">
                                   <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
                                     <th className="py-1.5 pr-3">Série</th>
                                     <th className="py-1.5 pr-3">Nº</th>
@@ -5795,14 +5794,13 @@ export default function App() {
                             </div>
                           </div>
                         )}
-                      </div>
-                    )}
+                    </div>
                   </div>
                 );
               })()}
 
-              {/* Card: Auditoria de Pagamento (TEF) */}
-              {(auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0) && (() => {
+              {/* Card: Auditoria de Pagamento (TEF) — aberto pelo card compacto na lateral direita */}
+              {showAuditoriaPagamento && (auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0) && (() => {
                 const pctNaoIntegrado = auditoriaPagamento.totalCartao > 0
                   ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
                   : 0;
@@ -5874,16 +5872,15 @@ export default function App() {
                           {copiedResumoTEF ? 'Copiado!' : 'Copiar Resumo'}
                         </button>
                         <button
-                          onClick={() => setShowAuditoriaPagamento(!showAuditoriaPagamento)}
+                          onClick={() => setShowAuditoriaPagamento(false)}
                           className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline"
                         >
-                          {showAuditoriaPagamento ? 'Ocultar' : 'Ver detalhes'}
+                          Ocultar
                         </button>
                       </div>
                     </div>
 
-                    {showAuditoriaPagamento && (
-                      <div className="space-y-4">
+                    <div className="space-y-4">
                         {auditoriaPagamento.breakdownPorTipoPagamento.length > 0 && (
                           <div>
                             <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
@@ -6160,8 +6157,7 @@ export default function App() {
                             </table>
                           </div>
                         )}
-                      </div>
-                    )}
+                    </div>
 
                     {responsavelTecnico.email && (
                       <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-400 dark:text-slate-500">
@@ -6798,6 +6794,63 @@ export default function App() {
                 </div>
               )}
               </div>
+
+              {/* Sidebar direita — auditorias compactas (IBS/CBS, TEF); clicar abre o detalhe no centro */}
+              <aside className="w-full lg:w-80 shrink-0 lg:sticky lg:top-6 space-y-6">
+                {auditoriaIbsCbs.totalNotas > 0 && (() => {
+                  const corIbsCbs = auditoriaIbsCbs.pctComGrupo === 0
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : auditoriaIbsCbs.pctComGrupo === 100 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400';
+                  return (
+                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">🧾 IBS/CBS</div>
+                        <button
+                          onClick={() => setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs)}
+                          title="Ver auditoria de IBS/CBS (Reforma Tributária)"
+                          className="inline-flex items-center justify-center cursor-pointer no-print"
+                        >
+                          <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showAuditoriaIbsCbs && "rotate-90")} />
+                        </button>
+                      </div>
+                      <div className={cn("text-3xl font-bold mt-2", corIbsCbs)}>{auditoriaIbsCbs.pctComGrupo}%</div>
+                      <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mt-1">
+                        {auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) com o grupo IBS/CBS
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {(auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0) && (() => {
+                  const pctNaoIntegradoResumo = auditoriaPagamento.totalCartao > 0
+                    ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
+                    : 0;
+                  const temProblemasTecnicos = auditoriaPagamento.problemas.length > 0;
+                  const riscoObrigatoriedade = !regimeTributario.isSimples && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
+                  const corTef = temProblemasTecnicos || riscoObrigatoriedade
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : pctNaoIntegradoResumo >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-blue-600 dark:text-blue-400';
+                  return (
+                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">💳 TEF</div>
+                        <button
+                          onClick={() => setShowAuditoriaPagamento(!showAuditoriaPagamento)}
+                          title="Ver auditoria de pagamento (TEF)"
+                          className="inline-flex items-center justify-center cursor-pointer no-print"
+                        >
+                          <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showAuditoriaPagamento && "rotate-90")} />
+                        </button>
+                      </div>
+                      <div className={cn("text-3xl font-bold mt-2", corTef)}>{pctNaoIntegradoResumo}%</div>
+                      <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mt-1">
+                        {auditoriaPagamento.totalNaoIntegrado} POS manual de {auditoriaPagamento.totalCartao} sujeita(s) a TEF
+                        {temProblemasTecnicos && <span className="text-rose-500 dark:text-rose-400"> · {auditoriaPagamento.problemas.length} problema(s)</span>}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </aside>
             </motion.div>
           )}
         </AnimatePresence>
