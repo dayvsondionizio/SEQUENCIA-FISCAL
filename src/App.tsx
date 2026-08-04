@@ -5989,9 +5989,16 @@ export default function App() {
                             "rounded-xl px-4 py-3 text-xs",
                             riscoObrigatoriedade ? "bg-rose-50 dark:bg-rose-950 text-rose-800 dark:text-rose-200 border border-rose-200 dark:border-rose-800"
                               : pctNaoIntegrado >= 50 ? "bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800"
+                              : pctNaoIntegrado === 0 ? "bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800"
                               : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
                           )}>
-                            <span className="font-bold">{pctNaoIntegrado}% das vendas em cartão sujeitas a TEF</span> não passaram pelo TEF (POS manual, tpIntegra=2).
+                            {pctNaoIntegrado === 0 ? (
+                              <span className="font-bold">✓ 100% das vendas em cartão sujeitas a TEF passaram pelo TEF integrado</span>
+                            ) : pctNaoIntegrado === 100 ? (
+                              <span className="font-bold">⚠ Nenhuma das vendas em cartão sujeitas a TEF passou pelo TEF integrado — todas foram digitadas manualmente no POS (tpIntegra=2)</span>
+                            ) : (
+                              <><span className="font-bold">{pctNaoIntegrado}% ({auditoriaPagamento.totalNaoIntegrado} de {auditoriaPagamento.totalCartao})</span> das vendas em cartão sujeitas a TEF foram digitadas manualmente no POS, sem passar pelo TEF integrado (tpIntegra=2)</>
+                            )}.
                             {riscoObrigatoriedade && (
                               <span> <strong>Alerta: empresa é {regimeTributario.label} — tem obrigatoriedade de TEF.</strong> Esse é o padrão que costuma gerar autuação por falta de integração TEF. Confirme com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
                             )}
