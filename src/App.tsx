@@ -718,7 +718,7 @@ function SpedValidationPanel({ spedData, crossRef, onClose }: SpedValidationPane
   return (
     <div className="mx-6 mb-0 mt-0 border-t border-slate-100/50 pt-4 pb-3">
       <div className={cn(
-        'rounded-xl border px-4 py-3 text-sm',
+        'rounded-lg border px-4 py-3 text-sm',
         temFaltantes
           ? 'bg-amber-50 border-amber-200'
           : 'bg-emerald-50 border-emerald-200'
@@ -922,7 +922,7 @@ export default function App() {
   const ThemeToggle = () => (
     <button
       onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
-      className="flex items-center gap-2 px-3 py-2 rounded-xl text-white text-sm font-bold transition-all no-print shrink-0"
+      className="flex items-center gap-2 px-3 py-2 rounded-lg text-white text-sm font-bold transition-all no-print shrink-0"
       style={{background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(240,180,41,0.35)'}}
       title={theme === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
     >
@@ -4150,7 +4150,7 @@ export default function App() {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
               onClick={e => e.stopPropagation()}
-              className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-6"
+              className="bg-white dark:bg-slate-900 rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-6"
             >
               <div className="flex items-start justify-between mb-1">
                 <h3 className="font-serif text-base font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-2">
@@ -4170,11 +4170,11 @@ export default function App() {
               ) : (
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-3">
-                    <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-3">
+                    <div className="bg-slate-50 dark:bg-slate-800 rounded-lg p-3">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Regime predominante</div>
                       <div className="text-sm font-bold text-slate-800 dark:text-slate-100 mt-0.5">{auditoriaRegime.crtPredominanteLabel} (CRT={auditoriaRegime.crtPredominante})</div>
                     </div>
-                    <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-3">
+                    <div className="bg-slate-50 dark:bg-slate-800 rounded-lg p-3">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Notas analisadas</div>
                       <div className="text-sm font-bold text-slate-800 dark:text-slate-100 mt-0.5">{auditoriaRegime.totalNotas}</div>
                     </div>
@@ -4218,7 +4218,7 @@ export default function App() {
                   </div>
 
                   <div className={cn(
-                    "rounded-xl px-3 py-2.5 text-[11px]",
+                    "rounded-lg px-3 py-2.5 text-[11px]",
                     auditoriaRegime.consistente
                       ? "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
                       : "bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800"
@@ -4253,7 +4253,7 @@ export default function App() {
                       value={auditoriaRegimeBusca}
                       onChange={e => setAuditoriaRegimeBusca(e.target.value)}
                       placeholder="Buscar por número ou série..."
-                      className="w-full max-w-xs mb-2 px-3 py-1.5 text-xs border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="w-full max-w-xs mb-2 px-3 py-1.5 text-xs border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-200"
                     />
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs">
@@ -4308,8 +4308,9 @@ export default function App() {
       </AnimatePresence>
 
       {/* Header */}
-      <header className="text-white shadow-2xl" style={{background: '#020D2F'}}>
-        <div className="max-w-[1920px] mx-auto px-6 py-8 print:px-4 print:py-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+      <header className="text-white relative print:shadow-none" style={{background: '#020D2F', boxShadow: '0 12px 32px -12px rgba(2,13,47,0.45)'}}>
+        <div className="absolute inset-x-0 bottom-0 h-[3px] print:hidden" style={{background: 'linear-gradient(90deg, transparent, #F0B429 20%, #F0B429 80%, transparent)'}} />
+        <div className="max-w-[1920px] mx-auto px-6 pt-8 pb-14 print:px-4 print:py-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div className="flex items-center gap-5 print:gap-4">
             <img src="/logo-sf.png" alt="Contador de Padarias" className="h-16 print:h-14 object-contain" />
             <div className="hidden md:block w-px h-12 print:h-10 bg-white/15" />
@@ -4325,7 +4326,7 @@ export default function App() {
                 <ThemeToggle />
                 <button
                   onClick={reset}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-bold transition-all shrink-0"
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-bold transition-all shrink-0"
                   style={{background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(240,180,41,0.35)'}}
                 >
                   <FileSearch className="w-4 h-4" />
@@ -4335,7 +4336,7 @@ export default function App() {
               <motion.div
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="backdrop-blur-md rounded-2xl p-5 flex flex-col gap-1 min-w-[360px] shadow-2xl"
+                className="backdrop-blur-md rounded-xl p-5 flex flex-col gap-1 min-w-[360px] shadow-2xl"
                 style={{background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(240,180,41,0.2)'}}
               >
                 <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
@@ -4414,9 +4415,9 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-[1920px] mx-auto p-6 lg:p-8 no-print flex-1 w-full">
+      <main className="max-w-[1920px] mx-auto px-6 lg:px-8 pb-6 lg:pb-8 -mt-8 relative z-10 no-print flex-1 w-full">
         {extractionErrors.length > 0 && (
-          <div className="bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-800 border-l-4 border-l-rose-500 rounded-2xl p-5 mb-6 shadow-sm">
+          <div className="bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-800 border-l-4 border-l-rose-500 rounded-xl p-5 mb-6">
             <div className="flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
@@ -4458,7 +4459,7 @@ export default function App() {
                 <motion.div 
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden"
+                  className="bg-white rounded-2xl border border-slate-200 overflow-hidden"
                 >
                   <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
                     <h4 className="font-bold text-slate-800 flex items-center gap-2">
@@ -4494,7 +4495,7 @@ export default function App() {
 
                   {fornecedorEntradaInfo && (
                     <div className="mx-6 mb-0 mt-0 border-t border-slate-100/50 pt-4 pb-2">
-                      <div className="flex items-start gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-blue-700 text-sm">
+                      <div className="flex items-start gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-blue-700 text-sm">
                         <svg className="w-4 h-4 mt-0.5 shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                         <div>
                           <span className="font-bold">{fornecedorEntradaInfo.count} nota{fornecedorEntradaInfo.count !== 1 ? 's' : ''} de entrada de fornecedor</span> detectada{fornecedorEntradaInfo.count !== 1 ? 's' : ''} e ignorada{fornecedorEntradaInfo.count !== 1 ? 's' : ''} — o app analisa apenas saídas da empresa auditada.
@@ -4610,7 +4611,7 @@ export default function App() {
                       <button 
                         onClick={runAnalysis}
                         disabled={xmlList.length === 0}
-                        className="flex items-center gap-2 px-10 py-5 text-white rounded-2xl font-bold text-xl transition-all shadow-lg disabled:opacity-50 disabled:grayscale scale-105 active:scale-100"
+                        className="flex items-center gap-2 px-10 py-5 text-white rounded-xl font-bold text-xl transition-all shadow-lg disabled:opacity-50 disabled:grayscale scale-105 active:scale-100"
                       style={{background: '#020D2F', boxShadow: '0 8px 32px rgba(2,13,47,0.4)'}}
                       >
                         <CheckCircle2 className="w-7 h-7" />
@@ -4618,7 +4619,7 @@ export default function App() {
                       </button>
                       <button 
                         onClick={reset}
-                        className="flex items-center gap-2 px-8 py-5 bg-white border border-slate-200 text-slate-600 rounded-2xl font-bold hover:bg-slate-50 transition-all active:scale-95"
+                        className="flex items-center gap-2 px-8 py-5 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all active:scale-95"
                       >
                         <Trash2 className="w-5 h-5" />
                         Limpar
@@ -4631,7 +4632,7 @@ export default function App() {
               {/* Upload Area - Now becomes smaller if data is present */}
               <div
                 className={cn(
-                  "relative group bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-3xl transition-all duration-500",
+                  "relative group bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl transition-all duration-500",
                   stats.totalFiles > 0 ? "p-8 opacity-60 hover:opacity-100" : "p-12 text-center",
                   "hover:border-blue-400 dark:hover:border-blue-500 hover:bg-blue-50/30 dark:hover:bg-blue-950/30 cursor-pointer"
                 )}
@@ -4688,7 +4689,7 @@ export default function App() {
                 </div>
 
                 {extractionStatus && (
-                  <div className="flex items-center gap-3 text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950 px-6 py-3 rounded-2xl border border-emerald-100 dark:border-emerald-900 animate-pulse mb-6 shadow-sm">
+                  <div className="flex items-center gap-3 text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950 px-6 py-3 rounded-xl border border-emerald-100 dark:border-emerald-900 animate-pulse mb-6">
                     <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-bounce"></div>
                     <span className="text-sm font-black uppercase tracking-wider">{extractionStatus}</span>
                   </div>
@@ -4697,7 +4698,7 @@ export default function App() {
                 <div className="flex flex-col items-center">
                     <button 
                       onClick={() => fileInputRef.current?.click()}
-                      className="flex items-center gap-3 px-10 py-5 text-white rounded-2xl font-bold transition-all active:scale-95 hover:scale-[1.02] shadow-xl"
+                      className="flex items-center gap-3 px-10 py-5 text-white rounded-xl font-bold transition-all active:scale-95 hover:scale-[1.02] shadow-xl"
                       style={{background: '#020D2F'}}
                     >
                       <Upload className="w-6 h-6 text-blue-400" />
@@ -4737,7 +4738,7 @@ export default function App() {
             >
               {/* Sidebar — summary + search, stays in view while the main content scrolls */}
               <aside className="w-full lg:w-80 shrink-0 lg:sticky lg:top-6 space-y-6">
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
                   <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total de Saídas Auditadas (Válidas)</div>
                   <div className="text-3xl font-bold text-emerald-600 dark:text-emerald-400 mt-2">
                     {formatarMoeda(faturamentoTotal)}
@@ -4752,7 +4753,7 @@ export default function App() {
                     </button>
                   )}
                 </div>
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition-all">
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700 transition-all">
                   <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Período Analisado</div>
                   <div className="text-xl font-bold text-slate-900 dark:text-slate-100 mt-2">
                     {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
@@ -4771,7 +4772,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
                   <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide mb-3">Pesquisar Notas de Saída</div>
                   <div className="flex flex-col gap-2">
                     <div className="relative">
@@ -4781,13 +4782,13 @@ export default function App() {
                         value={notaSearchQuery}
                         onChange={(e) => setNotaSearchQuery(e.target.value)}
                         placeholder={`Buscar por ${notaSearchCampo === 'Item' ? 'produto' : notaSearchCampo.toLowerCase()}...`}
-                        className="w-full pl-11 pr-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        className="w-full pl-11 pr-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                       />
                     </div>
                     <select
                       value={notaSearchCampo}
                       onChange={(e) => setNotaSearchCampo(e.target.value as typeof notaSearchCampo)}
-                      className="px-3 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
                     >
                       <option value="Numero">Só Número</option>
                       <option value="Chave">Só Chave</option>
@@ -4799,7 +4800,7 @@ export default function App() {
                     <select
                       value={filterNotaModelo}
                       onChange={(e) => setFilterNotaModelo(e.target.value)}
-                      className="px-3 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
                     >
                       <option value="Todos">Todos os modelos</option>
                       {modelosDisponiveis.map(modelo => (
@@ -4811,7 +4812,7 @@ export default function App() {
                     <select
                       value={filterNotaSituacao}
                       onChange={(e) => setFilterNotaSituacao(e.target.value)}
-                      className="px-3 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
                     >
                       <option value="Todas">Todas as situações</option>
                       <option value="Válidas">Somente válidas</option>
@@ -4824,7 +4825,7 @@ export default function App() {
                       <select
                         value={filterNotaCfop}
                         onChange={(e) => setFilterNotaCfop(e.target.value)}
-                        className="px-3 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
                       >
                         <option value="Todos">Todos os CFOPs</option>
                         {cfopsDisponiveis.map(cfop => (
@@ -4836,7 +4837,7 @@ export default function App() {
                 </div>
 
                 {/* SPED Fiscal card — compacto, abre para a direita */}
-                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden no-print">
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden no-print">
                   <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide px-6 pt-5 pb-3 flex items-center justify-between">
                     SPED Fiscal
                     {spedData && (
@@ -4857,7 +4858,7 @@ export default function App() {
                       </p>
                       <button
                         onClick={() => spedInputRef.current?.click()}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-700 transition-colors"
+                        className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-700 transition-colors"
                       >
                         <Upload className="w-3.5 h-3.5" />
                         Anexar SPED (.txt)
@@ -4941,7 +4942,7 @@ export default function App() {
                   return isNaN(n) ? v : n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
                 };
                 return (
-                  <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden no-print">
+                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden no-print">
                     {/* Cabeçalho */}
                     <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-4">
                       <div>
@@ -4950,7 +4951,7 @@ export default function App() {
                       </div>
                       <button
                         onClick={() => setSpedCardOpen(false)}
-                        className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors shrink-0"
+                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors shrink-0"
                         title="Fechar"
                       >
                         <X className="w-4 h-4" />
@@ -4998,7 +4999,7 @@ export default function App() {
 
                     {/* Banner de período parcial */}
                     {spedCrossRef.mesesFora.length > 0 && (
-                      <div className="mx-6 my-3 px-4 py-3 bg-orange-50 border border-orange-200 rounded-2xl text-xs text-orange-800">
+                      <div className="mx-6 my-3 px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl text-xs text-orange-800">
                         <strong>⚠ SPED com período parcial</strong> — cobre apenas {spedCrossRef.periodo}.<br />
                         XMLs de <strong>{spedCrossRef.mesesFora.join(', ')}</strong> ({spedCrossRef.xmlsForaPeriodo.length} notas) estão fora do período declarado e não podem ser comparados com este SPED.
                       </div>
@@ -5021,7 +5022,7 @@ export default function App() {
                               key={f}
                               onClick={() => setSpedCardFiltro(f)}
                               className={cn(
-                                'px-3 py-1.5 rounded-xl text-[11px] font-semibold transition-colors',
+                                'px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors',
                                 spedCardFiltro === f
                                   ? f === 'SemXML'
                                     ? 'bg-amber-100 text-amber-800 border border-amber-300'
@@ -5045,7 +5046,7 @@ export default function App() {
                           value={spedSearch}
                           onChange={e => setSpedSearch(e.target.value)}
                           placeholder="Buscar número, chave, data…"
-                          className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-300 bg-slate-50"
+                          className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-300 bg-slate-50"
                         />
                         {spedSearch && (
                           <button onClick={() => setSpedSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
@@ -5055,7 +5056,7 @@ export default function App() {
                       </div>
                       <button
                         onClick={exportarSpedTabelaExcel}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0"
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0"
                         title="Exporta a lista atual (respeitando o filtro e a busca) para Excel"
                       >
                         <Download className="w-3 h-3" />
@@ -5170,7 +5171,7 @@ export default function App() {
               {/* Selection bar — always visible regardless of the current search/filter, since
                   selections made across earlier searches must stay reachable and downloadable. */}
               {notasSelecionadas.size > 0 && (
-                <div className="bg-white p-4 rounded-3xl border border-slate-200 shadow-sm no-print">
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 no-print">
                   <div className="flex flex-wrap items-center gap-3">
                     <button
                       onClick={() => setShowSelecionadas(!showSelecionadas)}
@@ -5182,7 +5183,7 @@ export default function App() {
                     <button
                       onClick={() => baixarDanfesSelecionados()}
                       disabled={!!baixandoLote}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold disabled:opacity-40 hover:bg-slate-700 transition-all"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold disabled:opacity-40 hover:bg-slate-700 transition-all"
                     >
                       <Download className="w-3.5 h-3.5" />
                       {baixandoLote?.tipo === 'danfe' ? `Gerando ${baixandoLote.atual}/${baixandoLote.total}...` : 'Baixar DANFEs (.zip)'}
@@ -5190,14 +5191,14 @@ export default function App() {
                     <button
                       onClick={() => baixarXmlsSelecionados()}
                       disabled={!!baixandoLote}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold disabled:opacity-40 hover:bg-slate-50 transition-all"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 text-xs font-bold disabled:opacity-40 hover:bg-slate-50 transition-all"
                     >
                       <Download className="w-3.5 h-3.5" />
                       Baixar XMLs (.zip)
                     </button>
                     <button
                       onClick={() => setNotasSelecionadas(new Set())}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-slate-500 text-xs font-bold hover:text-slate-700 transition-all ml-auto"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-500 text-xs font-bold hover:text-slate-700 transition-all ml-auto"
                     >
                       <X className="w-3.5 h-3.5" />
                       Limpar seleção
@@ -5226,7 +5227,7 @@ export default function App() {
 
               {/* Search results — opens here in the main area as soon as the sidebar search has a query/filter active */}
               {(notaSearchQuery.trim() || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas' || filterNotaCfop !== 'Todos') && (
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700">
                   <div className="overflow-x-auto overflow-y-auto max-h-[520px] custom-scrollbar">
                     {notasSaidaFiltradas.length === 0 ? (
                       <p className="text-sm text-slate-400 dark:text-slate-500 py-4 text-center">Nenhuma nota encontrada com os filtros atuais.</p>
@@ -5301,7 +5302,7 @@ export default function App() {
                                     <button
                                       onClick={() => baixarDanfe(nota)}
                                       disabled={downloadingDanfeChave === nota.chave || !nota.rawXml}
-                                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 transition-all"
+                                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 transition-all"
                                     >
                                       <Download className="w-3.5 h-3.5" />
                                       {downloadingDanfeChave === nota.chave ? 'Gerando...' : 'Baixar'}
@@ -5322,7 +5323,7 @@ export default function App() {
               )}
 
               {showDaysDetail && periodoAnalise.diasComContagem && periodoAnalise.diasComContagem.length > 0 && (
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700">
                   <div className="flex items-center justify-between mb-4">
                     <div className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Notas por Dia</div>
                     <button
@@ -5370,7 +5371,7 @@ export default function App() {
               )}
 
               {showCfopBreakdown && breakdownPorCfop.length > 0 && (
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm mb-6">
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Totais por Natureza da Operação (CFOP)</div>
                     <button
@@ -5430,7 +5431,7 @@ export default function App() {
 
               {/* Painel de problemas reais: sem protocolo + número duplicado */}
               {(notasAnomalias.semProtocolo.length > 0 || notasAnomalias.numeroDuplicado.length > 0) && (
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-amber-400 rounded-2xl p-6 mb-6 shadow-sm">
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-amber-400 rounded-xl p-6 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                       <AlertTriangle className="w-5 h-5 text-amber-500" />
@@ -5508,7 +5509,7 @@ export default function App() {
                           </div>
                           <div className="space-y-3">
                             {notasAnomalias.numeroDuplicado.map((grupo, i) => (
-                              <div key={i} className="bg-white rounded-xl border border-amber-200 p-3">
+                              <div key={i} className="bg-white rounded-lg border border-amber-200 p-3">
                                 <div className="text-xs font-bold text-amber-700 mb-2">
                                   Série {grupo[0].serie} · Nº {grupo[0].numero}
                                 </div>
@@ -5535,7 +5536,7 @@ export default function App() {
 
               {/* Card: Sem Autorização (não contingência) */}
               {notasAnomalias.semAutorizacaoNaoContingencia.length > 0 && (
-                <div className="bg-white dark:bg-slate-900 border-l-4 border-l-slate-400 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 mb-6 shadow-sm">
+                <div className="bg-white dark:bg-slate-900 border-l-4 border-l-slate-400 border border-slate-200 dark:border-slate-700 rounded-xl p-6 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                       <Ban className="w-5 h-5 text-slate-400 dark:text-slate-500" />
@@ -5604,7 +5605,7 @@ export default function App() {
                         </table>
                       </div>
                       {notasAnomalias.semAutorizacaoNaoContingencia.some(x => x.temInutilizacao) && (
-                        <div className="mt-3 text-xs text-orange-700 dark:text-orange-300 bg-orange-50 dark:bg-orange-950 border border-orange-200 dark:border-orange-800 rounded-xl px-3 py-2">
+                        <div className="mt-3 text-xs text-orange-700 dark:text-orange-300 bg-orange-50 dark:bg-orange-950 border border-orange-200 dark:border-orange-800 rounded-lg px-3 py-2">
                           <span className="font-bold">⚠ Atenção:</span> uma ou mais notas acima têm o mesmo série/número de uma inutilização registrada. Verifique se a numeração foi reaproveitada indevidamente.
                         </div>
                       )}
@@ -5615,7 +5616,7 @@ export default function App() {
 
               {/* Painel informativo: contingência autorizada fora do prazo */}
               {notasAnomalias.foraDoPrazo.length > 0 && (
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-orange-400 rounded-2xl p-6 mb-6 shadow-sm">
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-orange-400 rounded-xl p-6 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                       <Clock className="w-5 h-5 text-orange-400" />
@@ -5692,7 +5693,7 @@ export default function App() {
                   ? 'border-l-rose-400'
                   : auditoriaIbsCbs.pctComGrupo === 100 ? 'border-l-emerald-400' : 'border-l-amber-400';
                 return (
-                  <div className={cn("bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 rounded-2xl p-6 mb-6 shadow-sm", corBordaIbsCbs)}>
+                  <div className={cn("bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 rounded-xl p-6 mb-6", corBordaIbsCbs)}>
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
                         <Receipt className="w-5 h-5 text-blue-500" />
@@ -5715,17 +5716,17 @@ export default function App() {
 
                     <div className="space-y-4">
                         {auditoriaIbsCbs.pctComGrupo === 0 && (
-                          <div className="rounded-xl px-4 py-3 text-xs bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                          <div className="rounded-lg px-4 py-3 text-xs bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
                             ⚠ Nenhuma nota desse período traz o grupo &lt;IBSCBS&gt; preenchido — 2026 é o período de teste da Reforma Tributária (0,1% IBS + 0,9% CBS, compensável). O sistema de emissão do cliente ainda não parece estar adaptado; vale confirmar com o suporte do sistema antes de virar obrigatório de verdade.
                           </div>
                         )}
                         {auditoriaIbsCbs.pctComGrupo === 100 && (
-                          <div className="rounded-xl px-4 py-3 text-xs bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                          <div className="rounded-lg px-4 py-3 text-xs bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                             ✓ 100% das notas desse período já trazem o grupo IBS/CBS — sistema do cliente parece adaptado à Reforma Tributária.
                           </div>
                         )}
                         {auditoriaIbsCbs.pctComGrupo > 0 && auditoriaIbsCbs.pctComGrupo < 100 && (
-                          <div className="rounded-xl px-4 py-3 text-xs bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                          <div className="rounded-lg px-4 py-3 text-xs bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
                             ⚠ Só parte das notas traz o grupo IBS/CBS — pode ser uma atualização de sistema no meio do período (confira as datas das amostras abaixo) ou inconsistência a esclarecer com o suporte do sistema.
                           </div>
                         )}
@@ -5822,7 +5823,7 @@ export default function App() {
                   ? 'border-l-rose-400'
                   : pctNaoIntegrado >= 50 ? 'border-l-amber-400' : 'border-l-blue-400';
                 return (
-                  <div className={cn("bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 rounded-2xl p-6 mb-6 shadow-sm", corBorda)}>
+                  <div className={cn("bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 rounded-xl p-6 mb-6", corBorda)}>
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
                         <CreditCard className="w-5 h-5 text-blue-500" />
@@ -5900,7 +5901,7 @@ export default function App() {
                                   <div
                                     key={b.tPag}
                                     className={cn(
-                                      "border rounded-xl px-3 py-2",
+                                      "border rounded-lg px-3 py-2",
                                       temProblemaNesseTipo
                                         ? "bg-rose-50 dark:bg-rose-950 border-rose-200 dark:border-rose-800"
                                         : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700"
@@ -5938,7 +5939,7 @@ export default function App() {
                                 .reduce((s, p) => s + (parseFloat(p.xml.valor || '0') || 0), 0);
                               const explicadoPorSemPagamento = !valorBate && valorProblemasTPag90 > 0 && Math.abs(diffValor - valorProblemasTPag90) < diffValor * 0.15;
                               return (
-                                <div className="mt-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-xl px-3 py-2.5 text-[11px] text-blue-800 dark:text-blue-200 space-y-1.5">
+                                <div className="mt-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2.5 text-[11px] text-blue-800 dark:text-blue-200 space-y-1.5">
                                   <div className="font-bold uppercase tracking-wider text-[10px] text-blue-500 dark:text-blue-400">Observação sobre os números acima</div>
                                   <div>
                                     {valorBate ? '✓' : '⚠'} <strong>Valores:</strong> a soma das formas de pagamento ({formatarMoeda(somaValores)}) {valorBate ? 'bate exatamente' : 'diverge'} com o Total de Saídas Auditadas ({formatarMoeda(faturamentoTotal)})
@@ -5974,7 +5975,7 @@ export default function App() {
                         )}
 
                         {auditoriaPagamento.totalCartao === 0 ? (
-                          <div className="rounded-xl px-4 py-3 text-xs bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 space-y-1">
+                          <div className="rounded-lg px-4 py-3 text-xs bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 space-y-1">
                             <div>
                               Nenhuma venda em cartão dentro do escopo de obrigatoriedade de TEF nesse período
                               {auditoriaPagamento.totalCartaoNaoAplicavel > 0 && <> — os {auditoriaPagamento.totalCartaoNaoAplicavel} pagamento(s) em cartão encontrados caem em pelo menos um destes motivos:</>}.
@@ -5993,7 +5994,7 @@ export default function App() {
                           </div>
                         ) : (
                           <div className={cn(
-                            "rounded-xl px-4 py-3 text-xs",
+                            "rounded-lg px-4 py-3 text-xs",
                             riscoObrigatoriedade ? "bg-rose-50 dark:bg-rose-950 text-rose-800 dark:text-rose-200 border border-rose-200 dark:border-rose-800"
                               : pctNaoIntegrado >= 50 ? "bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800"
                               : pctNaoIntegrado === 0 ? "bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800"
@@ -6033,7 +6034,7 @@ export default function App() {
                               value={auditoriaPagamentoBusca}
                               onChange={e => setAuditoriaPagamentoBusca(e.target.value)}
                               placeholder="Buscar por número ou série..."
-                              className="w-full max-w-xs mb-2 px-3 py-1.5 text-xs border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-300"
+                              className="w-full max-w-xs mb-2 px-3 py-1.5 text-xs border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-300"
                             />
                             <div className="overflow-x-auto overflow-y-auto max-h-56">
                               <table className="w-full text-xs">
@@ -6188,7 +6189,7 @@ export default function App() {
                 const faltantesBrutos = faltantesLiquidos + totalManual;
 
                 return (
-                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+                  <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
                     <div className={cn(
                       "grid grid-cols-2 divide-y divide-slate-100 dark:divide-slate-800 md:divide-y-0 md:divide-x",
                       totalManual > 0 ? "md:grid-cols-3 lg:grid-cols-6" : "md:grid-cols-4"
@@ -6270,7 +6271,7 @@ export default function App() {
                 const modelosComFaltante = Array.from(new Set(analysis.filter(s => s.faltantes.length > 0).map(s => s.modelo)));
 
                 return (
-                  <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col gap-3 no-print">
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col gap-3 no-print">
                     {exibirBotoes && (
                       <>
                         <div className="text-sm text-amber-800">
@@ -6280,7 +6281,7 @@ export default function App() {
                           {seriePendenteNfce && (
                             <button
                               onClick={() => consultarInutilizadasNoPortal(seriePendenteNfce.cnpj, -1, PORTAL_INUTILIZADAS_NFCE_PE, '65')}
-                              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
+                              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
                             >
                               <Copy className="w-3.5 h-3.5" />
                               {copiedCnpjIdx === -1 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações NFC-e no Portal'}
@@ -6289,7 +6290,7 @@ export default function App() {
                           {seriePendenteNfe && (
                             <button
                               onClick={() => consultarInutilizadasNoPortal(seriePendenteNfe.cnpj, -2, PORTAL_INUTILIZADAS_NFE_PE, '55')}
-                              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
+                              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
                             >
                               <Copy className="w-3.5 h-3.5" />
                               {copiedCnpjIdx === -2 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações NF-e no Portal'}
@@ -6305,7 +6306,7 @@ export default function App() {
                           <select
                             value={manualInutModelo}
                             onChange={(e) => setManualInutModelo(e.target.value)}
-                            className="px-3 py-2 rounded-xl border border-amber-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                            className="px-3 py-2 rounded-lg border border-amber-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
                           >
                             {(modelosComFaltante.length > 0 ? modelosComFaltante : ['65', '55']).map(m => (
                               <option key={m} value={m}>{m === '55' ? 'NF-e (55)' : 'NFC-e (65)'}</option>
@@ -6319,7 +6320,7 @@ export default function App() {
                             value={manualInutSerie}
                             onChange={(e) => setManualInutSerie(e.target.value)}
                             placeholder="Ex: 101"
-                            className="w-24 px-3 py-2 rounded-xl border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                            className="w-24 px-3 py-2 rounded-lg border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
                           />
                         </div>
                         <div>
@@ -6328,7 +6329,7 @@ export default function App() {
                             type="number"
                             value={manualInutIni}
                             onChange={(e) => setManualInutIni(e.target.value)}
-                            className="w-28 px-3 py-2 rounded-xl border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                            className="w-28 px-3 py-2 rounded-lg border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
                           />
                         </div>
                         <div>
@@ -6337,7 +6338,7 @@ export default function App() {
                             type="number"
                             value={manualInutFim}
                             onChange={(e) => setManualInutFim(e.target.value)}
-                            className="w-28 px-3 py-2 rounded-xl border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                            className="w-28 px-3 py-2 rounded-lg border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
                           />
                         </div>
                         <div>
@@ -6346,12 +6347,12 @@ export default function App() {
                             type="date"
                             value={manualInutData}
                             onChange={(e) => setManualInutData(e.target.value)}
-                            className="px-3 py-2 rounded-xl border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                            className="px-3 py-2 rounded-lg border border-amber-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
                           />
                         </div>
                         <button
                           onClick={confirmarInutilizacaoManual}
-                          className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-700 transition-all"
+                          className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-700 transition-all"
                         >
                           Confirmar Inutilização
                         </button>
@@ -6362,7 +6363,7 @@ export default function App() {
               })()}
 
               {/* Filters */}
-              <div className="bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-nowrap items-center gap-2 no-print">
+              <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-nowrap items-center gap-2 no-print">
                 <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 font-bold text-xs px-1 shrink-0">
                   <Filter className="w-3.5 h-3.5" />
                   FILTROS:
@@ -6395,7 +6396,7 @@ export default function App() {
                     Exportar XMLs ({filterMes === 'Todos' ? 'Todos' : filterMes})
                   </button>
                   {showExportXmlMenu && (
-                    <div className="absolute left-0 top-full mt-2 z-20 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-lg overflow-hidden w-52">
+                    <div className="absolute left-0 top-full mt-2 z-20 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg overflow-hidden w-52">
                       <div className="px-4 py-2 text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider border-b border-slate-100 dark:border-slate-800">Dividir em quantos arquivos?</div>
                       {([1, 2, 3] as const).map(n => (
                         <button
@@ -6420,7 +6421,7 @@ export default function App() {
                     <ChevronRight className={cn("w-3 h-3 transition-transform duration-300", showExportOptions && "rotate-90")} />
                   </button>
                   {showExportOptions && (
-                    <div className="absolute left-0 top-full mt-2 z-20 w-72 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-lg overflow-hidden">
+                    <div className="absolute left-0 top-full mt-2 z-20 w-72 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg overflow-hidden">
                       <button
                         onClick={() => { exportarPlanilhaDetalhadaCompleta(); setShowExportOptions(false); }}
                         className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all border-b border-slate-100 dark:border-slate-800"
@@ -6468,7 +6469,7 @@ export default function App() {
                   <div className="relative shrink-0">
                     <button
                       onClick={() => setShowPrintMenu(v => !v)}
-                      className="flex items-center gap-1 text-white px-2.5 py-1.5 rounded-lg transition-all shadow-sm shrink-0"
+                      className="flex items-center gap-1 text-white px-2.5 py-1.5 rounded-lg transition-all shrink-0"
                       style={{background: '#020D2F'}}
                       title={window.self !== window.top
                         ? 'Imprimir Relatório / Exportar PDF — se não abrir, use o ícone "Abrir em nova aba" no topo.'
@@ -6478,7 +6479,7 @@ export default function App() {
                       <ChevronRight className={cn("w-3 h-3 transition-transform duration-300", showPrintMenu && "rotate-90")} />
                     </button>
                     {showPrintMenu && (
-                      <div className="absolute right-0 top-full mt-2 z-20 w-80 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-lg overflow-hidden">
+                      <div className="absolute right-0 top-full mt-2 z-20 w-80 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg overflow-hidden">
                         <button
                           onClick={() => { setTipoRelatorioPDF('resumido'); setShowPrintMenu(false); setTimeout(() => window.print(), 50); }}
                           className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all border-b border-slate-100 dark:border-slate-800"
@@ -6501,7 +6502,7 @@ export default function App() {
 
               {/* Auditoria de XML — resultado do confronto */}
               {auditoriaErro && (
-                <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3 no-print">
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start gap-3 no-print">
                   <XCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
                   <div className="flex-1 text-sm text-rose-700 font-medium">{auditoriaErro}</div>
                   <button onClick={() => setAuditoriaErro(null)} className="text-rose-400 hover:text-rose-600">
@@ -6521,7 +6522,7 @@ export default function App() {
                   : auditoriaResultado.filter(d => d.tipo === auditoriaFiltroTipo);
 
                 return (
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden no-print">
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden no-print">
                     <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between gap-4">
                       <div className="flex items-center gap-2">
                         <GitCompare className="w-5 h-5 text-amber-600" />
@@ -6534,7 +6535,7 @@ export default function App() {
                         {auditoriaResultado.length > 0 && (
                           <button
                             onClick={exportarAuditoriaXml}
-                            className="flex items-center gap-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm"
+                            className="flex items-center gap-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
                           >
                             <Download className="w-3.5 h-3.5" />
                             Exportar
@@ -6641,7 +6642,7 @@ export default function App() {
               {/* Series List */}
               <div className="space-y-4">
                 {filteredAnalysis.map((serie, idx) => (
-                  <div key={idx} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden transition-all hover:shadow-md">
+                  <div key={idx} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden transition-all hover:shadow-md">
                     <div
                       className="p-6 cursor-pointer flex items-center gap-6"
                       onClick={() => setExpandedIdx(expandedIdx === idx ? null : idx)}
@@ -6693,26 +6694,26 @@ export default function App() {
                         className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 p-8 space-y-6"
                       >
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                          <div className="bg-white dark:bg-slate-900 p-4 rounded-lg border border-slate-200 dark:border-slate-700">
                             <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Menor Número</div>
                             <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.min}</div>
                           </div>
-                          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                          <div className="bg-white dark:bg-slate-900 p-4 rounded-lg border border-slate-200 dark:border-slate-700">
                             <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Maior Número</div>
                             <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.max}</div>
                           </div>
-                          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                          <div className="bg-white dark:bg-slate-900 p-4 rounded-lg border border-slate-200 dark:border-slate-700">
                             <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Esperados</div>
                             <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.esperados}</div>
                           </div>
-                          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                          <div className="bg-white dark:bg-slate-900 p-4 rounded-lg border border-slate-200 dark:border-slate-700">
                             <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Situação</div>
                             <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.situacao}</div>
                           </div>
                         </div>
 
                         {serie.faltantesInutilizados.length > 0 && (
-                          <div className="bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 rounded-xl p-4 text-emerald-800 dark:text-emerald-200 text-sm space-y-2">
+                          <div className="bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 rounded-lg p-4 text-emerald-800 dark:text-emerald-200 text-sm space-y-2">
                             <div className="font-bold flex items-center gap-2">
                               <Check className="w-4 h-4" />
                               Inutilizações Identificadas ({serie.faltantesInutilizados.length})
@@ -6739,7 +6740,7 @@ export default function App() {
                         )}
 
                         {serie.cancelados && serie.cancelados.length > 0 && (
-                          <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-xl p-4 text-amber-800 dark:text-amber-200 text-sm">
+                          <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-lg p-4 text-amber-800 dark:text-amber-200 text-sm">
                             <div className="font-bold flex items-center gap-2 mb-1">
                               <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                               Cancelamentos Identificados ({serie.cancelados.length})
@@ -6749,7 +6750,7 @@ export default function App() {
                         )}
 
                         {serie.faltantes.length === 0 && serie.todasInutilizacoes.length > 0 && (
-                          <div className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-slate-600 dark:text-slate-300 text-sm">
+                          <div className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-slate-600 dark:text-slate-300 text-sm">
                             <div className="font-bold flex items-center gap-2 mb-1 text-slate-700 dark:text-slate-200">
                               <FileSearch className="w-4 h-4" />
                               Inutilizações Registradas nessa Série ({serie.todasInutilizacoes.length})
@@ -6759,7 +6760,7 @@ export default function App() {
                         )}
 
                         {serie.faltantes.length > 0 && (
-                          <div className="bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 rounded-xl p-4 text-rose-800 dark:text-rose-200 text-sm">
+                          <div className="bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 rounded-lg p-4 text-rose-800 dark:text-rose-200 text-sm">
                             <div className="font-bold flex items-center gap-2 mb-1">
                               <AlertCircle className="w-4 h-4" />
                               Números Ausentes ({serie.faltantes.length})
@@ -6768,7 +6769,7 @@ export default function App() {
                           </div>
                         )}
 
-                        <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-xl p-4 text-blue-800 dark:text-blue-200 text-sm">
+                        <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-blue-800 dark:text-blue-200 text-sm">
                           <div className="font-bold flex items-center gap-2 mb-1">
                             <Search className="w-4 h-4" />
                             Verificação de Abrangência
@@ -6783,7 +6784,7 @@ export default function App() {
 
               {/* Consolidated Message */}
               {analysis.some(s => s.faltantes.length > 0) && (
-                <div className="bg-white rounded-3xl border-2 border-blue-600 p-8 shadow-xl no-print">
+                <div className="bg-white rounded-2xl border-2 border-blue-600 p-8 shadow-xl no-print">
                   <div className="flex justify-between items-center mb-6">
                     <div>
                       <h2 className="font-serif text-2xl font-semibold text-slate-900">Relatório Consolidado</h2>
@@ -6793,7 +6794,7 @@ export default function App() {
                       <div className="flex flex-col items-end">
                         <button 
                           onClick={() => window.print()}
-                          className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-6 py-4 rounded-2xl font-bold transition-all"
+                          className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-6 py-4 rounded-xl font-bold transition-all"
                         >
                           <Printer className="w-5 h-5" />
                           Imprimir
@@ -6807,7 +6808,7 @@ export default function App() {
                       <button 
                         onClick={() => copyToClipboard(consolidatedMessage, 999)}
                         className={cn(
-                          "px-10 py-4 rounded-2xl font-bold text-lg transition-all shadow-lg",
+                          "px-10 py-4 rounded-xl font-bold text-lg transition-all shadow-lg",
                           copiedIdx === 999 ? "bg-slate-900 text-white" : "bg-blue-600 text-white hover:bg-blue-700"
                         )}
                       >
@@ -6818,12 +6819,12 @@ export default function App() {
                   <textarea 
                     value={consolidatedMessage}
                     onChange={(e) => setConsolidatedMessage(e.target.value)}
-                    className="w-full h-96 bg-slate-50 p-6 rounded-2xl text-sm text-slate-700 font-mono border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                    className="w-full h-96 bg-slate-50 p-6 rounded-xl text-sm text-slate-700 font-mono border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
                   />
                 </div>
               )}
               {analysis.every(s => s.faltantes.length === 0) && (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-3xl p-10 text-center space-y-4 shadow-sm">
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-10 text-center space-y-4">
                   <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
                     <CheckCircle2 className="w-10 h-10" />
                   </div>
@@ -6842,7 +6843,7 @@ export default function App() {
                     ? 'text-rose-600 dark:text-rose-400'
                     : auditoriaIbsCbs.pctComGrupo === 100 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400';
                   return (
-                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                    <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
                           <Receipt className="w-3.5 h-3.5" />
@@ -6877,7 +6878,7 @@ export default function App() {
                     ? 'text-rose-600 dark:text-rose-400'
                     : pctNaoIntegradoResumo >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400';
                   return (
-                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                    <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
                           <CreditCard className="w-3.5 h-3.5" />
@@ -7007,7 +7008,7 @@ export default function App() {
                 ))}
               </div>
             ) : (
-              <div className="p-10 border-2 border-dashed border-slate-200 text-center rounded-2xl">
+              <div className="p-10 border-2 border-dashed border-slate-200 text-center rounded-xl">
                 <div className="font-bold text-slate-400">Nenhuma quebra de sequência identificada.</div>
               </div>
             )}
