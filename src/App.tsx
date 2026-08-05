@@ -38,7 +38,8 @@ import {
   CreditCard,
   Ban,
   Clock,
-  AlertTriangle
+  AlertTriangle,
+  Briefcase
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -51,7 +52,7 @@ function cn(...inputs: ClassValue[]) {
 // --- Types ---
 
 interface XmlData {
-  tipo: 'nfe' | 'inutilizacao' | 'evento' | 'consulta' | 'outro';
+  tipo: 'nfe' | 'inutilizacao' | 'evento' | 'consulta' | 'outro' | 'nfse';
   subTipo?: string;
   isContingencia?: boolean;
   isCancelamento?: boolean;
@@ -88,6 +89,10 @@ interface XmlData {
   // Nota emitida pela própria empresa sob CFOP de entrada (devolução de venda,
   // baixa de estoque, etc.) — ocupa numeração real da série, mas não é venda.
   isEntradaPropria?: boolean;
+  // NFS-e (Nota Fiscal de Serviços Eletrônica, padrão Sistema Nacional/ADN) —
+  // reaproveita cnpj/razaoSocial pro prestador e emitCnpj/emitNome, destCnpj/
+  // destNome pro tomador, só descServico é campo próprio.
+  descServico?: string;
 }
 
 interface SourceMetadata {
@@ -179,12 +184,48 @@ const parser = new DOMParser();
 
 function parseXML(xmlText: string, fileName: string): XmlData {
   const lowerText = xmlText.toLowerCase();
-  
+
+  // NFS-e (Nota Fiscal de Serviços Eletrônica, padrão Sistema Nacional/ADN) —
+  // schema totalmente diferente da família NF-e, não tem nada em comum com os
+  // marcadores de isFiscal abaixo, então precisa ser detectada antes, senão
+  // cai no "outro" e some sem aviso nenhum. Extração é best-effort: o padrão
+  // nacional é recente e alguns emissores ainda variam detalhes de nomeação.
+  const isNfse = lowerText.includes('<infnfse') || lowerText.includes('<infdps') ||
+                 lowerText.includes('<nfse ') || lowerText.includes('<nfse>');
+  if (isNfse) {
+    const doc = parser.parseFromString(xmlText, 'text/xml');
+    const getTxt = (parent: Document | Element | undefined, tag: string) =>
+      parent?.getElementsByTagName(tag)[0]?.textContent?.trim() || '';
+
+    const infNFSe = doc.getElementsByTagName('infNFSe')[0];
+    const prestEl = doc.getElementsByTagName('emit')[0] || doc.getElementsByTagName('prest')[0];
+    const tomaEl = doc.getElementsByTagName('toma')[0];
+
+    return {
+      tipo: 'nfse',
+      fileName,
+      numero: getTxt(doc, 'nNFSe') || getTxt(doc, 'nDFSe') || getTxt(doc, 'nDPS'),
+      serie: getTxt(doc, 'serie'),
+      data: getTxt(doc, 'dhProc') || getTxt(doc, 'dhEmi'),
+      cnpj: getTxt(prestEl, 'CNPJ'),
+      razaoSocial: getTxt(prestEl, 'xNome'),
+      emitCnpj: getTxt(prestEl, 'CNPJ'),
+      emitNome: getTxt(prestEl, 'xNome'),
+      destCnpj: getTxt(tomaEl, 'CNPJ') || getTxt(tomaEl, 'CPF'),
+      destNome: getTxt(tomaEl, 'xNome'),
+      valor: getTxt(doc, 'vServ') || getTxt(doc, 'vLiq'),
+      descServico: getTxt(doc, 'xDescServ'),
+      chave: infNFSe?.getAttribute('Id') || '',
+      modelo: 'NFS-e',
+      rawXml: xmlText,
+    };
+  }
+
   // More robust fiscal check
-  const isFiscal = lowerText.includes('<infnfe') || 
-                   lowerText.includes('<inutnfe') || 
-                   lowerText.includes('<retinutnfe') || 
-                   lowerText.includes('<proceventonfe') || 
+  const isFiscal = lowerText.includes('<infnfe') ||
+                   lowerText.includes('<inutnfe') ||
+                   lowerText.includes('<retinutnfe') ||
+                   lowerText.includes('<proceventonfe') ||
                    lowerText.includes('<eventonfe') ||
                    lowerText.includes('<retconssitnfe') ||
                    lowerText.includes('<proccancnfe');
@@ -192,7 +233,7 @@ function parseXML(xmlText: string, fileName: string): XmlData {
   if (!isFiscal) {
     return { tipo: 'outro', fileName };
   }
-  
+
   const doc = parser.parseFromString(xmlText, 'text/xml');
   
   const getTextContent = (tagName: string) => {
@@ -836,6 +877,9 @@ export default function App() {
   const [xmlList, setXmlList] = useState<XmlData[]>([]);
   const [inutilizacoes, setInutilizacoes] = useState<XmlData[]>([]);
   const [otherXmlsList, setOtherXmlsList] = useState<XmlData[]>([]);
+  // NFS-e (Nota Fiscal de Serviços Eletrônica) — schema totalmente diferente
+  // da família NF-e, guardada à parte; só aparece um card se algo for encontrado.
+  const [nfseList, setNfseList] = useState<XmlData[]>([]);
   const [stats, setStats] = useState<Stats>({
     totalFiles: 0,
     totalXmls: 0,
@@ -980,6 +1024,8 @@ export default function App() {
   const [showAuditoriaPagamento, setShowAuditoriaPagamento] = useState(false);
   const [showAuditoriaRegime, setShowAuditoriaRegime] = useState(false);
   const [showAuditoriaIbsCbs, setShowAuditoriaIbsCbs] = useState(false);
+  const [showNfse, setShowNfse] = useState(false);
+  const [nfseBusca, setNfseBusca] = useState('');
   const [auditoriaRegimeBusca, setAuditoriaRegimeBusca] = useState('');
   const [auditoriaPagamentoBusca, setAuditoriaPagamentoBusca] = useState('');
   const [showForaDoEscopoDetalhe, setShowForaDoEscopoDetalhe] = useState(false);
@@ -3107,6 +3153,7 @@ export default function App() {
     let finalXmls: XmlData[] = [];
     let finalInuts: XmlData[] = [];
     let finalOthers: XmlData[] = [];
+    let finalNfse: XmlData[] = [];
     let foundSped: SpedData | null = null;
     let foundSpedOriginal: SpedData | null = null;
     // Acumulador local (não o state React) — setExtractionErrors é assíncrono,
@@ -3185,6 +3232,8 @@ export default function App() {
                     } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
                       results.localXmls.push(data);
                       if (data.tipo === 'nfe') results.localValidNfCount++;
+                    } else if (data.tipo === 'nfse') {
+                      results.localNfse.push(data);
                     } else {
                       results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
                     }
@@ -3263,6 +3312,8 @@ export default function App() {
                   } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
                     results.localXmls.push(data);
                     if (data.tipo === 'nfe') results.localValidNfCount++;
+                  } else if (data.tipo === 'nfse') {
+                    results.localNfse.push(data);
                   } else {
                     results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
                   }
@@ -3328,6 +3379,8 @@ export default function App() {
                     } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
                       results.localXmls.push(data);
                       if (data.tipo === 'nfe') results.localValidNfCount++;
+                    } else if (data.tipo === 'nfse') {
+                      results.localNfse.push(data);
                     } else {
                       results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
                     }
@@ -3359,6 +3412,7 @@ export default function App() {
             localXmls: [] as XmlData[],
             localInuts: [] as XmlData[],
             localOthers: [] as XmlData[],
+            localNfse: [] as XmlData[],
             localTotalCount: 0,
             localCancellations: 0,
             localValidNfCount: 0,
@@ -3394,6 +3448,8 @@ export default function App() {
                 // faturamentoTotal can cross-reference them by chave
                 res.localXmls.push(data);
                 if (data.tipo === 'nfe') res.localValidNfCount++;
+              } else if (data.tipo === 'nfse') {
+                res.localNfse.push(data);
               } else {
                 res.localOthers.push({ fileName: file.name, subTipo: data.subTipo, tipo: data.tipo } as any);
               }
@@ -3436,6 +3492,7 @@ export default function App() {
           finalXmls.push(...res.localXmls);
           finalInuts.push(...res.localInuts);
           finalOthers.push(...res.localOthers);
+          finalNfse.push(...res.localNfse);
           if (res.localSped) {
             if (!foundSped) {
               foundSped = res.localSped;
@@ -3469,6 +3526,7 @@ export default function App() {
       const mergedXmls = deduplicateXmls([...xmlList, ...finalXmls]);
       const mergedInuts = deduplicateInutilizacoes([...inutilizacoes, ...finalInuts]);
       const mergedOthers = deduplicateOthers([...otherXmlsList, ...finalOthers]);
+      const mergedNfse = deduplicateXmls([...nfseList, ...finalNfse]);
 
       // Identify main company from emitters only: the company that issues the most notes is the audited entity.
       // Counting emitters (not destCnpj) avoids conflating suppliers' entrada notes with the main company.
@@ -3563,6 +3621,7 @@ export default function App() {
       setXmlList(mergedXmls);
       setInutilizacoes(mergedInuts);
       setOtherXmlsList(mergedOthers);
+      setNfseList(mergedNfse);
 
       setStats(prev => ({
         ...prev,
@@ -3757,6 +3816,7 @@ export default function App() {
     setXmlList([]);
     setInutilizacoes([]);
     setOtherXmlsList([]);
+    setNfseList([]);
     setExtractionErrors([]);
     setStats({
       totalFiles: 0,
@@ -4882,6 +4942,92 @@ export default function App() {
                   );
                 })()}
               </div>
+
+              {/* Card: Notas de Serviço (NFS-e) — só aparece se alguma for encontrada */}
+              {nfseList.length > 0 && (() => {
+                const q = nfseBusca.trim().toLowerCase();
+                const filtradas = nfseList.filter(n =>
+                  !q ||
+                  (n.numero || '').toLowerCase().includes(q) ||
+                  (n.razaoSocial || '').toLowerCase().includes(q) ||
+                  (n.destNome || '').toLowerCase().includes(q)
+                );
+                const valorTotal = nfseList.reduce((s, n) => s + (parseFloat(n.valor || '0') || 0), 0);
+                return (
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-blue-400 rounded-xl p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <Briefcase className="w-5 h-5 text-blue-500" />
+                        <div>
+                          <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Notas de Serviço (NFS-e)</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                            <strong className="text-slate-700 dark:text-slate-200">{nfseList.length} nota(s)</strong> · {formatarMoeda(valorTotal)} — fora do escopo das auditorias acima (sequência, TEF e IBS/CBS são só pra NF-e/NFC-e)
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setShowNfse(!showNfse)}
+                        className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
+                      >
+                        {showNfse ? 'Ocultar' : 'Ver detalhes'}
+                      </button>
+                    </div>
+                    {showNfse && (
+                      <div className="space-y-3">
+                        <input
+                          type="text"
+                          value={nfseBusca}
+                          onChange={e => setNfseBusca(e.target.value)}
+                          placeholder="Buscar por número ou prestador/tomador..."
+                          className="w-full max-w-xs px-3 py-1.5 text-xs border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-300"
+                        />
+                        <div className="overflow-x-auto overflow-y-auto max-h-72">
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                              <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                                <th className="py-1.5 pr-3">Nº</th>
+                                <th className="py-1.5 pr-3">Data</th>
+                                <th className="py-1.5 pr-3">Prestador</th>
+                                <th className="py-1.5 pr-3">Tomador</th>
+                                <th className="py-1.5 pr-3">Serviço</th>
+                                <th className="py-1.5 text-right pr-3">Valor</th>
+                                <th className="py-1.5 pr-3">Baixar</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filtradas.slice(0, 100).map((n, i) => (
+                                <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                  <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero || '—'}</td>
+                                  <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                  <td className="py-1.5 pr-3 text-slate-700 dark:text-slate-300 max-w-[160px] truncate" title={n.razaoSocial}>{n.razaoSocial || '—'}</td>
+                                  <td className="py-1.5 pr-3 text-slate-700 dark:text-slate-300 max-w-[160px] truncate" title={n.destNome}>{n.destNome || '—'}</td>
+                                  <td className="py-1.5 pr-3 text-slate-500 dark:text-slate-400 max-w-[200px] truncate" title={n.descServico}>{n.descServico || '—'}</td>
+                                  <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(parseFloat(n.valor || '0') || 0)}</td>
+                                  <td className="py-1.5 pr-3">
+                                    <button
+                                      onClick={() => baixarXmlEvidencia(n)}
+                                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                    >
+                                      <Download className="w-3 h-3" />
+                                      XML
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          {filtradas.length > 100 && (
+                            <p className="text-[11px] text-slate-400 mt-1.5">Mostrando 100 de {filtradas.length}. Refine a busca.</p>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          ⚠ Extração best-effort (padrão Sistema Nacional NFS-e/ADN) — se algum campo vier vazio, o sistema do prestador pode nomear a tag de um jeito diferente do esperado; o XML original continua disponível pra baixar e conferir manualmente.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Corpo em duas colunas: filtros/utilitários à esquerda, auditoria ao centro */}
               <div className="flex flex-col lg:flex-row gap-8 items-start">
