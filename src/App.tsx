@@ -3688,7 +3688,12 @@ export default function App() {
   };
 
   const runAnalysis = () => {
-    if (xmlList.length === 0) return;
+    // Lote só com NFS-e (sem nenhum NF-e/NFC-e) precisa poder abrir a tela de
+    // resultados também — senão o card de NFS-e (que não depende de xmlList)
+    // fica inacessível. setAnalysis([]) mais abaixo já cobre o caso xmlList
+    // vazio sem quebrar nada: analysis vira array vazio (não null), e a tela
+    // de resultados abre normalmente, só sem séries de NF-e pra mostrar.
+    if (xmlList.length === 0 && nfseList.length === 0) return;
 
     let filteredXmlsList = xmlList;
     let filteredInutsList = inutilizacoes;
@@ -4711,9 +4716,9 @@ export default function App() {
 
                   <div className="p-10 bg-slate-50 flex flex-col items-center gap-6 border-t border-slate-100">
                     <div className="flex gap-4">
-                      <button 
+                      <button
                         onClick={runAnalysis}
-                        disabled={xmlList.length === 0}
+                        disabled={xmlList.length === 0 && nfseList.length === 0}
                         className="flex items-center gap-2 px-10 py-5 text-white rounded-xl font-bold text-xl transition-all shadow-lg disabled:opacity-50 disabled:grayscale scale-105 active:scale-100"
                       style={{background: '#020D2F', boxShadow: '0 8px 32px rgba(2,13,47,0.4)'}}
                       >
