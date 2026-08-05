@@ -1402,20 +1402,24 @@ export default function App() {
   // não tem obrigatoriedade de TEF; Regime Normal tem, então essa distinção
   // muda a severidade do alerta na Auditoria de Pagamento (TEF).
   const regimeTributario = useMemo(() => {
-    if (!mainCnpj) return { crt: '', label: null as string | null, isSimples: false };
+    if (!mainCnpj) return { crt: '', label: null as string | null, isSimples: false, isMei: false };
 
     const nota = xmlList.find(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml);
-    if (!nota) return { crt: '', label: null as string | null, isSimples: false };
+    if (!nota) return { crt: '', label: null as string | null, isSimples: false, isMei: false };
 
     const doc = getParsedXml(nota);
-    if (!doc) return { crt: '', label: null as string | null, isSimples: false };
+    if (!doc) return { crt: '', label: null as string | null, isSimples: false, isMei: false };
     const crt = doc.getElementsByTagName('emit')[0]?.getElementsByTagName('CRT')[0]?.textContent?.trim() || '';
     const isSimples = crt === '1' || crt === '2';
-    const label = isSimples ? 'Simples Nacional' : crt === '3' ? 'Regime Normal' : null;
-    return { crt, label, isSimples };
+    // CRT=4 (MEI) foi liberado pela NT 2024.001 — MEI não é "Simples Nacional"
+    // no sentido estrito (regime próprio, embora sob o guarda-chuva do SIMEI),
+    // mas também não tem obrigatoriedade de TEF, então fica com flag própria.
+    const isMei = crt === '4';
+    const label = isSimples ? 'Simples Nacional' : isMei ? 'MEI' : crt === '3' ? 'Regime Normal' : null;
+    return { crt, label, isSimples, isMei };
   }, [xmlList]);
 
-  const crtLabel: Record<string, string> = { '1': 'Simples Nacional', '2': 'Simples Nacional (sublimite)', '3': 'Regime Normal' };
+  const crtLabel: Record<string, string> = { '1': 'Simples Nacional', '2': 'Simples Nacional (sublimite)', '3': 'Regime Normal', '4': 'MEI' };
 
   // Auditoria de Regime: levanta prova de qual regime tributário as próprias
   // notas declaram (CRT) e se isso é consistente com o jeito que o ICMS é
@@ -1468,7 +1472,8 @@ export default function App() {
         if (icmsNode?.getElementsByTagName('CSOSN')[0]) temCsosn = true;
         if (icmsNode?.getElementsByTagName('CST')[0]) temCst = true;
       });
-      const isSimplesCrt = crt === '1' || crt === '2';
+      // MEI (CRT=4, NT 2024.001) usa CSOSN igual Simples Nacional.
+      const isSimplesCrt = crt === '1' || crt === '2' || crt === '4';
       if (isSimplesCrt && temCst && !temCsosn) {
         inconsistencias.push({ xml, motivo: `CRT=${crt} (${crtLabel[crt] || crt}) mas os itens usam CST (padrão Regime Normal) em vez de CSOSN` });
       } else if (crt === '3' && temCsosn && !temCst) {
@@ -4377,7 +4382,7 @@ export default function App() {
                       <div className="flex items-center gap-1.5">
                         <span
                           className="inline-flex items-center w-fit px-2.5 py-0.5 rounded-full text-xs font-bold"
-                          style={regimeTributario.isSimples
+                          style={(regimeTributario.isSimples || regimeTributario.isMei)
                             ? {background: 'rgba(240,180,41,0.15)', color: '#F0B429', border: '1px solid rgba(240,180,41,0.35)'}
                             : {background: 'rgba(148,163,184,0.15)', color: '#CBD5E1', border: '1px solid rgba(148,163,184,0.3)'}}
                         >
@@ -4841,7 +4846,7 @@ export default function App() {
                     ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100)
                     : 0;
                   const temProblemasTecnicos = auditoriaPagamento.problemas.length > 0;
-                  const riscoObrigatoriedade = !regimeTributario.isSimples && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
+                  const riscoObrigatoriedade = !regimeTributario.isSimples && !regimeTributario.isMei && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
                   const corTef = temProblemasTecnicos || riscoObrigatoriedade
                     ? 'text-rose-600 dark:text-rose-400'
                     : pctNaoIntegradoResumo >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400';
@@ -5954,7 +5959,7 @@ export default function App() {
                 const temProblemasTecnicos = auditoriaPagamento.problemas.length > 0;
                 // Regime Normal tem obrigatoriedade de TEF — qualquer POS manual vira alerta real.
                 // Simples Nacional não tem essa obrigatoriedade, então fica só informativo.
-                const riscoObrigatoriedade = !regimeTributario.isSimples && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
+                const riscoObrigatoriedade = !regimeTributario.isSimples && !regimeTributario.isMei && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
                 const corBorda = temProblemasTecnicos || riscoObrigatoriedade
                   ? 'border-l-rose-400'
                   : pctNaoIntegrado >= 50 ? 'border-l-amber-400' : 'border-l-blue-400';
@@ -6162,10 +6167,10 @@ export default function App() {
                             {riscoObrigatoriedade && (
                               <span> <strong>Alerta: empresa é {regimeTributario.label} — tem obrigatoriedade de TEF.</strong> Esse é o padrão que costuma gerar autuação por falta de integração TEF. Confirme com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
                             )}
-                            {!riscoObrigatoriedade && regimeTributario.isSimples && auditoriaPagamento.totalNaoIntegrado > 0 && (
-                              <span> Empresa é <strong>Simples Nacional</strong>, que não tem obrigatoriedade de TEF — uso de POS manual aqui não é, por si só, uma infração.</span>
+                            {!riscoObrigatoriedade && (regimeTributario.isSimples || regimeTributario.isMei) && auditoriaPagamento.totalNaoIntegrado > 0 && (
+                              <span> Empresa é <strong>{regimeTributario.label}</strong>, que não tem obrigatoriedade de TEF — uso de POS manual aqui não é, por si só, uma infração.</span>
                             )}
-                            {!riscoObrigatoriedade && !regimeTributario.isSimples && pctNaoIntegrado >= 50 && (
+                            {!riscoObrigatoriedade && !regimeTributario.isSimples && !regimeTributario.isMei && pctNaoIntegrado >= 50 && (
                               <span> Esse é o padrão que costuma gerar autuação por falta de integração TEF — vale confirmar com o cliente se a maquininha realmente não é integrada ao sistema, ou se é falha de configuração.</span>
                             )}
                             {auditoriaPagamento.cartaoIndPagSuspeito > 0 && (
@@ -7259,7 +7264,7 @@ export default function App() {
                 const pctIntegradoPrint = auditoriaPagamento.totalCartao > 0 ? Math.round((auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100) : 0;
                 const pctNaoIntegradoPrint = auditoriaPagamento.totalCartao > 0 ? Math.round((auditoriaPagamento.totalNaoIntegrado / auditoriaPagamento.totalCartao) * 100) : 0;
                 const pctFalsoTefPrint = auditoriaPagamento.totalCartao > 0 ? Math.round((auditoriaPagamento.totalFalsoTef / auditoriaPagamento.totalCartao) * 100) : 0;
-                const riscoObrigatoriedadePrint = !regimeTributario.isSimples && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
+                const riscoObrigatoriedadePrint = !regimeTributario.isSimples && !regimeTributario.isMei && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
                 return (
                   <div className="print-section">
                     <h3 className="font-serif text-lg font-semibold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de Pagamento (TEF)</h3>
@@ -7267,7 +7272,7 @@ export default function App() {
                       {auditoriaPagamento.totalCartao} venda(s) em cartão sujeita(s) a TEF: <strong>{auditoriaPagamento.totalIntegrado} integrada(s) de verdade ({pctIntegradoPrint}%)</strong>, {auditoriaPagamento.totalNaoIntegrado} via POS manual ({pctNaoIntegradoPrint}%){auditoriaPagamento.totalFalsoTef > 0 && <>, {auditoriaPagamento.totalFalsoTef} em Falso TEF ({pctFalsoTefPrint}%)</>}{auditoriaPagamento.totalCartaoNaoAplicavel > 0 && <>, {auditoriaPagamento.totalCartaoNaoAplicavel} fora do escopo de TEF</>}.
                       {auditoriaPagamento.totalFalsoTef > 0 && <> <strong className="text-red-700">Alerta grave: {auditoriaPagamento.totalFalsoTef} venda(s) dizem ter TEF integrado (tpIntegra=1) mas vieram sem código de autorização — uma integração de verdade sempre traz esse código. É uma declaração que os próprios dados da nota contradizem, mais grave que POS manual comum.</strong></>}
                       {riscoObrigatoriedadePrint && <> <strong className="text-red-700">Alerta: empresa é {regimeTributario.label} — tem obrigatoriedade de TEF, e esse padrão costuma gerar autuação por falta de integração.</strong></>}
-                      {!riscoObrigatoriedadePrint && regimeTributario.isSimples && auditoriaPagamento.totalNaoIntegrado > 0 && <> Empresa é Simples Nacional, que não tem obrigatoriedade de TEF.</>}
+                      {!riscoObrigatoriedadePrint && (regimeTributario.isSimples || regimeTributario.isMei) && auditoriaPagamento.totalNaoIntegrado > 0 && <> Empresa é {regimeTributario.label}, que não tem obrigatoriedade de TEF.</>}
                     </div>
                     {auditoriaPagamento.breakdownPorTipoPagamento.length > 0 && (
                       <table>
