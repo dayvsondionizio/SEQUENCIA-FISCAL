@@ -93,6 +93,13 @@ interface XmlData {
   // reaproveita cnpj/razaoSocial pro prestador e emitCnpj/emitNome, destCnpj/
   // destNome pro tomador, só descServico é campo próprio.
   descServico?: string;
+  // nDPS (número da DPS) é DIFERENTE de nNFSe (guardado em `numero`): nNFSe é
+  // atribuído pelo Ambiente Nacional (ADN) e tem buracos normais/esperados
+  // (números reservados que não viram nota); nDPS é o número que o sistema do
+  // PRESTADOR controla antes de mandar pro ambiente nacional — é esse que deve
+  // ser sequencial sem buraco, igual o nNF do NF-e. Guardado à parte pra não
+  // confundir com o número exibido pro usuário.
+  nfseNumeroDPS?: string;
 }
 
 interface SourceMetadata {
@@ -215,6 +222,9 @@ function parseXML(xmlText: string, fileName: string): XmlData {
       destNome: getTxt(tomaEl, 'xNome'),
       valor: getTxt(doc, 'vServ') || getTxt(doc, 'vLiq'),
       descServico: getTxt(doc, 'xDescServ'),
+      // nDPS — número controlado pelo prestador, usado pra auditoria de
+      // sequência (ver comentário no campo, na interface XmlData).
+      nfseNumeroDPS: getTxt(doc, 'nDPS'),
       chave: infNFSe?.getAttribute('Id') || '',
       modelo: 'NFS-e',
       rawXml: xmlText,
@@ -2038,6 +2048,46 @@ export default function App() {
       return chaveA.localeCompare(chaveB);
     });
   }, [xmlList]);
+
+  // Auditoria de sequência da NFS-e — totalmente isolada do motor de NF-e/
+  // NFC-e (runAnalysis/analysis/xmlList) de propósito: roda só em cima de
+  // nfseList, então não tem como afetar a auditoria que já funciona hoje.
+  // Agrupa por prestador (cnpj) + série e usa nDPS (nfseNumeroDPS) — não
+  // nNFSe — porque nNFSe é atribuído pelo Ambiente Nacional e tem buracos
+  // normais/esperados (números reservados que não viram nota), enquanto o
+  // nDPS é controlado pelo próprio prestador, igual o nNF do NF-e.
+  const nfseAnalysis = useMemo(() => {
+    if (nfseList.length === 0) return [];
+
+    const grupos: Record<string, { cnpj: string; razaoSocial: string; serie: string; numeros: number[] }> = {};
+    nfseList.forEach(n => {
+      const numDps = parseInt(n.nfseNumeroDPS || '', 10);
+      if (!n.cnpj || !n.serie || isNaN(numDps)) return;
+      const key = `${n.cnpj}_${n.serie}`;
+      if (!grupos[key]) {
+        grupos[key] = { cnpj: n.cnpj, razaoSocial: n.razaoSocial || '', serie: n.serie, numeros: [] };
+      }
+      grupos[key].numeros.push(numDps);
+    });
+
+    return Object.values(grupos).map(g => {
+      const numerosSet = new Set(g.numeros);
+      const numerosOrdenados = Array.from(numerosSet).sort((a, b) => a - b);
+      const min = numerosOrdenados[0];
+      const max = numerosOrdenados[numerosOrdenados.length - 1];
+      const esperados = max - min + 1;
+      const recebidos = numerosSet.size;
+      const duplicados = g.numeros.length - numerosSet.size;
+      const faltantes: number[] = [];
+      for (let i = min; i <= max; i++) {
+        if (!numerosSet.has(i)) {
+          faltantes.push(i);
+          if (faltantes.length > 10000) break;
+        }
+      }
+      return { cnpj: g.cnpj, razaoSocial: g.razaoSocial, serie: g.serie, min, max, esperados, recebidos, duplicados, faltantes };
+    });
+  }, [nfseList]);
 
   useEffect(() => {
     if (analysis) {
@@ -4961,7 +5011,7 @@ export default function App() {
                         <div>
                           <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Notas de Serviço (NFS-e)</div>
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            <strong className="text-slate-700 dark:text-slate-200">{nfseList.length} nota(s)</strong> · {formatarMoeda(valorTotal)} — fora do escopo das auditorias acima (sequência, TEF e IBS/CBS são só pra NF-e/NFC-e)
+                            <strong className="text-slate-700 dark:text-slate-200">{nfseList.length} nota(s)</strong> · {formatarMoeda(valorTotal)} — TEF e IBS/CBS acima são só pra NF-e/NFC-e; sequência da NFS-e é auditada abaixo
                           </div>
                         </div>
                       </div>
@@ -4981,11 +5031,44 @@ export default function App() {
                           placeholder="Buscar por número ou prestador/tomador..."
                           className="w-full max-w-xs px-3 py-1.5 text-xs border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-300"
                         />
+
+                        {nfseAnalysis.length > 0 && (
+                          <div>
+                            <div className="text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-2">
+                              Sequência (nDPS — número interno do prestador, não o nº da NFS-e)
+                            </div>
+                            <div className="space-y-2">
+                              {nfseAnalysis.map((s, i) => (
+                                <div
+                                  key={`${s.cnpj}_${s.serie}_${i}`}
+                                  className={cn(
+                                    "rounded-lg px-3 py-2 text-xs border",
+                                    s.faltantes.length > 0
+                                      ? "bg-rose-50 dark:bg-rose-950 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200"
+                                      : "bg-emerald-50 dark:bg-emerald-950 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200"
+                                  )}
+                                >
+                                  <div className="font-semibold">
+                                    Série {s.serie} — {s.recebidos} de {s.esperados} DPS ({s.min} a {s.max}){s.duplicados > 0 && ` · ${s.duplicados} duplicado(s)`}
+                                  </div>
+                                  {s.faltantes.length > 0 ? (
+                                    <div className="mt-0.5">⚠ Faltando: {formatarFaixas(agruparFaixas(s.faltantes))}</div>
+                                  ) : (
+                                    <div className="mt-0.5">✓ Sequência íntegra nessa série</div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         <div className="overflow-x-auto overflow-y-auto max-h-72">
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 bg-white dark:bg-slate-900">
                               <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
-                                <th className="py-1.5 pr-3">Nº</th>
+                                <th className="py-1.5 pr-3">Nº NFS-e</th>
+                                <th className="py-1.5 pr-3">Nº DPS</th>
+                                <th className="py-1.5 pr-3">Série</th>
                                 <th className="py-1.5 pr-3">Data</th>
                                 <th className="py-1.5 pr-3">Prestador</th>
                                 <th className="py-1.5 pr-3">Tomador</th>
@@ -4998,6 +5081,8 @@ export default function App() {
                               {filtradas.slice(0, 100).map((n, i) => (
                                 <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
                                   <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero || '—'}</td>
+                                  <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-400">{n.nfseNumeroDPS || '—'}</td>
+                                  <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-400">{n.serie || '—'}</td>
                                   <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
                                   <td className="py-1.5 pr-3 text-slate-700 dark:text-slate-300 max-w-[160px] truncate" title={n.razaoSocial}>{n.razaoSocial || '—'}</td>
                                   <td className="py-1.5 pr-3 text-slate-700 dark:text-slate-300 max-w-[160px] truncate" title={n.destNome}>{n.destNome || '—'}</td>
