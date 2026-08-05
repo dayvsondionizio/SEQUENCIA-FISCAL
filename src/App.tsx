@@ -1388,7 +1388,13 @@ export default function App() {
   // 1. Notes without an authorization protocol (contingência not regularized with SEFAZ)
   // 2. Notes with the same série+número but different access keys (same number re-emitted)
   const notasAnomalias = useMemo(() => {
-    if (!mainCnpj) return { semProtocolo: [] as XmlData[], numeroDuplicado: [] as XmlData[][] };
+    if (!mainCnpj) return {
+      semProtocolo: [] as XmlData[],
+      semProtocoloAbatidas: 0,
+      foraDoPrazo: [] as XmlData[],
+      numeroDuplicado: [] as XmlData[][],
+      semAutorizacaoNaoContingencia: [] as XmlData[]
+    };
 
 
     const saidas = xmlList.filter(xml =>
@@ -3565,11 +3571,11 @@ export default function App() {
           }));
         });
 
-        setProcessingProgress({ 
-          current: Math.min(i + BATCH_SIZE, fileArray.length), 
-          total: fileArray.length 
+        setProcessingProgress({
+          current: Math.min(i + BATCH_SIZE, fileArray.length),
+          total: fileArray.length
         });
-        
+
         await new Promise(resolve => setTimeout(resolve, 0));
       }
 
@@ -4161,11 +4167,11 @@ export default function App() {
       {/* Loading Overlay */}
       <AnimatePresence>
         {isProcessing && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] backdrop-blur-sm flex flex-col items-center justify-center text-white p-6"
+            className="fixed inset-0 z-[100] backdrop-blur-sm flex flex-col items-center justify-center text-white p-6 pointer-events-none"
             style={{background: 'rgba(10,14,35,0.88)'}}
           >
             <div className="relative w-24 h-24 mb-8">
@@ -4208,7 +4214,7 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] backdrop-blur-sm flex flex-col items-center justify-center text-white p-6"
+            className="fixed inset-0 z-[100] backdrop-blur-sm flex flex-col items-center justify-center text-white p-6 pointer-events-none"
             style={{background: 'rgba(10,14,35,0.88)'}}
           >
             <div className="relative w-24 h-24 mb-8">
@@ -4552,13 +4558,12 @@ export default function App() {
             </div>
           </div>
         )}
-        <AnimatePresence mode="wait">
+        <AnimatePresence>
           {!analysis ? (
-            <motion.div 
+            <motion.div
               key="upload"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
               className="space-y-8"
             >
               {/* Stats Summary - Now at the top for better visibility */}
