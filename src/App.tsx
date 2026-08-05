@@ -4794,19 +4794,24 @@ export default function App() {
             >
               {/* Faixa de métricas — visão geral, encosta na base do header */}
               <div className="flex flex-wrap gap-6 items-stretch">
-                <div className="flex-1 min-w-[260px] bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                <div
+                  onClick={() => breakdownPorCfop.length > 0 && setShowCfopBreakdown(!showCfopBreakdown)}
+                  onKeyDown={e => { if (breakdownPorCfop.length > 0 && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setShowCfopBreakdown(!showCfopBreakdown); } }}
+                  role={breakdownPorCfop.length > 0 ? 'button' : undefined}
+                  tabIndex={breakdownPorCfop.length > 0 ? 0 : undefined}
+                  className={cn(
+                    "group flex-1 min-w-[260px] bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700",
+                    breakdownPorCfop.length > 0 && "cursor-pointer hover:border-slate-300 dark:hover:border-slate-600 transition-colors"
+                  )}
+                >
                   <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total de Saídas Auditadas (Válidas)</div>
                   <div className="text-3xl font-bold text-emerald-600 dark:text-emerald-400 mt-2">
                     {formatarMoeda(faturamentoTotal)}
                   </div>
                   {breakdownPorCfop.length > 0 && (
-                    <button
-                      onClick={() => setShowCfopBreakdown(!showCfopBreakdown)}
-                      title="Ver totais por natureza (CFOP)"
-                      className="inline-flex items-center justify-center cursor-pointer mt-3 no-print"
-                    >
-                      <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showCfopBreakdown && "rotate-90")} />
-                    </button>
+                    <div title="Ver totais por natureza (CFOP)" className="inline-flex items-center justify-center mt-3 no-print">
+                      <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 group-hover:text-slate-500 transition-all duration-300", showCfopBreakdown && "rotate-90")} />
+                    </div>
                   )}
                 </div>
 
@@ -4872,19 +4877,22 @@ export default function App() {
                     ? 'text-rose-600 dark:text-rose-400'
                     : auditoriaIbsCbs.pctComGrupo === 100 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400';
                   return (
-                    <div className="flex-1 min-w-[200px] bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                    <div
+                      onClick={() => setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs)}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs); } }}
+                      role="button"
+                      tabIndex={0}
+                      title="Ver auditoria de IBS/CBS (Reforma Tributária)"
+                      className="group flex-1 min-w-[200px] bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:border-slate-300 dark:hover:border-slate-600 transition-colors"
+                    >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
                           <Receipt className="w-3.5 h-3.5" />
                           IBS/CBS
                         </div>
-                        <button
-                          onClick={() => setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs)}
-                          title="Ver auditoria de IBS/CBS (Reforma Tributária)"
-                          className="inline-flex items-center justify-center cursor-pointer no-print"
-                        >
-                          <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showAuditoriaIbsCbs && "rotate-90")} />
-                        </button>
+                        <div className="inline-flex items-center justify-center no-print">
+                          <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 group-hover:text-slate-500 transition-all duration-300", showAuditoriaIbsCbs && "rotate-90")} />
+                        </div>
                       </div>
                       <div className={cn("text-3xl font-bold mt-2", corIbsCbs)}>{auditoriaIbsCbs.pctComGrupo}%</div>
                       <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mt-1">
@@ -4907,19 +4915,22 @@ export default function App() {
                     ? 'text-rose-600 dark:text-rose-400'
                     : pctNaoIntegradoResumo >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400';
                   return (
-                    <div className="flex-1 min-w-[200px] bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                    <div
+                      onClick={() => setShowAuditoriaPagamento(!showAuditoriaPagamento)}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowAuditoriaPagamento(!showAuditoriaPagamento); } }}
+                      role="button"
+                      tabIndex={0}
+                      title="Ver auditoria de pagamento (TEF)"
+                      className="group flex-1 min-w-[200px] bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:border-slate-300 dark:hover:border-slate-600 transition-colors"
+                    >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
                           <CreditCard className="w-3.5 h-3.5" />
                           TEF
                         </div>
-                        <button
-                          onClick={() => setShowAuditoriaPagamento(!showAuditoriaPagamento)}
-                          title="Ver auditoria de pagamento (TEF)"
-                          className="inline-flex items-center justify-center cursor-pointer no-print"
-                        >
-                          <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showAuditoriaPagamento && "rotate-90")} />
-                        </button>
+                        <div className="inline-flex items-center justify-center no-print">
+                          <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 group-hover:text-slate-500 transition-all duration-300", showAuditoriaPagamento && "rotate-90")} />
+                        </div>
                       </div>
                       <div className={cn("text-3xl font-bold mt-2", corTef)}>{pctIntegradoResumo}%</div>
                       <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mt-1">
@@ -4939,7 +4950,16 @@ export default function App() {
               {/* Corpo em duas colunas: filtros/utilitários à esquerda, auditoria ao centro */}
               <div className="flex flex-col lg:flex-row gap-8 items-start">
                 <aside className="w-full lg:w-72 shrink-0 lg:sticky lg:top-6 space-y-6">
-                  <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700 transition-all">
+                  <div
+                    onClick={() => (periodoAnalise.diasDetalhados?.length ?? 0) > 0 && setShowDaysDetail(!showDaysDetail)}
+                    onKeyDown={e => { if ((periodoAnalise.diasDetalhados?.length ?? 0) > 0 && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setShowDaysDetail(!showDaysDetail); } }}
+                    role={(periodoAnalise.diasDetalhados?.length ?? 0) > 0 ? 'button' : undefined}
+                    tabIndex={(periodoAnalise.diasDetalhados?.length ?? 0) > 0 ? 0 : undefined}
+                    className={cn(
+                      "group bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700 transition-all",
+                      (periodoAnalise.diasDetalhados?.length ?? 0) > 0 && "cursor-pointer hover:border-slate-300 dark:hover:border-slate-600"
+                    )}
+                  >
                     <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Período Analisado</div>
                   <div className="text-xl font-bold text-slate-900 dark:text-slate-100 mt-2">
                     {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
@@ -4947,13 +4967,9 @@ export default function App() {
                   <div className="flex items-center justify-between text-xs font-semibold text-slate-400 dark:text-slate-500 mt-2">
                     <span>{periodoAnalise.totalDias} dias · {periodoAnalise.totalNotas ?? 0} notas</span>
                     {periodoAnalise.diasDetalhados && periodoAnalise.diasDetalhados.length > 0 && (
-                      <button
-                        onClick={() => setShowDaysDetail(!showDaysDetail)}
-                        title="Ver detalhes"
-                        className="inline-flex items-center justify-center cursor-pointer shrink-0"
-                      >
-                        <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 hover:text-slate-500 transition-all duration-300", showDaysDetail && "rotate-90")} />
-                      </button>
+                      <div title="Ver detalhes" className="inline-flex items-center justify-center shrink-0">
+                        <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 group-hover:text-slate-500 transition-all duration-300", showDaysDetail && "rotate-90")} />
+                      </div>
                     )}
                   </div>
                 </div>
