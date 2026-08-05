@@ -3675,7 +3675,7 @@ export default function App() {
 
       setStats(prev => ({
         ...prev,
-        totalXmls: mergedXmls.length + mergedInuts.length + mergedOthers.length
+        totalXmls: mergedXmls.length + mergedInuts.length + mergedOthers.length + mergedNfse.length
       }));
     } catch (error) {
       console.error('Erro geral no processamento:', error);
@@ -4625,7 +4625,8 @@ export default function App() {
                           const countNfe = xmlList.filter(x => x.sourceName === source.name).length;
                           const countInut = inutilizacoes.filter(x => x.sourceName === source.name).length;
                           const countOther = otherXmlsList.filter(x => x.sourceName === source.name).length;
-                          const totalFiscalInSource = countNfe + countInut + countOther;
+                          const countNfse = nfseList.filter(x => x.sourceName === source.name).length;
+                          const totalFiscalInSource = countNfe + countInut + countOther + countNfse;
                           
                           // Identificar o CNPJ da empresa auditada no lote todo
                           const cnpjCounts: Record<string, number> = {};
