@@ -1200,23 +1200,49 @@ export default function App() {
     XLSX.writeFile(wb, `${empresa}_SPED_XML_${spedFiltroNomeArquivo()}_${periodo}.xlsx`);
   };
 
-  const faturamentoTotal = useMemo(() => {
-    // Identify the Main Client Company CNPJ (the most frequent overall)
+  // Empresa principal (CNPJ mais frequente entre emitente/destinatário),
+  // chaves canceladas, e um cache de XML já parseado — calculados uma única
+  // vez aqui e reaproveitados por todas as auditorias abaixo. Antes, cada
+  // auditoria recalculava isso (e reparseava o XML de cada nota) de forma
+  // independente; com milhares de notas isso significava passar pela lista
+  // inteira e reabrir o parser várias vezes pra cada uma. Mesmo cálculo,
+  // mesmos critérios — só compartilhado, não muda nenhum resultado.
+  const mainCnpj = useMemo(() => {
     const cnpjCounts: { [cnpj: string]: number } = {};
     xmlList.forEach(xml => {
       if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
       if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
     });
+    return Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+  }, [xmlList]);
 
-    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-    if (!mainCnpj) return 0;
-
-    // Build a set of note keys that have a genuine cancellation event (tpEvento === '110111')
-    const chavesCanceladas = new Set<string>(
+  const chavesCanceladas = useMemo(() => {
+    return new Set<string>(
       xmlList
         .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
         .map(xml => xml.chave!)
     );
+  }, [xmlList]);
+
+  const parsedXmlCache = useMemo(() => {
+    const cache = new Map<string, Document>();
+    xmlList.forEach(xml => {
+      if (!xml.rawXml || !xml.chave) return;
+      cache.set(xml.chave, parser.parseFromString(xml.rawXml, 'text/xml'));
+    });
+    return cache;
+  }, [xmlList]);
+
+  // Notas sem chave são raríssimas (só aconteceria em XML malformado) — nesse
+  // caso raro faz o parse na hora em vez de quebrar, sem custo perceptível.
+  const getParsedXml = (xml: XmlData): Document | null => {
+    if (xml.chave && parsedXmlCache.has(xml.chave)) return parsedXmlCache.get(xml.chave)!;
+    if (!xml.rawXml) return null;
+    return parser.parseFromString(xml.rawXml, 'text/xml');
+  };
+
+  const faturamentoTotal = useMemo(() => {
+    if (!mainCnpj) return 0;
 
     return xmlList
       .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0')
@@ -1226,24 +1252,13 @@ export default function App() {
         if (filterMes !== 'Todos' && getMonthYear(xml.data) !== filterMes) return acc;
         return acc + (parseFloat(xml.valor || '0') || 0);
       }, 0);
-  }, [xmlList, filterMes]);
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
 
   // Breaks faturamentoTotal down by natureza da operação (CFOP), mirroring the
   // "Totais ICMS por Natureza" report from the fiscal system.
   const breakdownPorCfop = useMemo(() => {
-    const cnpjCounts: { [cnpj: string]: number } = {};
-    xmlList.forEach(xml => {
-      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
-      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
-    });
-    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     if (!mainCnpj) return [];
 
-    const chavesCanceladas = new Set<string>(
-      xmlList
-        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
-        .map(xml => xml.chave!)
-    );
 
     const totalPorCfop: Record<string, number> = {};
     xmlList
@@ -1281,19 +1296,8 @@ export default function App() {
   // entre NF-e (mod 55) e NFC-e (mod 65) — só pro botão "detalhar por modelo",
   // não muda em nada o card original quando não está expandido.
   const breakdownPorCfopPorModelo = useMemo(() => {
-    const cnpjCounts: { [cnpj: string]: number } = {};
-    xmlList.forEach(xml => {
-      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
-      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
-    });
-    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     if (!mainCnpj) return {};
 
-    const chavesCanceladas = new Set<string>(
-      xmlList
-        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
-        .map(xml => xml.chave!)
-    );
 
     const totalPorCfopModelo: Record<string, { nfe: number; nfce: number }> = {};
     xmlList
@@ -1328,19 +1332,8 @@ export default function App() {
   // 1. Notes without an authorization protocol (contingência not regularized with SEFAZ)
   // 2. Notes with the same série+número but different access keys (same number re-emitted)
   const notasAnomalias = useMemo(() => {
-    const cnpjCounts: { [cnpj: string]: number } = {};
-    xmlList.forEach(xml => {
-      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
-      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
-    });
-    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     if (!mainCnpj) return { semProtocolo: [] as XmlData[], numeroDuplicado: [] as XmlData[][] };
 
-    const chavesCanceladas = new Set<string>(
-      xmlList
-        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
-        .map(xml => xml.chave!)
-    );
 
     const saidas = xmlList.filter(xml =>
       xml.tipo === 'nfe' &&
@@ -1409,18 +1402,13 @@ export default function App() {
   // não tem obrigatoriedade de TEF; Regime Normal tem, então essa distinção
   // muda a severidade do alerta na Auditoria de Pagamento (TEF).
   const regimeTributario = useMemo(() => {
-    const cnpjCounts: { [cnpj: string]: number } = {};
-    xmlList.forEach(xml => {
-      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
-      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
-    });
-    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     if (!mainCnpj) return { crt: '', label: null as string | null, isSimples: false };
 
     const nota = xmlList.find(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml);
     if (!nota) return { crt: '', label: null as string | null, isSimples: false };
 
-    const doc = parser.parseFromString(nota.rawXml!, 'text/xml');
+    const doc = getParsedXml(nota);
+    if (!doc) return { crt: '', label: null as string | null, isSimples: false };
     const crt = doc.getElementsByTagName('emit')[0]?.getElementsByTagName('CRT')[0]?.textContent?.trim() || '';
     const isSimples = crt === '1' || crt === '2';
     const label = isSimples ? 'Simples Nacional' : crt === '3' ? 'Regime Normal' : null;
@@ -1443,19 +1431,8 @@ export default function App() {
       crtPredominante: '', crtPredominanteLabel: '', consistente: true, mudouNoPeriodo: false,
       inconsistencias: [] as { xml: XmlData; motivo: string }[], amostra: [] as XmlData[],
     };
-    const cnpjCounts: { [cnpj: string]: number } = {};
-    xmlList.forEach(xml => {
-      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
-      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
-    });
-    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     if (!mainCnpj) return vazio;
 
-    const chavesCanceladas = new Set<string>(
-      xmlList
-        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
-        .map(xml => xml.chave!)
-    );
 
     const saidas = xmlList.filter(xml =>
       xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
@@ -1470,7 +1447,7 @@ export default function App() {
     const amostraPorCrt = new Map<string, XmlData>();
 
     saidas.forEach(xml => {
-      const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
+      const doc = getParsedXml(xml)!;
       const crt = doc.getElementsByTagName('emit')[0]?.getElementsByTagName('CRT')[0]?.textContent?.trim() || '';
       if (!crt) return;
 
@@ -1528,19 +1505,8 @@ export default function App() {
   // correto (isso mudaria a cada ano da transição até 2033).
   const auditoriaIbsCbs = useMemo(() => {
     const vazio = { totalNotas: 0, notasComGrupo: 0, pctComGrupo: 0, amostraSemGrupo: [] as XmlData[], amostraComGrupo: [] as XmlData[] };
-    const cnpjCounts: { [cnpj: string]: number } = {};
-    xmlList.forEach(xml => {
-      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
-      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
-    });
-    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     if (!mainCnpj) return vazio;
 
-    const chavesCanceladas = new Set<string>(
-      xmlList
-        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
-        .map(xml => xml.chave!)
-    );
 
     const saidas = xmlList.filter(xml =>
       xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
@@ -1561,7 +1527,7 @@ export default function App() {
     const saidasOrdenadas = [...saidas].sort((a, b) => (a.data || '').localeCompare(b.data || ''));
 
     saidasOrdenadas.forEach(xml => {
-      const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
+      const doc = getParsedXml(xml)!;
       const temGrupo = Array.from(doc.getElementsByTagName('det')).some(det =>
         !!det.getElementsByTagName('imposto')[0]?.getElementsByTagName('IBSCBS')[0]
       );
@@ -1596,18 +1562,13 @@ export default function App() {
   // mas o domínio do e-mail e o contato já dão uma noção de qual empresa é.
   const responsavelTecnico = useMemo(() => {
     const vazio = { cnpj: '', cnpjFormatado: '', contato: '', email: '', fone: '', foneFormatado: '', dominio: '' };
-    const cnpjCounts: { [cnpj: string]: number } = {};
-    xmlList.forEach(xml => {
-      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
-      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
-    });
-    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     if (!mainCnpj) return vazio;
 
     const nota = xmlList.find(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml);
     if (!nota) return vazio;
 
-    const doc = parser.parseFromString(nota.rawXml!, 'text/xml');
+    const doc = getParsedXml(nota);
+    if (!doc) return vazio;
     const infRespTec = doc.getElementsByTagName('infRespTec')[0];
     const cnpj = infRespTec?.getElementsByTagName('CNPJ')[0]?.textContent?.trim() || '';
     const contato = infRespTec?.getElementsByTagName('xContato')[0]?.textContent?.trim() || '';
@@ -1638,12 +1599,6 @@ export default function App() {
   // - indPres != 1/5 (venda não presencial: e-commerce, teleatendimento, etc.)
   // - UF do destinatário diferente da UF do emitente (venda interestadual)
   const auditoriaPagamento = useMemo(() => {
-    const cnpjCounts: { [cnpj: string]: number } = {};
-    xmlList.forEach(xml => {
-      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
-      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
-    });
-    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     const vazio = {
       problemas: [] as any[], totalCartao: 0, totalIntegrado: 0, totalNaoIntegrado: 0, totalFalsoTef: 0, totalCartaoNaoAplicavel: 0,
       notasNaoIntegradas: [] as { xml: XmlData; tPagNome: string }[], breakdownPorTipoPagamento: [] as { tPag: string; tPagNome: string; qtd: number; valor: number }[],
@@ -1653,11 +1608,6 @@ export default function App() {
     };
     if (!mainCnpj) return vazio;
 
-    const chavesCanceladas = new Set<string>(
-      xmlList
-        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
-        .map(xml => xml.chave!)
-    );
 
     // Mesmo critério de "venda válida" do faturamentoTotal (exige protocolo de
     // autorização SEFAZ) — sem isso, o breakdown por forma de pagamento incluía
@@ -1732,7 +1682,7 @@ export default function App() {
     let cartaoIndPagSuspeito = 0;
 
     saidas.forEach(xml => {
-      const doc = parser.parseFromString(xml.rawXml!, 'text/xml');
+      const doc = getParsedXml(xml)!;
       if (doc.getElementsByTagName('detPag').length > 1) notasComPagamentoDividido++;
       // Troco (vTroco) é o valor devolvido ao cliente no pagamento em dinheiro —
       // entra no vPag do detPag de Dinheiro mas NÃO faz parte do valor da venda
@@ -1879,19 +1829,8 @@ export default function App() {
   // manually confirmed), flagged with cancellation status — the searchable
   // pool for "pesquisar notas de saída".
   const notasSaida = useMemo(() => {
-    const cnpjCounts: { [cnpj: string]: number } = {};
-    xmlList.forEach(xml => {
-      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
-      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
-    });
-    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
     if (!mainCnpj) return [];
 
-    const chavesCanceladas = new Set<string>(
-      xmlList
-        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
-        .map(xml => xml.chave!)
-    );
 
     const notas = xmlList
       .filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj)
@@ -1944,7 +1883,8 @@ export default function App() {
 
       const buscaItem = () => {
         if (!nota.rawXml || nota.tipo !== 'nfe') return false;
-        const doc = parser.parseFromString(nota.rawXml, 'text/xml');
+        const doc = getParsedXml(nota);
+        if (!doc) return false;
         return Array.from(doc.getElementsByTagName('xProd')).some(el => (el.textContent || '').toLowerCase().includes(query));
       };
 
@@ -1961,15 +1901,6 @@ export default function App() {
   }, [notasSaida, notaSearchQuery, notaSearchCampo, filterNotaModelo, filterNotaSituacao, filterNotaCfop]);
 
   const periodoAnalise = useMemo(() => {
-    // Identify the Main Client Company CNPJ (the most frequent overall)
-    const cnpjCounts: { [cnpj: string]: number } = {};
-    xmlList.forEach(xml => {
-      if (xml.emitCnpj) cnpjCounts[xml.emitCnpj] = (cnpjCounts[xml.emitCnpj] || 0) + 1;
-      if (xml.destCnpj) cnpjCounts[xml.destCnpj] = (cnpjCounts[xml.destCnpj] || 0) + 1;
-    });
-
-    const mainCnpj = Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-
     const datas = xmlList
       .filter(xml => !mainCnpj || xml.emitCnpj === mainCnpj) // Only count client's sales/saídas
       .map(xml => xml.data ? xml.data.substring(0, 10) : '')
@@ -2038,7 +1969,7 @@ export default function App() {
       diasComContagem,
       diasDetalhadosComContagem,
     };
-  }, [xmlList]);
+  }, [xmlList, mainCnpj]);
 
   const mesesDisponiveis = useMemo(() => {
     const months = new Set<string>();
