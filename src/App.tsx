@@ -4433,7 +4433,7 @@ export default function App() {
             </div>
           </div>
 
-          {analysis && analysis.length > 0 && (
+          {analysis && (
             <div className="flex flex-col items-end gap-3 no-print">
               <div className="flex items-center gap-3 no-print">
                 <ThemeToggle />
@@ -4446,6 +4446,7 @@ export default function App() {
                   Nova Análise
                 </button>
               </div>
+              {analysis.length > 0 && (
               <motion.div
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -4523,6 +4524,7 @@ export default function App() {
 
                 </div>
               </motion.div>
+              )}
             </div>
           )}
         </div>
