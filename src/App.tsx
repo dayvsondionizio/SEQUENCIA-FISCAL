@@ -2127,22 +2127,52 @@ export default function App() {
     return set;
   }, [nfseList]);
 
+  // Suspeita de nota cancelada e reemitida — muitos emissores próprios de
+  // NFS-e não geram (ou não permitem baixar) o evento de cancelamento; o
+  // XML da própria nota também não muda quando ela é cancelada (confirmado
+  // com um caso real: baixar a mesma nota de novo trouxe o cStat idêntico).
+  // Sem nenhum arquivo pra confirmar, a única pista que sobra é o padrão de
+  // reemissão: duas notas na mesma série, mesmo tomador, mesmo valor, mesma
+  // data e nDPS consecutivo. Isso NÃO confirma cancelamento — só levanta a
+  // suspeita pro analista investigar manualmente (ex: no portal do prestador).
+  const nfseSuspeitasCanceladas = useMemo(() => {
+    const set = new Set<string>();
+    if (!nfseMainCnpj) return set;
+    const notas = nfseList.filter(n => n.tipo === 'nfse' && n.cnpj === nfseMainCnpj);
+    for (let i = 0; i < notas.length; i++) {
+      for (let j = i + 1; j < notas.length; j++) {
+        const a = notas[i], b = notas[j];
+        if (a.serie !== b.serie || !a.destCnpj || a.destCnpj !== b.destCnpj) continue;
+        const va = parseFloat(a.valor || '0'), vb = parseFloat(b.valor || '0');
+        if (Math.abs(va - vb) > 0.01) continue;
+        const da = (a.data || '').slice(0, 10), db = (b.data || '').slice(0, 10);
+        if (!da || da !== db) continue;
+        const na = parseInt(a.nfseNumeroDPS || '', 10), nb = parseInt(b.nfseNumeroDPS || '', 10);
+        if (isNaN(na) || isNaN(nb) || Math.abs(na - nb) !== 1) continue;
+        if (a.chave) set.add(a.chave);
+        if (b.chave) set.add(b.chave);
+      }
+    }
+    return set;
+  }, [nfseList, nfseMainCnpj]);
+
   const nfseAnalysis = useMemo(() => {
     if (nfseList.length === 0 || !nfseMainCnpj) return [];
 
-    const grupos: Record<string, { cnpj: string; razaoSocial: string; serie: string; numeros: number[]; canceladosSet: Set<number> }> = {};
+    const grupos: Record<string, { cnpj: string; razaoSocial: string; serie: string; numeros: number[]; canceladosSet: Set<number>; suspeitasSet: Set<number> }> = {};
     nfseList.forEach(n => {
       if (n.tipo !== 'nfse' || n.cnpj !== nfseMainCnpj) return;
       const numDps = parseInt(n.nfseNumeroDPS || '', 10);
       if (!n.serie || isNaN(numDps)) return;
       const key = `${n.cnpj}_${n.serie}`;
       if (!grupos[key]) {
-        grupos[key] = { cnpj: n.cnpj!, razaoSocial: n.razaoSocial || '', serie: n.serie, numeros: [], canceladosSet: new Set() };
+        grupos[key] = { cnpj: n.cnpj!, razaoSocial: n.razaoSocial || '', serie: n.serie, numeros: [], canceladosSet: new Set(), suspeitasSet: new Set() };
       }
       grupos[key].numeros.push(numDps);
       const isCancelada = (!!n.chave && nfseCanceladasRefs.has(`chave:${n.chave}`)) ||
                            (!!n.nfseNumeroDFSe && nfseCanceladasRefs.has(`ndfse:${n.nfseNumeroDFSe}`));
       if (isCancelada) grupos[key].canceladosSet.add(numDps);
+      if (!isCancelada && n.chave && nfseSuspeitasCanceladas.has(n.chave)) grupos[key].suspeitasSet.add(numDps);
     });
 
     return Object.values(grupos).map(g => {
@@ -2161,9 +2191,10 @@ export default function App() {
         }
       }
       const cancelados = Array.from(g.canceladosSet).sort((a, b) => a - b);
-      return { cnpj: g.cnpj, razaoSocial: g.razaoSocial, serie: g.serie, min, max, esperados, recebidos, duplicados, faltantes, cancelados };
+      const suspeitasCanceladas = Array.from(g.suspeitasSet).sort((a, b) => a - b);
+      return { cnpj: g.cnpj, razaoSocial: g.razaoSocial, serie: g.serie, min, max, esperados, recebidos, duplicados, faltantes, cancelados, suspeitasCanceladas };
     });
-  }, [nfseList, nfseMainCnpj, nfseCanceladasRefs]);
+  }, [nfseList, nfseMainCnpj, nfseCanceladasRefs, nfseSuspeitasCanceladas]);
 
   useEffect(() => {
     if (analysis) {
@@ -5155,6 +5186,11 @@ export default function App() {
                                       ⓘ {s.cancelados.length} nDPS cancelado(s): {formatarFaixas(agruparFaixas(s.cancelados))}
                                     </div>
                                   )}
+                                  {s.suspeitasCanceladas.length > 0 && (
+                                    <div className="mt-0.5 text-amber-700 dark:text-amber-400">
+                                      ⚠ {s.suspeitasCanceladas.length} nDPS suspeito(s) de cancelamento/reemissão (mesmo tomador/valor/data, nDPS consecutivo — confirme manualmente): {formatarFaixas(agruparFaixas(s.suspeitasCanceladas))}
+                                    </div>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -5180,12 +5216,18 @@ export default function App() {
                               {filtradas.slice(0, 100).map((n, i) => {
                                 const nCancelada = (!!n.chave && nfseCanceladasRefs.has(`chave:${n.chave}`)) ||
                                                    (!!n.nfseNumeroDFSe && nfseCanceladasRefs.has(`ndfse:${n.nfseNumeroDFSe}`));
+                                const nSuspeita = !nCancelada && !!n.chave && nfseSuspeitasCanceladas.has(n.chave);
                                 return (
-                                <tr key={n.chave || i} className={cn("border-b border-slate-100 dark:border-slate-800 last:border-0", nCancelada && "bg-rose-50/60 dark:bg-rose-950/30")}>
+                                <tr key={n.chave || i} className={cn(
+                                  "border-b border-slate-100 dark:border-slate-800 last:border-0",
+                                  nCancelada && "bg-rose-50/60 dark:bg-rose-950/30",
+                                  nSuspeita && "bg-amber-50/60 dark:bg-amber-950/30"
+                                )}>
                                   <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">
                                     <span className="inline-flex items-center gap-1">
                                       {n.numero || '—'}
                                       {nCancelada && <Ban className="w-3 h-3 text-rose-500 shrink-0" title="NFS-e cancelada" />}
+                                      {nSuspeita && <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" title="Possível nota cancelada e reemitida (mesmo tomador/valor/data, nDPS consecutivo) — confirme manualmente" />}
                                     </span>
                                   </td>
                                   <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-400">{n.nfseNumeroDPS || '—'}</td>
@@ -7313,6 +7355,16 @@ export default function App() {
                                 Cancelamentos Identificados ({serie.cancelados.length})
                               </div>
                               nDPS: {formatarFaixas(agruparFaixas(serie.cancelados))}
+                            </div>
+                          )}
+
+                          {serie.suspeitasCanceladas.length > 0 && (
+                            <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-lg p-4 text-amber-800 dark:text-amber-200 text-sm">
+                              <div className="font-bold flex items-center gap-2 mb-1">
+                                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                                Suspeita de Cancelamento/Reemissão ({serie.suspeitasCanceladas.length})
+                              </div>
+                              Mesmo tomador, valor e data, nDPS consecutivo — não é uma confirmação, o sistema do prestador não expõe o evento de cancelamento. nDPS: {formatarFaixas(agruparFaixas(serie.suspeitasCanceladas))}
                             </div>
                           )}
 
