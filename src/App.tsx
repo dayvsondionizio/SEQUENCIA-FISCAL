@@ -52,7 +52,7 @@ function cn(...inputs: ClassValue[]) {
 // --- Types ---
 
 interface XmlData {
-  tipo: 'nfe' | 'inutilizacao' | 'evento' | 'consulta' | 'outro' | 'nfse';
+  tipo: 'nfe' | 'inutilizacao' | 'evento' | 'consulta' | 'outro' | 'nfse' | 'nfse_evento';
   subTipo?: string;
   isContingencia?: boolean;
   isCancelamento?: boolean;
@@ -100,6 +100,11 @@ interface XmlData {
   // ser sequencial sem buraco, igual o nNF do NF-e. Guardado à parte pra não
   // confundir com o número exibido pro usuário.
   nfseNumeroDPS?: string;
+  // nDFSe — identificador numérico atribuído pelo Ambiente Nacional à NFS-e
+  // (distinto de nNFSe, que fica em `numero`). É por esse número (ou pela
+  // chave em `chave`) que o evento de cancelamento de NFS-e referencia qual
+  // nota está sendo cancelada.
+  nfseNumeroDFSe?: string;
 }
 
 interface SourceMetadata {
@@ -225,7 +230,28 @@ function parseXML(xmlText: string, fileName: string): XmlData {
       // nDPS — número controlado pelo prestador, usado pra auditoria de
       // sequência (ver comentário no campo, na interface XmlData).
       nfseNumeroDPS: getTxt(doc, 'nDPS'),
+      nfseNumeroDFSe: getTxt(doc, 'nDFSe'),
       chave: infNFSe?.getAttribute('Id') || '',
+      modelo: 'NFS-e',
+      rawXml: xmlText,
+    };
+  }
+
+  // Evento de cancelamento de NFS-e (Ambiente Nacional) — é um XML SEPARADO
+  // da NFS-e original (raiz <evento><infEvento>, mesmo xmlns da NFS-e), não
+  // uma atualização de status dentro da própria nota. Referencia a nota
+  // cancelada por chNFSe (chave) e/ou nDFSe (número); guardamos os dois pra
+  // cruzar depois. Best-effort: nomes de tag ainda variam entre emissores.
+  const isNfseEvento = lowerText.includes('<infevento') && lowerText.includes('sped.fazenda.gov.br/nfse');
+  if (isNfseEvento) {
+    const doc = parser.parseFromString(xmlText, 'text/xml');
+    const getTxt = (tag: string) => doc.getElementsByTagName(tag)[0]?.textContent?.trim() || '';
+    return {
+      tipo: 'nfse_evento',
+      fileName,
+      chave: getTxt('chNFSe') || getTxt('chDFSe'),
+      numero: getTxt('nDFSe'),
+      data: getTxt('dhEvento') || getTxt('dhProc'),
       modelo: 'NFS-e',
       rawXml: xmlText,
     };
@@ -903,6 +929,7 @@ export default function App() {
   const [isConfirmed, setIsConfirmed] = useState(false);
   const [analysis, setAnalysis] = useState<SerieAnalysis[] | null>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const [expandedNfseIdx, setExpandedNfseIdx] = useState<number | null>(null);
   const [manualInutModelo, setManualInutModelo] = useState('65');
   const [manualInutSerie, setManualInutSerie] = useState('');
   const [manualInutIni, setManualInutIni] = useState('');
@@ -2062,18 +2089,60 @@ export default function App() {
   // nNFSe — porque nNFSe é atribuído pelo Ambiente Nacional e tem buracos
   // normais/esperados (números reservados que não viram nota), enquanto o
   // nDPS é controlado pelo próprio prestador, igual o nNF do NF-e.
-  const nfseAnalysis = useMemo(() => {
-    if (nfseList.length === 0) return [];
-
-    const grupos: Record<string, { cnpj: string; razaoSocial: string; serie: string; numeros: number[] }> = {};
+  // Prestador principal da NFS-e — reaproveita o mainCnpj já identificado via
+  // NF-e quando existe (é a mesma empresa auditada), senão calcula pelo
+  // prestador mais frequente entre as próprias NFS-e (mesmo princípio do
+  // mainCnpj de NF-e, mas em cima de emitCnpj/cnpj = prestador).
+  const nfseMainCnpj = useMemo(() => {
+    if (mainCnpj) return mainCnpj;
+    const counts: Record<string, number> = {};
     nfseList.forEach(n => {
+      if (n.tipo === 'nfse' && n.cnpj) counts[n.cnpj] = (counts[n.cnpj] || 0) + 1;
+    });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0];
+  }, [mainCnpj, nfseList]);
+
+  // Notas de serviço TOMADO pela empresa auditada (ela é o tomador, não o
+  // prestador) — não fazem parte da sequência própria de emissão, igual as
+  // notas de entrada de fornecedor no NF-e. Contadas aqui só pra avisar o
+  // analista, não entram em nfseAnalysis.
+  const nfseRecebidasInfo = useMemo(() => {
+    if (!nfseMainCnpj) return null;
+    const recebidas = nfseList.filter(n => n.tipo === 'nfse' && n.cnpj && n.cnpj !== nfseMainCnpj);
+    if (recebidas.length === 0) return null;
+    const nomes = Array.from(new Set(recebidas.map(n => n.razaoSocial).filter(Boolean))).slice(0, 3).join(', ');
+    return { count: recebidas.length, nomes };
+  }, [nfseList, nfseMainCnpj]);
+
+  // Referências (chave e/ou nDFSe) de NFS-e canceladas via evento separado
+  // (ver comentário em parseXML) — usado pra marcar a nota original como
+  // cancelada sem contar o número dela como faltante na sequência.
+  const nfseCanceladasRefs = useMemo(() => {
+    const set = new Set<string>();
+    nfseList.forEach(n => {
+      if (n.tipo !== 'nfse_evento') return;
+      if (n.chave) set.add(`chave:${n.chave}`);
+      if (n.numero) set.add(`ndfse:${n.numero}`);
+    });
+    return set;
+  }, [nfseList]);
+
+  const nfseAnalysis = useMemo(() => {
+    if (nfseList.length === 0 || !nfseMainCnpj) return [];
+
+    const grupos: Record<string, { cnpj: string; razaoSocial: string; serie: string; numeros: number[]; canceladosSet: Set<number> }> = {};
+    nfseList.forEach(n => {
+      if (n.tipo !== 'nfse' || n.cnpj !== nfseMainCnpj) return;
       const numDps = parseInt(n.nfseNumeroDPS || '', 10);
-      if (!n.cnpj || !n.serie || isNaN(numDps)) return;
+      if (!n.serie || isNaN(numDps)) return;
       const key = `${n.cnpj}_${n.serie}`;
       if (!grupos[key]) {
-        grupos[key] = { cnpj: n.cnpj, razaoSocial: n.razaoSocial || '', serie: n.serie, numeros: [] };
+        grupos[key] = { cnpj: n.cnpj!, razaoSocial: n.razaoSocial || '', serie: n.serie, numeros: [], canceladosSet: new Set() };
       }
       grupos[key].numeros.push(numDps);
+      const isCancelada = (!!n.chave && nfseCanceladasRefs.has(`chave:${n.chave}`)) ||
+                           (!!n.nfseNumeroDFSe && nfseCanceladasRefs.has(`ndfse:${n.nfseNumeroDFSe}`));
+      if (isCancelada) grupos[key].canceladosSet.add(numDps);
     });
 
     return Object.values(grupos).map(g => {
@@ -2091,9 +2160,10 @@ export default function App() {
           if (faltantes.length > 10000) break;
         }
       }
-      return { cnpj: g.cnpj, razaoSocial: g.razaoSocial, serie: g.serie, min, max, esperados, recebidos, duplicados, faltantes };
+      const cancelados = Array.from(g.canceladosSet).sort((a, b) => a - b);
+      return { cnpj: g.cnpj, razaoSocial: g.razaoSocial, serie: g.serie, min, max, esperados, recebidos, duplicados, faltantes, cancelados };
     });
-  }, [nfseList]);
+  }, [nfseList, nfseMainCnpj, nfseCanceladasRefs]);
 
   useEffect(() => {
     if (analysis) {
@@ -3288,7 +3358,7 @@ export default function App() {
                     } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
                       results.localXmls.push(data);
                       if (data.tipo === 'nfe') results.localValidNfCount++;
-                    } else if (data.tipo === 'nfse') {
+                    } else if (data.tipo === 'nfse' || data.tipo === 'nfse_evento') {
                       results.localNfse.push(data);
                     } else {
                       results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
@@ -3368,7 +3438,7 @@ export default function App() {
                   } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
                     results.localXmls.push(data);
                     if (data.tipo === 'nfe') results.localValidNfCount++;
-                  } else if (data.tipo === 'nfse') {
+                  } else if (data.tipo === 'nfse' || data.tipo === 'nfse_evento') {
                     results.localNfse.push(data);
                   } else {
                     results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
@@ -3435,7 +3505,7 @@ export default function App() {
                     } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
                       results.localXmls.push(data);
                       if (data.tipo === 'nfe') results.localValidNfCount++;
-                    } else if (data.tipo === 'nfse') {
+                    } else if (data.tipo === 'nfse' || data.tipo === 'nfse_evento') {
                       results.localNfse.push(data);
                     } else {
                       results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
@@ -3504,7 +3574,7 @@ export default function App() {
                 // faturamentoTotal can cross-reference them by chave
                 res.localXmls.push(data);
                 if (data.tipo === 'nfe') res.localValidNfCount++;
-              } else if (data.tipo === 'nfse') {
+              } else if (data.tipo === 'nfse' || data.tipo === 'nfse_evento') {
                 res.localNfse.push(data);
               } else {
                 res.localOthers.push({ fileName: file.name, subTipo: data.subTipo, tipo: data.tipo } as any);
@@ -5035,6 +5105,17 @@ export default function App() {
                         {showNfse ? 'Ocultar' : 'Ver detalhes'}
                       </button>
                     </div>
+
+                    {nfseRecebidasInfo && (
+                      <div className="flex items-start gap-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-3 text-blue-700 dark:text-blue-300 text-sm mb-4">
+                        <svg className="w-4 h-4 mt-0.5 shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        <div>
+                          <span className="font-bold">{nfseRecebidasInfo.count} nota{nfseRecebidasInfo.count !== 1 ? 's' : ''} de serviço tomado (a empresa é a tomadora, não a prestadora)</span> detectada{nfseRecebidasInfo.count !== 1 ? 's' : ''} e ignorada{nfseRecebidasInfo.count !== 1 ? 's' : ''} na sequência abaixo — só a numeração própria da empresa (como prestadora) é auditada.
+                          {nfseRecebidasInfo.nomes && <span className="text-blue-500 dark:text-blue-400 ml-1">({nfseRecebidasInfo.nomes})</span>}
+                        </div>
+                      </div>
+                    )}
+
                     {showNfse && (
                       <div className="space-y-3">
                         <input
@@ -5069,6 +5150,11 @@ export default function App() {
                                   ) : (
                                     <div className="mt-0.5">✓ Sequência íntegra nessa série</div>
                                   )}
+                                  {s.cancelados.length > 0 && (
+                                    <div className="mt-0.5 text-amber-700 dark:text-amber-400">
+                                      ⓘ {s.cancelados.length} nDPS cancelado(s): {formatarFaixas(agruparFaixas(s.cancelados))}
+                                    </div>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -5091,9 +5177,17 @@ export default function App() {
                               </tr>
                             </thead>
                             <tbody>
-                              {filtradas.slice(0, 100).map((n, i) => (
-                                <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
-                                  <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero || '—'}</td>
+                              {filtradas.slice(0, 100).map((n, i) => {
+                                const nCancelada = (!!n.chave && nfseCanceladasRefs.has(`chave:${n.chave}`)) ||
+                                                   (!!n.nfseNumeroDFSe && nfseCanceladasRefs.has(`ndfse:${n.nfseNumeroDFSe}`));
+                                return (
+                                <tr key={n.chave || i} className={cn("border-b border-slate-100 dark:border-slate-800 last:border-0", nCancelada && "bg-rose-50/60 dark:bg-rose-950/30")}>
+                                  <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">
+                                    <span className="inline-flex items-center gap-1">
+                                      {n.numero || '—'}
+                                      {nCancelada && <Ban className="w-3 h-3 text-rose-500 shrink-0" title="NFS-e cancelada" />}
+                                    </span>
+                                  </td>
                                   <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-400">{n.nfseNumeroDPS || '—'}</td>
                                   <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-400">{n.serie || '—'}</td>
                                   <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
@@ -5111,7 +5205,8 @@ export default function App() {
                                     </button>
                                   </td>
                                 </tr>
-                              ))}
+                                );
+                              })}
                             </tbody>
                           </table>
                           {filtradas.length > 100 && (
@@ -7137,6 +7232,106 @@ export default function App() {
                 ))}
               </div>
 
+              {/* Series List — NFS-e (auditoria de sequência isolada, ver nfseAnalysis) */}
+              {nfseAnalysis.length > 0 && (
+                <div className="space-y-4">
+                  {nfseAnalysis.map((serie, idx) => (
+                    <div key={`nfse_${serie.cnpj}_${serie.serie}_${idx}`} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden transition-all hover:shadow-md">
+                      <div
+                        className="p-6 cursor-pointer flex items-center gap-6"
+                        onClick={() => setExpandedNfseIdx(expandedNfseIdx === idx ? null : idx)}
+                      >
+                        <div className={cn(
+                          "w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg",
+                          serie.faltantes.length > 0 ? "bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400" : "bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400"
+                        )}>
+                          {serie.faltantes.length > 0 ? "!" : "✓"}
+                        </div>
+
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3">
+                            <h3 className="font-semibold text-slate-800 dark:text-slate-200 text-lg">{serie.razaoSocial}</h3>
+                            <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-semibold rounded uppercase tracking-wider border border-blue-200 dark:border-blue-800">
+                              NFS-e
+                            </span>
+                          </div>
+                          <div className="text-slate-400 dark:text-slate-500 text-sm font-medium">
+                            Série {serie.serie} • CNPJ {serie.cnpj} (prestador) • nDPS
+                          </div>
+                        </div>
+
+                        <div className="flex gap-8 items-center">
+                          <div className="text-center">
+                            <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-tighter">Recebidos</div>
+                            <div className="text-xl font-bold text-slate-900 dark:text-slate-100">{serie.recebidos}</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-tighter">Faltantes</div>
+                            <div className={cn(
+                              "text-xl font-bold",
+                              serie.faltantes.length > 0 ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
+                            )}>
+                              {serie.faltantes.length}
+                            </div>
+                          </div>
+                          <ChevronRight className={cn(
+                            "w-6 h-6 text-slate-300 dark:text-slate-600 transition-transform duration-300",
+                            expandedNfseIdx === idx && "rotate-90"
+                          )} />
+                        </div>
+                      </div>
+
+                      {expandedNfseIdx === idx && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 p-8 space-y-6"
+                        >
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="bg-white dark:bg-slate-900 p-4 rounded-lg border border-slate-200 dark:border-slate-700">
+                              <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Menor nDPS</div>
+                              <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.min}</div>
+                            </div>
+                            <div className="bg-white dark:bg-slate-900 p-4 rounded-lg border border-slate-200 dark:border-slate-700">
+                              <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Maior nDPS</div>
+                              <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.max}</div>
+                            </div>
+                            <div className="bg-white dark:bg-slate-900 p-4 rounded-lg border border-slate-200 dark:border-slate-700">
+                              <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Esperados</div>
+                              <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.esperados}</div>
+                            </div>
+                            <div className="bg-white dark:bg-slate-900 p-4 rounded-lg border border-slate-200 dark:border-slate-700">
+                              <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Duplicados</div>
+                              <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{serie.duplicados}</div>
+                            </div>
+                          </div>
+
+                          {serie.cancelados.length > 0 && (
+                            <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-lg p-4 text-amber-800 dark:text-amber-200 text-sm">
+                              <div className="font-bold flex items-center gap-2 mb-1">
+                                <Ban className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                                Cancelamentos Identificados ({serie.cancelados.length})
+                              </div>
+                              nDPS: {formatarFaixas(agruparFaixas(serie.cancelados))}
+                            </div>
+                          )}
+
+                          {serie.faltantes.length > 0 && (
+                            <div className="bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 rounded-lg p-4 text-rose-800 dark:text-rose-200 text-sm">
+                              <div className="font-bold flex items-center gap-2 mb-1">
+                                <AlertCircle className="w-4 h-4" />
+                                nDPS Ausentes ({serie.faltantes.length})
+                              </div>
+                              {formatarFaixas(agruparFaixas(serie.faltantes))}
+                            </div>
+                          )}
+                        </motion.div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {/* Consolidated Message */}
               {analysis.some(s => s.faltantes.length > 0) && (
                 <div className="bg-white rounded-2xl border-2 border-blue-600 p-8 shadow-xl no-print">
@@ -7178,7 +7373,7 @@ export default function App() {
                   />
                 </div>
               )}
-              {analysis.every(s => s.faltantes.length === 0) && (
+              {analysis.every(s => s.faltantes.length === 0) && nfseAnalysis.every(s => s.faltantes.length === 0) && (
                 <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-10 text-center space-y-4">
                   <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
                     <CheckCircle2 className="w-10 h-10" />
