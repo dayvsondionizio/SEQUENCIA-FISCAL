@@ -1532,8 +1532,9 @@ export default function App() {
   const auditoriaRegime = useMemo(() => {
     const vazio = {
       totalNotas: 0, crtCounts: [] as { crt: string; label: string; qtd: number; primeira: string; ultima: string }[],
-      crtPredominante: '', crtPredominanteLabel: '', consistente: true, mudouNoPeriodo: false,
+      crtPredominante: '', crtPredominanteLabel: '', pctPredominante: 0, consistente: true, mudouNoPeriodo: false,
       inconsistencias: [] as { xml: XmlData; motivo: string }[], amostra: [] as XmlData[],
+      semCrt: [] as XmlData[], temAlerta: false,
     };
     if (!mainCnpj) return vazio;
 
@@ -1549,11 +1550,15 @@ export default function App() {
     const porCrt: Record<string, { qtd: number; primeira: string; ultima: string }> = {};
     const inconsistencias: { xml: XmlData; motivo: string }[] = [];
     const amostraPorCrt = new Map<string, XmlData>();
+    // Nota sem <CRT> nenhum é, em si, uma inconsistência de padronização —
+    // não deve ser descartada silenciosamente do total, senão "100% consistente"
+    // vira uma conta enganosa (só sobre quem tinha o campo, não sobre o total).
+    const semCrt: XmlData[] = [];
 
     saidas.forEach(xml => {
       const doc = getParsedXml(xml)!;
       const crt = doc.getElementsByTagName('emit')[0]?.getElementsByTagName('CRT')[0]?.textContent?.trim() || '';
-      if (!crt) return;
+      if (!crt) { semCrt.push(xml); return; }
 
       if (!porCrt[crt]) porCrt[crt] = { qtd: 0, primeira: xml.data || '', ultima: xml.data || '' };
       porCrt[crt].qtd++;
@@ -1590,16 +1595,23 @@ export default function App() {
       .sort((a, b) => b.qtd - a.qtd);
 
     const crtPredominante = crtCounts[0]?.crt || '';
+    // % sobre o TOTAL de saídas do período, não só sobre quem tinha CRT —
+    // se 3 de 491 notas não trouxerem o campo, isso já não é "100%".
+    const pctPredominante = saidas.length > 0 ? Math.round(((crtCounts[0]?.qtd || 0) / saidas.length) * 100) : 0;
+    const mudouNoPeriodo = crtCounts.length > 1;
 
     return {
       totalNotas: saidas.length,
       crtCounts,
       crtPredominante,
       crtPredominanteLabel: crtLabel[crtPredominante] || crtPredominante,
+      pctPredominante,
       consistente: inconsistencias.length === 0,
-      mudouNoPeriodo: crtCounts.length > 1,
+      mudouNoPeriodo,
       inconsistencias,
       amostra: Array.from(amostraPorCrt.values()),
+      semCrt,
+      temAlerta: mudouNoPeriodo || semCrt.length > 0,
     };
   }, [xmlList, filterMes]);
 
@@ -4452,12 +4464,55 @@ export default function App() {
                       <div className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
                         ⚠ O CRT declarado mudou dentro desse período — pode ser uma transição de regime de verdade ou uma correção no sistema de emissão. Confira as datas de corte acima contra o cadastro oficial do cliente.
                       </div>
+                    ) : auditoriaRegime.semCrt.length > 0 ? (
+                      <div className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+                        ⚠ {auditoriaRegime.crtCounts[0]?.qtd} de {auditoriaRegime.totalNotas} nota(s) ({auditoriaRegime.pctPredominante}%) declaram CRT={auditoriaRegime.crtPredominante} — as outras {auditoriaRegime.semCrt.length} não trazem o campo CRT no XML (veja a amostra abaixo). Os XMLs deveriam seguir um padrão único; confirme com o cliente/sistema por que essas notas saíram diferentes.
+                      </div>
                     ) : (
                       <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
-                        ✓ {auditoriaRegime.crtCounts[0]?.qtd} de {auditoriaRegime.totalNotas} nota(s) (100%) declaram o mesmo CRT de forma consistente nesse período — não é uma nota isolada, é sistemático.
+                        ✓ {auditoriaRegime.crtCounts[0]?.qtd} de {auditoriaRegime.totalNotas} nota(s) ({auditoriaRegime.pctPredominante}%) declaram o mesmo CRT de forma consistente nesse período — não é uma nota isolada, é sistemático.
                       </div>
                     )}
                   </div>
+
+                  {auditoriaRegime.semCrt.length > 0 && (
+                    <div>
+                      <div className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-2">Notas sem CRT declarado ({auditoriaRegime.semCrt.length})</div>
+                      <div className="overflow-x-auto max-h-40 overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                              <th className="py-1.5 pr-3">Série</th>
+                              <th className="py-1.5 pr-3">Nº</th>
+                              <th className="py-1.5 pr-3">Data</th>
+                              <th className="py-1.5">Baixar</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {auditoriaRegime.semCrt.slice(0, 20).map((n, i) => (
+                              <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.serie}</td>
+                                <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero}</td>
+                                <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                <td className="py-1.5">
+                                  <button
+                                    onClick={() => baixarXmlEvidencia(n)}
+                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    XML
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {auditoriaRegime.semCrt.length > 20 && (
+                          <p className="text-[11px] text-slate-400 mt-1.5">Mostrando 20 de {auditoriaRegime.semCrt.length}.</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   <div className={cn(
                     "rounded-lg px-3 py-2.5 text-[11px]",
@@ -4639,6 +4694,13 @@ export default function App() {
                         >
                           {regimeTributario.label}
                         </span>
+                        {auditoriaRegime.temAlerta && (
+                          <AlertTriangle
+                            className="w-3.5 h-3.5 shrink-0"
+                            style={{color: '#F87171'}}
+                            title={`Atenção: ${auditoriaRegime.semCrt.length > 0 ? `${auditoriaRegime.semCrt.length} nota(s) sem CRT declarado` : ''}${auditoriaRegime.semCrt.length > 0 && auditoriaRegime.mudouNoPeriodo ? ' e ' : ''}${auditoriaRegime.mudouNoPeriodo ? 'o CRT declarado mudou dentro do período' : ''} — só ${auditoriaRegime.pctPredominante}% das notas confirmam o regime predominante. Veja a Auditoria de Regime.`}
+                          />
+                        )}
                         <button
                           onClick={() => setShowAuditoriaRegime(true)}
                           className="shrink-0 transition-colors no-print"
