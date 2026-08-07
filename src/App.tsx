@@ -1310,7 +1310,13 @@ export default function App() {
   const parsedXmlCache = useMemo(() => {
     const cache = new Map<string, Document>();
     xmlList.forEach(xml => {
-      if (!xml.rawXml || !xml.chave) return;
+      // Eventos (Manifestação do Destinatário — Ciência/Confirmação/Desconhecimento
+      // da Operação, e também o próprio cancelamento) referenciam o chNFe da NOTA
+      // ORIGINAL, não uma chave própria — se entrassem aqui, sobrescreveriam no
+      // cache o documento certo da nota (que tem <emit>/<CRT>/etc.) pelo do
+      // evento (que não tem nada disso), corrompendo toda auditoria que depende
+      // desse cache pra essa chave. Só nota fiscal de fato deve ser cacheada aqui.
+      if (xml.tipo !== 'nfe' || !xml.rawXml || !xml.chave) return;
       cache.set(xml.chave, parser.parseFromString(xml.rawXml, 'text/xml'));
     });
     return cache;
