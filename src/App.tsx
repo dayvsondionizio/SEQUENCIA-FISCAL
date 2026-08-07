@@ -1493,12 +1493,23 @@ export default function App() {
   const regimeTributario = useMemo(() => {
     if (!mainCnpj) return { crt: '', label: null as string | null, isSimples: false, isMei: false };
 
-    const nota = xmlList.find(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml);
-    if (!nota) return { crt: '', label: null as string | null, isSimples: false, isMei: false };
+    // Nem toda nota tem <CRT> preenchido (varia por sistema/versão do emissor)
+    // — percorre as notas do período até achar uma que realmente traga o
+    // dado, em vez de desistir na primeira (que pode ser justo uma sem ele).
+    // Prioriza o período/mês selecionado; só cai pra qualquer nota da empresa
+    // se nenhuma do período tiver CRT.
+    const buscarCrt = (notas: XmlData[]) => {
+      for (const nota of notas) {
+        const doc = getParsedXml(nota);
+        const valor = doc?.getElementsByTagName('emit')[0]?.getElementsByTagName('CRT')[0]?.textContent?.trim();
+        if (valor) return valor;
+      }
+      return '';
+    };
+    const daEmpresa = xmlList.filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml);
+    const doPeriodo = daEmpresa.filter(xml => filterMes === 'Todos' || getMonthYear(xml.data) === filterMes);
+    const crt = buscarCrt(doPeriodo) || buscarCrt(daEmpresa);
 
-    const doc = getParsedXml(nota);
-    if (!doc) return { crt: '', label: null as string | null, isSimples: false, isMei: false };
-    const crt = doc.getElementsByTagName('emit')[0]?.getElementsByTagName('CRT')[0]?.textContent?.trim() || '';
     const isSimples = crt === '1' || crt === '2';
     // CRT=4 (MEI) foi liberado pela NT 2024.001 — MEI não é "Simples Nacional"
     // no sentido estrito (regime próprio, embora sob o guarda-chuva do SIMEI),
@@ -1506,7 +1517,7 @@ export default function App() {
     const isMei = crt === '4';
     const label = isSimples ? 'Simples Nacional' : isMei ? 'MEI' : crt === '3' ? 'Regime Normal' : null;
     return { crt, label, isSimples, isMei };
-  }, [xmlList]);
+  }, [xmlList, filterMes, mainCnpj]);
 
   const crtLabel: Record<string, string> = { '1': 'Simples Nacional', '2': 'Simples Nacional (sublimite)', '3': 'Regime Normal', '4': 'MEI' };
 
@@ -1658,16 +1669,33 @@ export default function App() {
     const vazio = { cnpj: '', cnpjFormatado: '', contato: '', email: '', fone: '', foneFormatado: '', dominio: '' };
     if (!mainCnpj) return vazio;
 
-    const nota = xmlList.find(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml);
-    if (!nota) return vazio;
-
-    const doc = getParsedXml(nota);
-    if (!doc) return vazio;
-    const infRespTec = doc.getElementsByTagName('infRespTec')[0];
-    const cnpj = infRespTec?.getElementsByTagName('CNPJ')[0]?.textContent?.trim() || '';
-    const contato = infRespTec?.getElementsByTagName('xContato')[0]?.textContent?.trim() || '';
-    const email = infRespTec?.getElementsByTagName('email')[0]?.textContent?.trim() || '';
-    const fone = infRespTec?.getElementsByTagName('fone')[0]?.textContent?.trim() || '';
+    // Busca dentro do período/mês selecionado primeiro — o responsável técnico
+    // pode ter mudado entre um mês e outro (troca de sistema), e mostrar o de
+    // um mês diferente do que está sendo visto na tela seria enganoso. Só cai
+    // pra "qualquer nota da empresa" se nenhuma do período tiver o campo
+    // preenchido (nem toda nota traz <infRespTec>, varia por sistema).
+    const buscarInfRespTec = (notas: XmlData[]) => {
+      for (const nota of notas) {
+        const doc = getParsedXml(nota);
+        const infRespTec = doc?.getElementsByTagName('infRespTec')[0];
+        const cnpj = infRespTec?.getElementsByTagName('CNPJ')[0]?.textContent?.trim() || '';
+        const email = infRespTec?.getElementsByTagName('email')[0]?.textContent?.trim() || '';
+        if (cnpj || email) {
+          return {
+            cnpj,
+            contato: infRespTec?.getElementsByTagName('xContato')[0]?.textContent?.trim() || '',
+            email,
+            fone: infRespTec?.getElementsByTagName('fone')[0]?.textContent?.trim() || '',
+          };
+        }
+      }
+      return null;
+    };
+    const daEmpresa = xmlList.filter(xml => xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml);
+    const doPeriodo = daEmpresa.filter(xml => filterMes === 'Todos' || getMonthYear(xml.data) === filterMes);
+    const encontrado = buscarInfRespTec(doPeriodo) || buscarInfRespTec(daEmpresa);
+    if (!encontrado) return vazio;
+    const { cnpj, contato, email, fone } = encontrado;
     const dominio = email.includes('@') ? email.split('@')[1] : '';
 
     const cnpjFormatado = cnpj.replace(/^([0-9A-Za-z]{2})([0-9A-Za-z]{3})([0-9A-Za-z]{3})([0-9A-Za-z]{4})(\d{2})$/, '$1.$2.$3/$4-$5') || cnpj;
@@ -1678,7 +1706,7 @@ export default function App() {
         : fone;
 
     return { cnpj, cnpjFormatado, contato, email, fone, foneFormatado, dominio };
-  }, [xmlList]);
+  }, [xmlList, filterMes, mainCnpj]);
 
   // Auditoria de meios de pagamento / TEF: verifica o bloco <pag> de cada nota
   // em busca de inconsistências que geram rejeição SEFAZ (falso TEF, cAut
