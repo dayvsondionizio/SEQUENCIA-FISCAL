@@ -723,17 +723,26 @@ function descricaoCfop(cfop: string): string {
 }
 
 function deduplicateXmls(list: XmlData[]): XmlData[] {
-  const seen = new Set<string>();
-  return list.filter(xml => {
+  const seen = new Map<string, XmlData>();
+  const result: XmlData[] = [];
+  list.forEach(xml => {
     // Include tipo in the key so an 'evento' and an 'nfe' with the same chave are NOT considered duplicates
     const baseKey = xml.chave || `${xml.cnpj || ''}_${xml.modelo || ''}_${xml.serie || ''}_${xml.numero || ''}`;
     const key = `${xml.tipo}::${baseKey}`;
-    if (seen.has(key)) {
-      return false;
+    const existing = seen.get(key);
+    if (existing) {
+      // Um cliente pode mandar, além do XML original autorizado, uma resposta
+      // de cancelamento malformada (mesma chave, mesmo tipo 'nfe', mas com
+      // cStat/xMotivo de cancelamento em vez de um evento separado — visto na
+      // prática). Se a duplicata descartada indicar cancelamento e a que
+      // ficou não, o sinal não pode se perder: é a mesma nota fiscal.
+      if (xml.isCancelamento && !existing.isCancelamento) existing.isCancelamento = true;
+      return;
     }
-    seen.add(key);
-    return true;
+    seen.set(key, xml);
+    result.push(xml);
   });
+  return result;
 }
 
 function deduplicateInutilizacoes(list: XmlData[]): XmlData[] {
@@ -1058,6 +1067,7 @@ export default function App() {
   const [showCfopPorModelo, setShowCfopPorModelo] = useState(false);
   const [showAnomalias, setShowAnomalias] = useState(false);
   const [showSemAutorizacao, setShowSemAutorizacao] = useState(false);
+  const [showMalformadas, setShowMalformadas] = useState(false);
   const [showAuditoriaPagamento, setShowAuditoriaPagamento] = useState(false);
   const [showAuditoriaRegime, setShowAuditoriaRegime] = useState(false);
   const [showAuditoriaIbsCbs, setShowAuditoriaIbsCbs] = useState(false);
@@ -1299,10 +1309,18 @@ export default function App() {
     return Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
   }, [xmlList]);
 
+  // Não restringe por tipo: além do evento de cancelamento normal (tipo
+  // 'evento') e consultas, uma nota 'nfe' também pode chegar já carregando
+  // seu próprio isCancelamento=true — visto na prática num arquivo malformado
+  // que o sistema do cliente gerou com estrutura de nota autorizada mas
+  // cStat/xMotivo de cancelamento (cStat=101 reaproveitando o protocolo da
+  // autorização original, em vez de vir como evento separado tpEvento=110111).
+  // Qualquer XML que autodeclare cancelamento deve excluir essa chave do
+  // faturamento, seja qual for o "tipo" em que ele foi classificado.
   const chavesCanceladas = useMemo(() => {
     return new Set<string>(
       xmlList
-        .filter(xml => (xml.tipo === 'evento' || xml.tipo === 'consulta') && xml.isCancelamento && xml.chave)
+        .filter(xml => xml.isCancelamento && xml.chave)
         .map(xml => xml.chave!)
     );
   }, [xmlList]);
@@ -1426,7 +1444,8 @@ export default function App() {
       semProtocoloAbatidas: 0,
       foraDoPrazo: [] as XmlData[],
       numeroDuplicado: [] as XmlData[][],
-      semAutorizacaoNaoContingencia: [] as XmlData[]
+      semAutorizacaoNaoContingencia: [] as XmlData[],
+      malformadas: [] as XmlData[]
     };
 
 
@@ -1435,6 +1454,20 @@ export default function App() {
       xml.emitCnpj === mainCnpj &&
       xml.tpNF !== '0' &&
       !(xml.chave && chavesCanceladas.has(xml.chave))
+    );
+
+    // Nota com ESTRUTURA de nota autorizada (tipo 'nfe', não um evento
+    // separado) mas que ela própria já vem com cStat/xMotivo de cancelamento
+    // (ex: cStat=101 reaproveitando o protocolo da autorização original) —
+    // visto na prática num arquivo que o sistema do cliente gerou de forma
+    // não padronizada. Já é excluída do faturamento (chavesCanceladas cobre
+    // isCancelamento em qualquer tipo), mas precisa aparecer destacada aqui:
+    // não é o fluxo normal de cancelamento (evento tpEvento=110111 separado).
+    const malformadas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' &&
+      xml.emitCnpj === mainCnpj &&
+      xml.tpNF !== '0' &&
+      xml.isCancelamento
     );
 
     const foraDoPrazo = saidas.filter(isForaDoPrazo);
@@ -1489,8 +1522,8 @@ export default function App() {
       temInutilizacao: seriesNumerosInutilizados.has(`${xml.serie}-${xml.numero}`)
     }));
 
-    return { semProtocolo, semProtocoloAbatidas, foraDoPrazo, numeroDuplicado, semAutorizacaoNaoContingencia: semAutorizacaoComFlag };
-  }, [xmlList, inutilizacoes]);
+    return { semProtocolo, semProtocoloAbatidas, foraDoPrazo, numeroDuplicado, semAutorizacaoNaoContingencia: semAutorizacaoComFlag, malformadas };
+  }, [xmlList, inutilizacoes, chavesCanceladas, mainCnpj]);
 
   // Regime tributário do emitente principal, lido do <CRT> (Código de Regime
   // Tributário): 1/2 = Simples Nacional, 3 = Regime Normal. Simples Nacional
@@ -6144,6 +6177,76 @@ export default function App() {
                           </div>
                         </div>
                       )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Card: Notas Malformadas (estrutura de autorizada, mas autodeclara cancelamento) */}
+              {notasAnomalias.malformadas.length > 0 && (
+                <div className="bg-white dark:bg-slate-900 border-l-4 border-l-rose-400 border border-slate-200 dark:border-slate-700 rounded-xl p-6 mb-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <AlertTriangle className="w-5 h-5 text-rose-500" />
+                      <div>
+                        <div className="flex items-baseline gap-3">
+                          <div className="text-sm font-bold text-rose-700 dark:text-rose-300 tracking-wide">Notas Malformadas</div>
+                          <div className="text-sm font-bold text-rose-700 dark:text-rose-300">
+                            {formatarMoeda(notasAnomalias.malformadas.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
+                          </div>
+                        </div>
+                        <div className="text-xs text-rose-600 dark:text-rose-400 mt-0.5">
+                          {notasAnomalias.malformadas.length} nota(s) com estrutura de nota autorizada mas que já vêm com cStat/motivo de cancelamento (não é o evento de cancelamento normal) — excluídas do total válido
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setShowMalformadas(!showMalformadas)}
+                      className="text-xs font-bold text-rose-600 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-200 underline no-print"
+                    >
+                      {showMalformadas ? 'Ocultar' : 'Ver detalhes'}
+                    </button>
+                  </div>
+
+                  {showMalformadas && (
+                    <div>
+                      <div className="text-xs font-black text-rose-600 dark:text-rose-400 uppercase tracking-wider mb-2">
+                        ⚠ Padrão fora do normal — em vez de um evento de cancelamento separado (tpEvento=110111), o próprio XML da nota já veio com cStat/xMotivo de cancelamento. Confira com o cliente/sistema por que esse arquivo saiu diferente.
+                      </div>
+                      <div className="overflow-x-auto overflow-y-auto max-h-72">
+                        <table className="w-full text-xs">
+                          <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
+                            <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                              <th className="py-1.5 pr-3">Série</th>
+                              <th className="py-1.5 pr-3">Nº</th>
+                              <th className="py-1.5 pr-3">Data</th>
+                              <th className="py-1.5 pr-3">Chave</th>
+                              <th className="py-1.5 pr-3">Baixar</th>
+                              <th className="py-1.5 text-right">Valor</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {notasAnomalias.malformadas.map((xml, i) => (
+                              <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{xml.serie}</td>
+                                <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{xml.numero}</td>
+                                <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
+                                <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-400 text-[10px] truncate max-w-[180px]" title={xml.chave}>{xml.chave || '—'}</td>
+                                <td className="py-1.5 pr-3">
+                                  <button
+                                    onClick={() => baixarXmlEvidencia(xml)}
+                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    XML
+                                  </button>
+                                </td>
+                                <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(parseFloat(xml.valor || '0') || 0)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   )}
                 </div>
