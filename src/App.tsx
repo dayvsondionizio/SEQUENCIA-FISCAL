@@ -1109,7 +1109,7 @@ export default function App() {
   const [showExportOptions, setShowExportOptions] = useState(false);
   const [showPrintMenu, setShowPrintMenu] = useState(false);
   const [tipoRelatorioPDF, setTipoRelatorioPDF] = useState<'resumido' | 'completo'>('resumido');
-  const [exportProgress, setExportProgress] = useState<{ atual: number; total: number; etapa: string } | null>(null);
+  const [exportProgress, setExportProgress] = useState<{ atual: number; total: number; etapa: string; titulo?: string } | null>(null);
   const [showExportXmlMenu, setShowExportXmlMenu] = useState(false);
   const [exportPartes, setExportPartes] = useState(1);
   const [notaSearchQuery, setNotaSearchQuery] = useState('');
@@ -1319,7 +1319,7 @@ export default function App() {
 
     const empresa = sanitizarNomeArquivo(spedData.razaoSocial);
     const periodo = sanitizarNomeArquivo(spedCrossRef.periodo);
-    XLSX.writeFile(wb, `${empresa}_SPED_XML_${spedFiltroNomeArquivo()}_${periodo}.xlsx`);
+    XLSX.writeFile(wb, `${empresa}_SPED_XML_${spedFiltroNomeArquivo()}_${periodo}.xlsx`, { compression: true });
   };
 
   // Empresa principal (CNPJ mais frequente entre emitente/destinatário),
@@ -2646,12 +2646,12 @@ export default function App() {
       adicionarAba(t, auditoriaResultado.filter(d => d.tipo === t));
     });
 
-    XLSX.writeFile(wb, nomeArquivoExport('auditoria_xml_divergencias', 'xlsx'));
+    XLSX.writeFile(wb, nomeArquivoExport('auditoria_xml_divergencias', 'xlsx'), { compression: true });
   };
 
   // Simplified confronto: just Natureza/NCM/Item/Valor Contábil, plus the
   // Desconto-onward columns — each included only if some row actually has a value.
-  const exportarPlanilhaDetalhadaSimples = () => {
+  const exportarPlanilhaDetalhadaSimples = async () => {
     let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && !n.isEntradaPropria && n.protocolo && n.rawXml);
     if (filterMes !== 'Todos') {
       notas = notas.filter(n => getMonthYear(n.data) === filterMes);
@@ -2673,7 +2673,7 @@ export default function App() {
     }
 
     const linhas: LinhaItem[] = [];
-    notas.forEach(nota => {
+    const processarNota = (nota: XmlData) => {
       const doc = parser.parseFromString(nota.rawXml!, 'text/xml');
       Array.from(doc.getElementsByTagName('det')).forEach(det => {
         const get = (tag: string) => det.getElementsByTagName(tag)[0]?.textContent || '';
@@ -2689,45 +2689,75 @@ export default function App() {
           seguro: num('vSeg'),
         });
       });
-    });
+    };
 
-    if (linhas.length === 0) {
-      alert('Nenhum item encontrado nos XMLs das notas válidas.');
-      return;
+    try {
+      const titulo = 'Gerando Planilha Detalhada';
+      const LOTE = 300;
+      for (let i = 0; i < notas.length; i += LOTE) {
+        notas.slice(i, i + LOTE).forEach(processarNota);
+        setExportProgress({ atual: Math.min(i + LOTE, notas.length), total: notas.length, etapa: 'Lendo XMLs', titulo });
+        await new Promise(r => setTimeout(r, 0));
+      }
+
+      if (linhas.length === 0) {
+        alert('Nenhum item encontrado nos XMLs das notas válidas.');
+        return;
+      }
+
+      setExportProgress({ atual: notas.length, total: notas.length, etapa: 'Montando planilha', titulo });
+      await new Promise(r => setTimeout(r, 0));
+
+      const temDesconto = linhas.some(l => l.desconto > 0);
+      const temDespesas = linhas.some(l => l.despesas > 0);
+      const temFrete = linhas.some(l => l.frete > 0);
+      const temSeguro = linhas.some(l => l.seguro > 0);
+
+      const header = ['Natureza', 'NCM', 'Item', 'Valor Contábil'];
+      if (temDesconto) header.push('Desconto');
+      if (temDespesas) header.push('Despesas Acessórias');
+      if (temFrete) header.push('Frete');
+      if (temSeguro) header.push('Seguro');
+
+      const aoa: (string | number)[][] = [header];
+      linhas.forEach(l => {
+        const row: (string | number)[] = [l.natureza, l.ncm, l.item, l.valorContabil];
+        if (temDesconto) row.push(l.desconto);
+        if (temDespesas) row.push(l.despesas);
+        if (temFrete) row.push(l.frete);
+        if (temSeguro) row.push(l.seguro);
+        aoa.push(row);
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [
+        { wch: 10 },
+        { wch: 12 },
+        { wch: 40 },
+        { wch: 14 },
+        ...header.slice(4).map(() => ({ wch: 14 }))
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Confronto Simples');
+
+      setExportProgress({ atual: notas.length, total: notas.length, etapa: 'Gerando arquivo', titulo });
+      await new Promise(r => setTimeout(r, 0));
+
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array', compression: true });
+      const blob = new Blob([wbout], { type: 'application/octet-stream' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = nomeArquivoExport('planilha_confronto_simples', 'xlsx');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+    } catch (err) {
+      console.error('Erro ao exportar planilha confronto simples:', err);
+      alert('Não foi possível gerar a planilha. Isso costuma acontecer quando o período selecionado tem notas demais pro navegador processar de uma vez — tente filtrar por um mês específico e exportar de novo.');
+    } finally {
+      setExportProgress(null);
     }
-
-    const temDesconto = linhas.some(l => l.desconto > 0);
-    const temDespesas = linhas.some(l => l.despesas > 0);
-    const temFrete = linhas.some(l => l.frete > 0);
-    const temSeguro = linhas.some(l => l.seguro > 0);
-
-    const header = ['Natureza', 'NCM', 'Item', 'Valor Contábil'];
-    if (temDesconto) header.push('Desconto');
-    if (temDespesas) header.push('Despesas Acessórias');
-    if (temFrete) header.push('Frete');
-    if (temSeguro) header.push('Seguro');
-
-    const aoa: (string | number)[][] = [header];
-    linhas.forEach(l => {
-      const row: (string | number)[] = [l.natureza, l.ncm, l.item, l.valorContabil];
-      if (temDesconto) row.push(l.desconto);
-      if (temDespesas) row.push(l.despesas);
-      if (temFrete) row.push(l.frete);
-      if (temSeguro) row.push(l.seguro);
-      aoa.push(row);
-    });
-
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [
-      { wch: 10 },
-      { wch: 12 },
-      { wch: 40 },
-      { wch: 14 },
-      ...header.slice(4).map(() => ({ wch: 14 }))
-    ];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Confronto Simples');
-    XLSX.writeFile(wb, nomeArquivoExport('planilha_confronto_simples', 'xlsx'));
   };
 
   // Mirrors Questor's "detalhada" export layout (46 columns, same order/formats).
@@ -2735,7 +2765,7 @@ export default function App() {
   // follow the notes rather than Questor's internal cadastro. When a note's item
   // sum doesn't reconcile to its vNF (note-level acréscimo/rounding), a synthetic
   // "Produto Padrão" adjustment row is emitted — exactly like Questor does.
-  const exportarPlanilhaDetalhadaCompleta = () => {
+  const exportarPlanilhaDetalhadaCompleta = async () => {
     let notas = notasSaida.filter(n => n.tipo === 'nfe' && !n.isCancelada && !n.isEntradaPropria && n.protocolo && n.rawXml);
     if (filterMes !== 'Todos') {
       notas = notas.filter(n => getMonthYear(n.data) === filterMes);
@@ -2769,7 +2799,7 @@ export default function App() {
     ];
     const aoa: (string | number)[][] = [header];
 
-    notas.forEach(nota => {
+    const processarNota = (nota: XmlData) => {
       const doc = parser.parseFromString(nota.rawXml!, 'text/xml');
       const emitCnpj = fmtCnpj(nota.emitCnpj || '');
       const nomeFilial = (nota.emitCnpj || '').slice(8, 12) === '0001' ? 'Matriz' : 'Filial';
@@ -2855,18 +2885,48 @@ export default function App() {
           0, 0, 0, 0, 0
         ]);
       }
-    });
+    };
 
-    if (aoa.length === 1) {
-      alert('Nenhum item encontrado nos XMLs das notas válidas.');
-      return;
+    try {
+      const titulo = 'Gerando Planilha Detalhada';
+      const LOTE = 300;
+      for (let i = 0; i < notas.length; i += LOTE) {
+        notas.slice(i, i + LOTE).forEach(processarNota);
+        setExportProgress({ atual: Math.min(i + LOTE, notas.length), total: notas.length, etapa: 'Lendo XMLs', titulo });
+        await new Promise(r => setTimeout(r, 0));
+      }
+
+      if (aoa.length === 1) {
+        alert('Nenhum item encontrado nos XMLs das notas válidas.');
+        return;
+      }
+
+      setExportProgress({ atual: notas.length, total: notas.length, etapa: 'Montando planilha', titulo });
+      await new Promise(r => setTimeout(r, 0));
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = header.map((h, i) => ({ wch: i === 13 ? 40 : Math.max(12, h.length + 2) }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Detalhada');
+
+      setExportProgress({ atual: notas.length, total: notas.length, etapa: 'Gerando arquivo', titulo });
+      await new Promise(r => setTimeout(r, 0));
+
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array', compression: true });
+      const blob = new Blob([wbout], { type: 'application/octet-stream' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = nomeArquivoExport('planilha_detalhada', 'xlsx');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+    } catch (err) {
+      console.error('Erro ao exportar planilha detalhada:', err);
+      alert('Não foi possível gerar a planilha detalhada. Isso costuma acontecer quando o período selecionado tem notas demais pro navegador processar de uma vez — tente filtrar por um mês específico e exportar de novo.');
+    } finally {
+      setExportProgress(null);
     }
-
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = header.map((h, i) => ({ wch: i === 13 ? 40 : Math.max(12, h.length + 2) }));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Detalhada');
-    XLSX.writeFile(wb, nomeArquivoExport('planilha_detalhada', 'xlsx'));
   };
 
   // Full field-by-field XML → spreadsheet conversion (mirrors the layout of
@@ -3323,7 +3383,7 @@ export default function App() {
       // Blob + link manual em vez de XLSX.writeFile: dá pra capturar erro
       // (ex: estouro de memória em planilha muito grande) e confirmar de
       // verdade que o arquivo foi montado antes de acionar o download.
-      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array', compression: true });
       const blob = new Blob([wbout], { type: 'application/octet-stream' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
@@ -4520,7 +4580,7 @@ export default function App() {
                 <FileSpreadsheet className="w-9 h-9" style={{color: '#F0B429'}} />
               </div>
             </div>
-            <h2 className="text-2xl font-bold mb-2">Gerando Planilha Completa</h2>
+            <h2 className="text-2xl font-bold mb-2">{exportProgress.titulo || 'Gerando Planilha Completa'}</h2>
             <div className="w-64 h-2 rounded-full overflow-hidden mb-4" style={{background: 'rgba(255,255,255,0.1)'}}>
               <motion.div
                 className="h-full"
