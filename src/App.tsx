@@ -158,6 +158,11 @@ interface SerieAnalysis {
   // rather than an actual XML — these won't be resolved yet in the SEFAZ system
   // (e.g. Questor), so they need to stay visibly flagged.
   faltantesInutilizadosManual: number[];
+  // Subset of faltantesInutilizados whose inutilização was recebida em mês diferente
+  // do mês atualmente filtrado — sinalizado porque o cruzamento agora ignora o filtro
+  // de mês de propósito (a data de recebimento da inutilização não tem relação com o
+  // mês do número que ela cobre), então vale destacar pro contador conferir.
+  faltantesInutilizadosOutroMes: number[];
   // Todos os números inutilizados dessa série/modelo, tenham ou não relação com um
   // número faltante — útil pra mostrar mesmo quando a série já está íntegra.
   todasInutilizacoes: number[];
@@ -3975,11 +3980,15 @@ export default function App() {
     if (xmlList.length === 0 && nfseList.length === 0) return;
 
     let filteredXmlsList = xmlList;
-    let filteredInutsList = inutilizacoes;
+    // Inutilizações NUNCA são filtradas por mês: a data da inutilização é só
+    // quando o pedido foi registrado no SEFAZ, sem relação com o mês do número
+    // que ela cobre (ex: inutilização pedida em agosto pode cobrir uma lacuna
+    // de julho). Filtrar isso faria uma lacuna já resolvida aparecer como
+    // "faltante real" só porque a inutilização caiu fora do mês selecionado.
+    const filteredInutsList = inutilizacoes;
 
     if (filterMes !== 'Todos') {
       filteredXmlsList = xmlList.filter(xml => getMonthYear(xml.data) === filterMes);
-      filteredInutsList = inutilizacoes.filter(inut => getMonthYear(inut.data) === filterMes);
     }
 
     if (filteredXmlsList.length === 0) {
@@ -4030,6 +4039,7 @@ export default function App() {
           faltantes: [],
           faltantesInutilizados: [],
           faltantesInutilizadosManual: [],
+          faltantesInutilizadosOutroMes: [],
           todasInutilizacoes: [],
           situacao: 'Íntegra',
           mesReferencia: ''
@@ -4068,16 +4078,24 @@ export default function App() {
 
       const numerosInutilizadosSet = new Set<number>();
       const numerosInutilizadosManualSet = new Set<number>();
+      // Mês (getMonthYear) da inutilização que cobre cada número — usado só para
+      // sinalizar quando esse mês diverge do filtro atual, não para decidir se o
+      // número está ou não coberto (isso já não depende mais do filtro de mês).
+      const mesInutPorNumero = new Map<number, string>();
       inutSerie.forEach(inut => {
         for (let i = inut.nNFIni!; i <= inut.nNFFin!; i++) {
           numerosInutilizadosSet.add(i);
           if (inut.origemManual) numerosInutilizadosManualSet.add(i);
+          mesInutPorNumero.set(i, getMonthYear(inut.data));
         }
       });
 
       const faltantesReais = faltantes.filter(num => !numerosInutilizadosSet.has(num));
       const faltantesInutilizados = faltantes.filter(num => numerosInutilizadosSet.has(num));
       const faltantesInutilizadosManual = faltantesInutilizados.filter(num => numerosInutilizadosManualSet.has(num));
+      const faltantesInutilizadosOutroMes = filterMes === 'Todos'
+        ? []
+        : faltantesInutilizados.filter(num => mesInutPorNumero.get(num) && mesInutPorNumero.get(num) !== filterMes);
       const todasInutilizacoes = Array.from(numerosInutilizadosSet).sort((a, b) => a - b);
 
       let situacao = faltantesReais.length > 0 ? 'Quebra Identificada' : 'Íntegra';
@@ -4107,6 +4125,7 @@ export default function App() {
         faltantes: faltantesReais,
         faltantesInutilizados,
         faltantesInutilizadosManual,
+        faltantesInutilizadosOutroMes,
         todasInutilizacoes,
         cancelados,
         situacao,
@@ -6376,6 +6395,9 @@ export default function App() {
                       <div className="text-xs font-black text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-2">
                         Emitidas sem autorização SEFAZ — excluídas do total válido
                       </div>
+                      <div className="mb-3 text-xs text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2">
+                        <span className="font-bold">Por que caiu aqui:</span> o XML dessas notas não tem o bloco <code className="font-mono">&lt;protNFe&gt;</code> (com <code className="font-mono">nProt</code>/<code className="font-mono">cStat</code>) — só o pedido de emissão assinado, sem a resposta de autorização do SEFAZ anexada. Isso costuma acontecer quando o sistema do emissor exporta o XML da nota separado do protocolo. Não significa necessariamente que a nota foi rejeitada: baixe o XML completo direto do portal do SEFAZ (ou do sistema emissor) pra confirmar — se ele vier com <code className="font-mono">cStat 100</code>, é só substituir o arquivo.
+                      </div>
                       <div className="overflow-x-auto overflow-y-auto max-h-72">
                         <table className="w-full text-xs">
                           <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
@@ -7509,6 +7531,14 @@ export default function App() {
                                   {doXml.length > 0 && (
                                     <div>Da XML: {formatarFaixas(agruparFaixas(doXml))}</div>
                                   )}
+                                  {serie.faltantesInutilizadosOutroMes.length > 0 && (
+                                    <div className="flex items-start gap-2 bg-white/60 dark:bg-slate-900/60 border border-amber-300 dark:border-amber-700 rounded-lg p-2 no-print">
+                                      <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                                      <span>
+                                        <strong>Inutilização recebida em mês diferente do filtro atual ({serie.faltantesInutilizadosOutroMes.length}):</strong> {formatarFaixas(agruparFaixas(serie.faltantesInutilizadosOutroMes))} — vale confirmar se a data faz sentido.
+                                      </span>
+                                    </div>
+                                  )}
                                   {serie.faltantesInutilizadosManual.length > 0 && (
                                     <div className="flex items-start gap-2 bg-white/60 dark:bg-slate-900/60 border border-emerald-300 dark:border-emerald-700 rounded-lg p-2 no-print">
                                       <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
@@ -7921,6 +7951,7 @@ export default function App() {
                       <div className="text-sm font-bold text-slate-700 mb-2">
                         Sem protocolo SEFAZ e sem contingência — excluídas do total válido ({notasAnomalias.semAutorizacaoNaoContingencia.length}) — {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                       </div>
+                      <div className="text-xs text-slate-600 mb-2">Por que caiu aqui: o XML não tem o bloco &lt;protNFe&gt; (nProt/cStat) — só o pedido de emissão, sem a resposta de autorização do SEFAZ anexada. Confirme baixando o XML completo do portal do SEFAZ antes de considerar a nota irregular.</div>
                       <table>
                         <thead><tr><th>Série</th><th>Nº</th><th>Data</th><th>Valor</th></tr></thead>
                         <tbody>
