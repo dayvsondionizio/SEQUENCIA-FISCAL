@@ -49,6 +49,30 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+// Extensões que nunca são fiscais (XML/TXT) — clientes às vezes juntam PDF,
+// planilhas e fotos no mesmo ZIP enviado pro contador. Sem esse filtro, o
+// app lia esses arquivos inteiros como texto (decode de binário grande vira
+// string gigante) só pra descobrir que não é nota — em lotes com PDF de
+// dezenas de MB isso trava a aba.
+const EXTENSOES_NAO_FISCAIS = new Set([
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.csv',
+  '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg', '.tif', '.tiff',
+  '.mp4', '.mp3', '.avi', '.mov', '.wmv', '.exe', '.msi', '.dll',
+]);
+// Só pula pela extensão quando o arquivo também é grande — um XML pequeno
+// que por acidente veio com extensão errada (renomeado, antivírus, etc.)
+// nunca é descartado por esse filtro, porque um arquivo pequeno não é o que
+// causa lentidão de qualquer forma. 512KB já é generoso: XML de NF-e/NFC-e
+// real, mesmo com bloco de assinatura completo, fica bem abaixo disso.
+const TAMANHO_MINIMO_PARA_PULAR_POR_EXTENSAO = 512 * 1024;
+function isProvavelmenteNaoFiscal(nomeArquivo: string, tamanhoBytes?: number): boolean {
+  if (tamanhoBytes !== undefined && tamanhoBytes < TAMANHO_MINIMO_PARA_PULAR_POR_EXTENSAO) return false;
+  const lower = nomeArquivo.toLowerCase();
+  const dot = lower.lastIndexOf('.');
+  if (dot === -1) return false;
+  return EXTENSOES_NAO_FISCAIS.has(lower.slice(dot));
+}
+
 // --- Types ---
 
 interface XmlData {
@@ -3444,6 +3468,7 @@ export default function App() {
             
             if (!name.toLowerCase().endsWith('.zip') && !name.toLowerCase().endsWith('.rar')) {
               if (updatedProcessedNames.has(uniqueName)) continue;
+              if (isProvavelmenteNaoFiscal(baseName, (entry as any)._data?.uncompressedSize)) { results.localNonXmlCount++; continue; }
               try {
                 const xmlText = await entry.async('text');
                 if (xmlText.trimStart().startsWith('|0000|')) {
@@ -3517,9 +3542,16 @@ export default function App() {
           for (const entry of entries) {
             const name = entry.getPath();
             if (entry.isFolder()) continue;
-            const fileData = await entry.extract();
             const baseName = name.split('/').pop() || name;
-            
+            const isArchiveEntry = name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar');
+            // libarchive.js (carregado via CDN) não tem uma API de tamanho confirmada
+            // aqui — (entry as any).size fica undefined se não existir, e nesse caso
+            // isProvavelmenteNaoFiscal não aplica a proteção de "arquivo pequeno",
+            // caindo pro comportamento só-por-extensão (mesmo risco de antes, restrito
+            // a esse fallback específico de RAR).
+            if (!isArchiveEntry && isProvavelmenteNaoFiscal(baseName, (entry as any).size)) { results.localNonXmlCount++; continue; }
+            const fileData = await entry.extract();
+
             if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
               const antesCount = results.localTotalCount;
               await processArchiveRecursively(new Uint8Array(await fileData.arrayBuffer()), results, baseName, currentPath);
@@ -3595,6 +3627,8 @@ export default function App() {
                 if (results.localTotalCount === antesCount) {
                   registrarExtractionError(`${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
                 }
+              } else if (isProvavelmenteNaoFiscal(baseName, file.fileHeader.unpSize)) {
+                results.localNonXmlCount++;
               } else {
                 const xmlText = new TextDecoder().decode(file.extraction);
                 if (xmlText.trimStart().startsWith('|0000|')) {
