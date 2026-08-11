@@ -3398,6 +3398,26 @@ export default function App() {
     });
   };
 
+  // Descompacta e faz o parse de um ZIP de nível superior num Web Worker, pra não
+  // travar a aba em lotes grandes — o próprio worker já filtra arquivo não-fiscal
+  // grande e devolve RAR/tipo desconhecido (aninhado ou não) em pendingArchives,
+  // que quem chamou processa com o processArchiveRecursively de sempre (sem
+  // libarchive.js dentro do worker, que precisa de document/window).
+  const runZipInWorker = (archiveData: ArrayBuffer, containerName: string): Promise<import('./fileWorker').WorkerResponse> => {
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(new URL('./fileWorker.ts', import.meta.url), { type: 'module' });
+      worker.onmessage = (e) => {
+        worker.terminate();
+        resolve(e.data);
+      };
+      worker.onerror = (err) => {
+        worker.terminate();
+        reject(err);
+      };
+      worker.postMessage({ archiveData, containerName }, [archiveData]);
+    });
+  };
+
   const handleFiles = async (files: FileList | File[]) => {
     setIsProcessing(true);
     setIsConfirmed(false);
@@ -3726,7 +3746,46 @@ export default function App() {
             } catch (e) {
               console.error('Erro ao processar XML:', file.name, e);
             }
-          } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
+          } else if (nameLower.endsWith('.zip')) {
+            const zipData = await file.arrayBuffer();
+            const antesCount = res.localTotalCount;
+            try {
+              const workerResp = await runZipInWorker(zipData, file.name);
+              res.localXmls.push(...workerResp.results.localXmls);
+              res.localInuts.push(...workerResp.results.localInuts);
+              res.localOthers.push(...workerResp.results.localOthers);
+              res.localNfse.push(...workerResp.results.localNfse);
+              res.localTotalCount += workerResp.results.localTotalCount;
+              res.localCancellations += workerResp.results.localCancellations;
+              res.localValidNfCount += workerResp.results.localValidNfCount;
+              res.localInutsCount += workerResp.results.localInutsCount;
+              res.localNonXmlCount += workerResp.results.localNonXmlCount;
+              if (workerResp.results.localSped && (!res.localSped || workerResp.results.localSped.c100.length > res.localSped.c100.length)) {
+                res.localSped = workerResp.results.localSped;
+              }
+              workerResp.sourceEntries.forEach(([entryName, meta]) => {
+                if (!sourceMap.has(entryName)) sourceMap.set(entryName, meta);
+              });
+              workerResp.extractionErrors.forEach(msg => registrarExtractionError(msg));
+              // RAR (ou tipo desconhecido) achado dentro do ZIP — o worker não tem
+              // como abrir isso (libarchive.js precisa de document/window), então
+              // processa aqui do jeito que já funciona hoje, sem mudar nada disso.
+              for (const pending of workerResp.pendingArchives) {
+                const antesPending = res.localTotalCount;
+                await processArchiveRecursively(pending.data, res, pending.containerName, pending.archivePath);
+                if (res.localTotalCount === antesPending) {
+                  const currentPath = pending.archivePath ? `${pending.archivePath}/${pending.containerName}` : pending.containerName;
+                  registrarExtractionError(`${currentPath} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
+                }
+              }
+              if (res.localTotalCount === antesCount) {
+                registrarExtractionError(`${file.name} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
+              }
+            } catch (err) {
+              console.error('Erro no worker de ZIP:', err);
+              registrarExtractionError(`${file.name} — falha ao processar ZIP: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          } else if (nameLower.endsWith('.rar')) {
             const zipData = await file.arrayBuffer();
             const antesCount = res.localTotalCount;
             await processArchiveRecursively(zipData, res, file.name);
