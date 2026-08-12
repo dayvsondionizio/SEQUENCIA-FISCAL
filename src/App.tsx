@@ -2176,6 +2176,13 @@ export default function App() {
   const mesesDisponiveis = useMemo(() => {
     const months = new Set<string>();
     xmlList.forEach(xml => {
+      // Só conta o mês se a própria empresa auditada emitiu a nota — cobre
+      // venda normal e devolução emitida por ela mesma (que ocupam numeração
+      // própria), mas exclui meses onde só existem entradas de fornecedores
+      // terceiros (essas notas têm data própria e aparecem em xmlList, mas
+      // não formam série nenhuma na auditoria — sem isso, um mês assim
+      // aparecia no filtro e dava resultado vazio/confuso ao selecionar).
+      if (xml.emitCnpj !== mainCnpj) return;
       const my = getMonthYear(xml.data);
       if (my) months.add(my);
     });
@@ -2188,7 +2195,7 @@ export default function App() {
       const chaveB = `${anoB}${String(MESES.indexOf(nomeB)).padStart(2, '0')}`;
       return chaveA.localeCompare(chaveB);
     });
-  }, [xmlList]);
+  }, [xmlList, mainCnpj]);
 
   // Auditoria de sequência da NFS-e — totalmente isolada do motor de NF-e/
   // NFC-e (runAnalysis/analysis/xmlList) de propósito: roda só em cima de
