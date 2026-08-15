@@ -984,6 +984,44 @@ export default function App() {
     setTimeout(() => setCopiedHeaderField(null), 1500);
   };
 
+  // Consulta pontual e opcional (clique do usuário, nunca automática) na
+  // BrasilAPI — espelha os dados públicos do CNPJ na Receita Federal (situação
+  // cadastral, opção pelo Simples/MEI). Serve só de contraste com o CRT
+  // declarado nos XMLs; não altera nenhum cálculo da auditoria.
+  interface ReceitaConsultaResultado {
+    situacao: string;
+    opcaoSimples: boolean;
+    opcaoMei: boolean;
+    razaoSocial: string;
+    dataConsulta: string;
+  }
+  const [receitaConsulta, setReceitaConsulta] = useState<ReceitaConsultaResultado | null>(null);
+  const [receitaConsultaStatus, setReceitaConsultaStatus] = useState<'idle' | 'loading' | 'erro'>('idle');
+
+  const consultarSituacaoReceita = async (cnpj: string) => {
+    setReceitaConsultaStatus('loading');
+    setReceitaConsulta(null);
+    try {
+      // Timeout defensivo: se a BrasilAPI cair/ficar pendurada, essa consulta
+      // (isolada, sob demanda) falha sozinha em 10s sem travar mais nada no
+      // app — nenhum outro cálculo/auditoria depende desse resultado.
+      const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { signal: AbortSignal.timeout(10000) });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      setReceitaConsulta({
+        situacao: data.descricao_situacao_cadastral || 'Desconhecida',
+        opcaoSimples: !!data.opcao_pelo_simples,
+        opcaoMei: !!data.opcao_pelo_mei,
+        razaoSocial: data.razao_social || '',
+        dataConsulta: new Date().toLocaleString('pt-BR')
+      });
+      setReceitaConsultaStatus('idle');
+    } catch (err) {
+      console.error('Erro ao consultar CNPJ na Receita (BrasilAPI):', err);
+      setReceitaConsultaStatus('erro');
+    }
+  };
+
   const [copiedResumoTEF, setCopiedResumoTEF] = useState(false);
 
   // Monta um resumo em texto do card de Auditoria de Pagamento (TEF) pra
@@ -4930,6 +4968,59 @@ export default function App() {
                       </div>
                     </>
                   )}
+
+                  <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Receita Federal:</span>
+                  <div className="flex items-center gap-2 flex-wrap no-print">
+                    {receitaConsultaStatus === 'idle' && !receitaConsulta && (
+                      <button
+                        onClick={() => mainCnpj && consultarSituacaoReceita(mainCnpj)}
+                        className="text-xs font-bold underline transition-colors"
+                        style={{color: '#F0B429'}}
+                      >
+                        Consultar situação (BrasilAPI)
+                      </button>
+                    )}
+                    {receitaConsultaStatus === 'loading' && (
+                      <span className="flex items-center gap-1.5 text-xs" style={{color: 'rgba(255,255,255,0.6)'}}>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Consultando...
+                      </span>
+                    )}
+                    {receitaConsultaStatus === 'erro' && (
+                      <span className="flex items-center gap-1.5 text-xs" style={{color: '#F87171'}}>
+                        <AlertCircle className="w-3.5 h-3.5" /> Falha ao consultar
+                        <button onClick={() => mainCnpj && consultarSituacaoReceita(mainCnpj)} className="underline font-bold">tentar de novo</button>
+                      </span>
+                    )}
+                    {receitaConsulta && (
+                      <>
+                        <span
+                          className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold"
+                          style={receitaConsulta.situacao === 'ATIVA'
+                            ? {background: 'rgba(34,197,94,0.15)', color: '#4ADE80', border: '1px solid rgba(34,197,94,0.35)'}
+                            : {background: 'rgba(248,113,113,0.15)', color: '#F87171', border: '1px solid rgba(248,113,113,0.35)'}}
+                        >
+                          {receitaConsulta.situacao}
+                        </span>
+                        <span
+                          className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold"
+                          style={{background: 'rgba(148,163,184,0.15)', color: '#CBD5E1', border: '1px solid rgba(148,163,184,0.3)'}}
+                        >
+                          {receitaConsulta.opcaoMei ? 'MEI' : receitaConsulta.opcaoSimples ? 'Optante Simples' : 'Não optante Simples'}
+                        </span>
+                        {((regimeTributario.isSimples && !receitaConsulta.opcaoSimples && !receitaConsulta.opcaoMei) ||
+                          (!regimeTributario.isSimples && !regimeTributario.isMei && (receitaConsulta.opcaoSimples || receitaConsulta.opcaoMei))) && (
+                          <AlertTriangle
+                            className="w-3.5 h-3.5 shrink-0"
+                            style={{color: '#F87171'}}
+                            title={`Atenção: as notas declaram CRT de ${regimeTributario.label || 'regime não identificado'}, mas a Receita mostra ${receitaConsulta.opcaoMei ? 'MEI' : receitaConsulta.opcaoSimples ? 'optante do Simples' : 'não optante do Simples'} agora. Pode ser mudança de regime dentro do período — confira as datas.`}
+                          />
+                        )}
+                        <span className="text-[10px]" style={{color: 'rgba(255,255,255,0.35)'}} title={`Consultado em ${receitaConsulta.dataConsulta} via api.brasilapi.com.br — dados públicos da Receita Federal`}>
+                          (consultado agora)
+                        </span>
+                      </>
+                    )}
+                  </div>
 
                 </div>
               </motion.div>
