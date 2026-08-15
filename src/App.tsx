@@ -1521,7 +1521,52 @@ export default function App() {
       foraDoPrazo: [] as XmlData[],
       numeroDuplicado: [] as XmlData[][],
       semAutorizacaoNaoContingencia: [] as XmlData[],
-      malformadas: [] as XmlData[]
+      malformadas: [] as (XmlData & { motivoMalformada: string; contaNoFaturamento: boolean })[]
+    };
+
+    // Decodifica os 44 dígitos da chave de acesso (cUF+AAMM+CNPJ+mod+série+
+    // nNF+tpEmis+cNF+DV) e confere: (1) o dígito verificador bate pelo
+    // algoritmo módulo-11 oficial; (2) CNPJ/modelo/série/número embutidos na
+    // própria chave batem com os mesmos campos lidos das tags do XML. Isso
+    // NÃO detecta fraude (quem fabrica um XML também acerta esses campos
+    // fácil) — só pega corrupção/inconsistência interna do arquivo. Por não
+    // ser prova de que a venda é inválida, NÃO exclui do faturamento (ao
+    // contrário do cancelamento disfarçado abaixo) — só sinaliza pra conferir.
+    const validarConsistenciaChave = (xml: XmlData): string | null => {
+      const chave = xml.chave;
+      if (!chave || !/^\d{44}$/.test(chave)) return null;
+
+      const corpo = chave.slice(0, 43);
+      let soma = 0, peso = 2;
+      for (let i = corpo.length - 1; i >= 0; i--) {
+        soma += parseInt(corpo[i], 10) * peso;
+        peso = peso === 9 ? 2 : peso + 1;
+      }
+      const resto = soma % 11;
+      const dvEsperado = resto < 2 ? 0 : 11 - resto;
+      if (dvEsperado !== parseInt(chave[43], 10)) {
+        return `Dígito verificador da chave não confere (esperado ${dvEsperado}, encontrado ${chave[43]})`;
+      }
+
+      const cnpjChave = chave.slice(6, 20);
+      const modChave = chave.slice(20, 22);
+      const serieChave = parseInt(chave.slice(22, 25), 10);
+      const nnfChave = parseInt(chave.slice(25, 34), 10);
+
+      const cnpjXml = (xml.emitCnpj || '').replace(/[.\-/\s]/g, '');
+      if (cnpjXml && cnpjChave !== cnpjXml) {
+        return `CNPJ na chave (${cnpjChave}) não bate com o CNPJ do emitente no XML (${cnpjXml})`;
+      }
+      if (xml.modelo && modChave !== xml.modelo.padStart(2, '0')) {
+        return `Modelo na chave (${modChave}) não bate com o modelo do XML (${xml.modelo})`;
+      }
+      if (xml.serie && !isNaN(parseInt(xml.serie, 10)) && serieChave !== parseInt(xml.serie, 10)) {
+        return `Série na chave (${serieChave}) não bate com a série do XML (${xml.serie})`;
+      }
+      if (xml.numero && !isNaN(parseInt(xml.numero, 10)) && nnfChave !== parseInt(xml.numero, 10)) {
+        return `Número na chave (${nnfChave}) não bate com o número do XML (${xml.numero})`;
+      }
+      return null;
     };
 
 
@@ -1539,12 +1584,28 @@ export default function App() {
     // não padronizada. Já é excluída do faturamento (chavesCanceladas cobre
     // isCancelamento em qualquer tipo), mas precisa aparecer destacada aqui:
     // não é o fluxo normal de cancelamento (evento tpEvento=110111 separado).
-    const malformadas = xmlList.filter(xml =>
+    const malformadasCancelamento = xmlList.filter(xml =>
       xml.tipo === 'nfe' &&
       xml.emitCnpj === mainCnpj &&
       xml.tpNF !== '0' &&
       xml.isCancelamento
-    );
+    ).map(xml => ({
+      ...xml,
+      motivoMalformada: 'Estrutura de nota autorizada, mas o próprio XML já vem com cStat/xMotivo de cancelamento (não é o evento de cancelamento normal)',
+      contaNoFaturamento: false
+    }));
+
+    // Chave × dados internos: os 44 dígitos da chave já embutem CNPJ/modelo/
+    // série/número — se não baterem com as mesmas tags do XML, é sinal de
+    // corrupção/inconsistência no arquivo. Roda só sobre "saidas" (já exclui
+    // canceladas) porque isso NÃO prova que a venda é inválida — só pede
+    // conferência, então continua contando no faturamento.
+    const malformadasChaveInconsistente = saidas
+      .map(xml => ({ xml, motivo: validarConsistenciaChave(xml) }))
+      .filter((r): r is { xml: XmlData; motivo: string } => r.motivo !== null)
+      .map(r => ({ ...r.xml, motivoMalformada: r.motivo, contaNoFaturamento: true }));
+
+    const malformadas = [...malformadasCancelamento, ...malformadasChaveInconsistente];
 
     const foraDoPrazo = saidas.filter(isForaDoPrazo);
 
@@ -6461,7 +6522,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* Card: Notas Malformadas (estrutura de autorizada, mas autodeclara cancelamento) */}
+              {/* Card: Notas Malformadas (cancelamento disfarçado + chave inconsistente com os dados internos) */}
               {notasAnomalias.malformadas.length > 0 && (
                 <div className="bg-white dark:bg-slate-900 border-l-4 border-l-rose-400 border border-slate-200 dark:border-slate-700 rounded-xl p-6 mb-6">
                   <div className="flex items-center justify-between mb-4">
@@ -6471,11 +6532,11 @@ export default function App() {
                         <div className="flex items-baseline gap-3">
                           <div className="text-sm font-bold text-rose-700 dark:text-rose-300 tracking-wide">Notas Malformadas</div>
                           <div className="text-sm font-bold text-rose-700 dark:text-rose-300">
-                            {formatarMoeda(notasAnomalias.malformadas.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
+                            {formatarMoeda(notasAnomalias.malformadas.filter(x => !x.contaNoFaturamento).reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))} excluído
                           </div>
                         </div>
                         <div className="text-xs text-rose-600 dark:text-rose-400 mt-0.5">
-                          {notasAnomalias.malformadas.length} nota(s) com estrutura de nota autorizada mas que já vêm com cStat/motivo de cancelamento (não é o evento de cancelamento normal) — excluídas do total válido
+                          {notasAnomalias.malformadas.length} nota(s) — {notasAnomalias.malformadas.filter(x => !x.contaNoFaturamento).length} cancelamento(s) disfarçado(s) (excluídas do total válido) e {notasAnomalias.malformadas.filter(x => x.contaNoFaturamento).length} com chave inconsistente (continuam contando, só conferir)
                         </div>
                       </div>
                     </div>
@@ -6490,7 +6551,7 @@ export default function App() {
                   {showMalformadas && (
                     <div>
                       <div className="text-xs font-black text-rose-600 dark:text-rose-400 uppercase tracking-wider mb-2">
-                        ⚠ Padrão fora do normal — em vez de um evento de cancelamento separado (tpEvento=110111), o próprio XML da nota já veio com cStat/xMotivo de cancelamento. Confira com o cliente/sistema por que esse arquivo saiu diferente.
+                        ⚠ Duas situações diferentes agrupadas aqui: (1) o próprio XML já veio com cStat/xMotivo de cancelamento em vez do evento separado (tpEvento=110111) — essa é excluída do faturamento; (2) a chave de acesso não bate com os dados internos do XML (CNPJ/modelo/série/número/dígito verificador) — pode ser corrupção do arquivo, não prova que a venda é inválida, então continua contando no faturamento.
                       </div>
                       <div className="overflow-x-auto overflow-y-auto max-h-72">
                         <table className="w-full text-xs">
@@ -6500,6 +6561,7 @@ export default function App() {
                               <th className="py-1.5 pr-3">Nº</th>
                               <th className="py-1.5 pr-3">Data</th>
                               <th className="py-1.5 pr-3">Chave</th>
+                              <th className="py-1.5 pr-3">Motivo</th>
                               <th className="py-1.5 pr-3">Baixar</th>
                               <th className="py-1.5 text-right">Valor</th>
                             </tr>
@@ -6511,6 +6573,17 @@ export default function App() {
                                 <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{xml.numero}</td>
                                 <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
                                 <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-400 text-[10px] truncate max-w-[180px]" title={xml.chave}>{xml.chave || '—'}</td>
+                                <td className="py-1.5 pr-3 max-w-[220px]">
+                                  <span
+                                    className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold mb-1"
+                                    style={xml.contaNoFaturamento
+                                      ? {background: 'rgba(245,158,11,0.15)', color: '#B45309'}
+                                      : {background: 'rgba(244,63,94,0.15)', color: '#BE123C'}}
+                                  >
+                                    {xml.contaNoFaturamento ? 'Chave inconsistente — conferir' : 'Cancelamento disfarçado — excluída'}
+                                  </span>
+                                  <div className="text-slate-500 dark:text-slate-400" title={xml.motivoMalformada}>{xml.motivoMalformada}</div>
+                                </td>
                                 <td className="py-1.5 pr-3">
                                   <button
                                     onClick={() => baixarXmlEvidencia(xml)}
