@@ -1569,6 +1569,37 @@ export default function App() {
       return null;
     };
 
+    // Checklist manual de regras básicas de estrutura (o navegador não tem
+    // validação de XSD nativa, e uma engine XSD completa não roda em JS puro
+    // — então em vez de carregar os .xsd oficiais, checamos aqui as regras
+    // mais importantes do leiaute: formato/tamanho de campos obrigatórios.
+    // Uma nota REALMENTE autorizada pelo SEFAZ já passou por XSD completo na
+    // autorização — isso só pega arquivo corrompido/truncado depois, ou nunca
+    // validado por ninguém (gerado à parte). Junta todos os problemas achados
+    // numa única mensagem, sem parar no primeiro.
+    const validarEstruturaBasica = (xml: XmlData): string | null => {
+      const problemas: string[] = [];
+
+      if (!xml.chave || !/^\d{44}$/.test(xml.chave)) {
+        problemas.push(`chave de acesso não tem 44 dígitos numéricos (${xml.chave ? xml.chave.length : 0} caractere(s))`);
+      }
+      const cnpj = xml.emitCnpj || '';
+      if (!cnpj || cnpj.length !== 14) {
+        problemas.push(`CNPJ do emitente com tamanho inválido (${cnpj.length || 0} caractere(s), esperado 14)`);
+      }
+      if (xml.modelo !== '55' && xml.modelo !== '65') {
+        problemas.push(`modelo "${xml.modelo || '?'}" não é 55 (NF-e) nem 65 (NFC-e)`);
+      }
+      const valorNum = parseFloat(xml.valor || '');
+      if (xml.valor === undefined || xml.valor === '' || isNaN(valorNum) || valorNum < 0) {
+        problemas.push(`valor da nota ausente ou inválido ("${xml.valor ?? ''}")`);
+      }
+      if (!xml.data || isNaN(new Date(xml.data).getTime())) {
+        problemas.push('data de emissão ausente ou inválida');
+      }
+
+      return problemas.length > 0 ? problemas.join('; ') : null;
+    };
 
     const saidas = xmlList.filter(xml =>
       xml.tipo === 'nfe' &&
@@ -1605,7 +1636,15 @@ export default function App() {
       .filter((r): r is { xml: XmlData; motivo: string } => r.motivo !== null)
       .map(r => ({ ...r.xml, motivoMalformada: r.motivo, contaNoFaturamento: true }));
 
-    const malformadas = [...malformadasCancelamento, ...malformadasChaveInconsistente];
+    // Checklist manual de estrutura básica (ver validarEstruturaBasica acima) —
+    // mesmo raciocínio da chave: não prova venda inválida, então continua
+    // contando no faturamento, só pede conferência.
+    const malformadasEstruturaInvalida = saidas
+      .map(xml => ({ xml, motivo: validarEstruturaBasica(xml) }))
+      .filter((r): r is { xml: XmlData; motivo: string } => r.motivo !== null)
+      .map(r => ({ ...r.xml, motivoMalformada: r.motivo, contaNoFaturamento: true }));
+
+    const malformadas = [...malformadasCancelamento, ...malformadasChaveInconsistente, ...malformadasEstruturaInvalida];
 
     const foraDoPrazo = saidas.filter(isForaDoPrazo);
 
@@ -6536,7 +6575,7 @@ export default function App() {
                           </div>
                         </div>
                         <div className="text-xs text-rose-600 dark:text-rose-400 mt-0.5">
-                          {notasAnomalias.malformadas.length} nota(s) — {notasAnomalias.malformadas.filter(x => !x.contaNoFaturamento).length} cancelamento(s) disfarçado(s) (excluídas do total válido) e {notasAnomalias.malformadas.filter(x => x.contaNoFaturamento).length} com chave inconsistente (continuam contando, só conferir)
+                          {notasAnomalias.malformadas.length} nota(s) — {notasAnomalias.malformadas.filter(x => !x.contaNoFaturamento).length} cancelamento(s) disfarçado(s) (excluídas do total válido) e {notasAnomalias.malformadas.filter(x => x.contaNoFaturamento).length} com chave/estrutura pra conferir (continuam contando no faturamento)
                         </div>
                       </div>
                     </div>
@@ -6551,7 +6590,7 @@ export default function App() {
                   {showMalformadas && (
                     <div>
                       <div className="text-xs font-black text-rose-600 dark:text-rose-400 uppercase tracking-wider mb-2">
-                        ⚠ Duas situações diferentes agrupadas aqui: (1) o próprio XML já veio com cStat/xMotivo de cancelamento em vez do evento separado (tpEvento=110111) — essa é excluída do faturamento; (2) a chave de acesso não bate com os dados internos do XML (CNPJ/modelo/série/número/dígito verificador) — pode ser corrupção do arquivo, não prova que a venda é inválida, então continua contando no faturamento.
+                        ⚠ Três situações diferentes agrupadas aqui: (1) o próprio XML já veio com cStat/xMotivo de cancelamento em vez do evento separado (tpEvento=110111) — essa é excluída do faturamento; (2) a chave de acesso não bate com os dados internos do XML (CNPJ/modelo/série/número/dígito verificador); (3) checklist manual de estrutura básica do leiaute (CNPJ, modelo, valor, data) fora do padrão — nenhuma das duas últimas prova que a venda é inválida (podem ser corrupção do arquivo), então continuam contando no faturamento, só pedem conferência.
                       </div>
                       <div className="overflow-x-auto overflow-y-auto max-h-72">
                         <table className="w-full text-xs">
@@ -6580,7 +6619,7 @@ export default function App() {
                                       ? {background: 'rgba(245,158,11,0.15)', color: '#B45309'}
                                       : {background: 'rgba(244,63,94,0.15)', color: '#BE123C'}}
                                   >
-                                    {xml.contaNoFaturamento ? 'Chave inconsistente — conferir' : 'Cancelamento disfarçado — excluída'}
+                                    {xml.contaNoFaturamento ? 'Conferir — não afeta faturamento' : 'Cancelamento disfarçado — excluída'}
                                   </span>
                                   <div className="text-slate-500 dark:text-slate-400" title={xml.motivoMalformada}>{xml.motivoMalformada}</div>
                                 </td>
