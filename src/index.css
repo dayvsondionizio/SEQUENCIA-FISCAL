@@ -8,6 +8,20 @@
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
 }
 
+/* Modo escuro: esquenta os tons de superfície (fundo/cards/bordas) pra
+   combinar com o preto quente (#17150F) do header da identidade nova —
+   sem isso, o header fica com um tom quente sozinho contra um cinza-
+   azulado frio no resto da tela. Só troca bg/border desses shades
+   específicos (não mexe em texto nem no modo claro, que usa esses
+   mesmos números de shade pra outra coisa). */
+:where(.dark, .dark *) .dark\:bg-slate-950 { background-color: #17150F !important; }
+:where(.dark, .dark *) .dark\:bg-slate-900 { background-color: #211E15 !important; }
+:where(.dark, .dark *) .dark\:bg-slate-800 { background-color: #2C2820 !important; }
+:where(.dark, .dark *) .dark\:bg-slate-700 { background-color: #423C2C !important; }
+:where(.dark, .dark *) .dark\:border-slate-800 { border-color: #2C2820 !important; }
+:where(.dark, .dark *) .dark\:border-slate-700 { border-color: #423C2C !important; }
+:where(.dark, .dark *) .dark\:divide-slate-800 { border-color: #2C2820 !important; }
+
 @media print {
   .no-print {
     display: none !important;

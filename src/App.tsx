@@ -4986,7 +4986,7 @@ export default function App() {
       </AnimatePresence>
 
       {/* Header */}
-      <header className="text-white relative print:shadow-none" style={{background: theme === 'dark' ? '#020D2F' : '#17150F', boxShadow: theme === 'dark' ? '0 12px 32px -12px rgba(2,13,47,0.45)' : '0 12px 32px -12px rgba(23,21,15,0.45)'}}>
+      <header className="text-white relative print:shadow-none" style={{background: '#17150F', boxShadow: '0 12px 32px -12px rgba(23,21,15,0.45)'}}>
         <div className="absolute inset-x-0 bottom-0 h-[3px] print:hidden" style={{background: 'linear-gradient(90deg, transparent, #C9A227 20%, #C9A227 80%, transparent)'}} />
         <div className="max-w-[1920px] mx-auto px-6 pt-8 pb-14 print:px-4 print:py-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div className="flex items-center gap-5 print:gap-4">
