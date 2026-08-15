@@ -1644,7 +1644,23 @@ export default function App() {
       .filter((r): r is { xml: XmlData; motivo: string } => r.motivo !== null)
       .map(r => ({ ...r.xml, motivoMalformada: r.motivo, contaNoFaturamento: true }));
 
-    const malformadas = [...malformadasCancelamento, ...malformadasChaveInconsistente, ...malformadasEstruturaInvalida];
+    // Uma mesma nota pode falhar mais de uma checagem de "pra conferir" ao
+    // mesmo tempo (ex: modelo errado quebra tanto a consistência da chave
+    // quanto o checklist de estrutura) — agrupa por chave (ou série+número se
+    // não tiver chave) pra aparecer uma linha só, com os motivos concatenados,
+    // em vez de duplicar a mesma nota na tabela.
+    const paraConferirPorNota = new Map<string, XmlData & { motivoMalformada: string; contaNoFaturamento: boolean }>();
+    [...malformadasChaveInconsistente, ...malformadasEstruturaInvalida].forEach(item => {
+      const key = item.chave || `${item.serie}-${item.numero}`;
+      const existente = paraConferirPorNota.get(key);
+      if (existente) {
+        existente.motivoMalformada = `${existente.motivoMalformada}; ${item.motivoMalformada}`;
+      } else {
+        paraConferirPorNota.set(key, { ...item });
+      }
+    });
+
+    const malformadas = [...malformadasCancelamento, ...Array.from(paraConferirPorNota.values())];
 
     const foraDoPrazo = saidas.filter(isForaDoPrazo);
 
@@ -6561,27 +6577,35 @@ export default function App() {
                 </div>
               )}
 
-              {/* Card: Notas Malformadas (cancelamento disfarçado + chave inconsistente com os dados internos) */}
-              {notasAnomalias.malformadas.length > 0 && (
-                <div className="bg-white dark:bg-slate-900 border-l-4 border-l-rose-400 border border-slate-200 dark:border-slate-700 rounded-xl p-6 mb-6">
+              {/* Card: Notas Malformadas (cancelamento disfarçado + chave inconsistente com os dados internos + checklist de estrutura) */}
+              {notasAnomalias.malformadas.length > 0 && (() => {
+                const excluidas = notasAnomalias.malformadas.filter(x => !x.contaNoFaturamento);
+                const paraConferir = notasAnomalias.malformadas.filter(x => x.contaNoFaturamento);
+                const valorExcluido = excluidas.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0);
+                return (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-6 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <AlertTriangle className="w-5 h-5 text-rose-500" />
+                      <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
                       <div>
                         <div className="flex items-baseline gap-3">
-                          <div className="text-sm font-bold text-rose-700 dark:text-rose-300 tracking-wide">Notas Malformadas</div>
-                          <div className="text-sm font-bold text-rose-700 dark:text-rose-300">
-                            {formatarMoeda(notasAnomalias.malformadas.filter(x => !x.contaNoFaturamento).reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))} excluído
-                          </div>
+                          <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Notas Malformadas</div>
+                          {valorExcluido > 0 && (
+                            <div className="text-sm font-bold text-rose-600 dark:text-rose-400">
+                              {formatarMoeda(valorExcluido)} excluído
+                            </div>
+                          )}
                         </div>
-                        <div className="text-xs text-rose-600 dark:text-rose-400 mt-0.5">
-                          {notasAnomalias.malformadas.length} nota(s) — {notasAnomalias.malformadas.filter(x => !x.contaNoFaturamento).length} cancelamento(s) disfarçado(s) (excluídas do total válido) e {notasAnomalias.malformadas.filter(x => x.contaNoFaturamento).length} com chave/estrutura pra conferir (continuam contando no faturamento)
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          {excluidas.length > 0 && <>{excluidas.length} cancelamento(s) disfarçado(s) (excluída{excluidas.length > 1 ? 's' : ''} do total válido)</>}
+                          {excluidas.length > 0 && paraConferir.length > 0 && ' · '}
+                          {paraConferir.length > 0 && <>{paraConferir.length} pra conferir (continua{paraConferir.length > 1 ? 'm' : ''} contando no faturamento)</>}
                         </div>
                       </div>
                     </div>
                     <button
                       onClick={() => setShowMalformadas(!showMalformadas)}
-                      className="text-xs font-bold text-rose-600 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-200 underline no-print"
+                      className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print shrink-0"
                     >
                       {showMalformadas ? 'Ocultar' : 'Ver detalhes'}
                     </button>
@@ -6589,8 +6613,15 @@ export default function App() {
 
                   {showMalformadas && (
                     <div>
-                      <div className="text-xs font-black text-rose-600 dark:text-rose-400 uppercase tracking-wider mb-2">
-                        ⚠ Três situações diferentes agrupadas aqui: (1) o próprio XML já veio com cStat/xMotivo de cancelamento em vez do evento separado (tpEvento=110111) — essa é excluída do faturamento; (2) a chave de acesso não bate com os dados internos do XML (CNPJ/modelo/série/número/dígito verificador); (3) checklist manual de estrutura básica do leiaute (CNPJ, modelo, valor, data) fora do padrão — nenhuma das duas últimas prova que a venda é inválida (podem ser corrupção do arquivo), então continuam contando no faturamento, só pedem conferência.
+                      <div className="mb-3 text-xs text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 space-y-1">
+                        <div className="flex items-start gap-2">
+                          <span className="inline-block w-2 h-2 rounded-full mt-1 shrink-0" style={{background: '#BE123C'}} />
+                          <span><strong className="text-slate-700 dark:text-slate-300">Cancelamento disfarçado</strong> — o próprio XML já veio com cStat/xMotivo de cancelamento em vez do evento separado (tpEvento=110111). Excluída do faturamento.</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="inline-block w-2 h-2 rounded-full mt-1 shrink-0" style={{background: '#B45309'}} />
+                          <span><strong className="text-slate-700 dark:text-slate-300">Chave ou estrutura pra conferir</strong> — a chave de acesso não bate com os dados internos do XML, ou algum campo básico do leiaute (CNPJ, modelo, valor, data) está fora do padrão. Pode ser corrupção do arquivo — não prova que a venda é inválida, então continua contando no faturamento.</span>
+                        </div>
                       </div>
                       <div className="overflow-x-auto overflow-y-auto max-h-72">
                         <table className="w-full text-xs">
@@ -6641,7 +6672,8 @@ export default function App() {
                     </div>
                   )}
                 </div>
-              )}
+                );
+              })()}
 
               {/* Card: Sem Autorização (não contingência) */}
               {notasAnomalias.semAutorizacaoNaoContingencia.length > 0 && (
