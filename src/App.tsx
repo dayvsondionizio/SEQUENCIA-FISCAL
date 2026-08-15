@@ -1103,10 +1103,10 @@ export default function App() {
     <button
       onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
       className="flex items-center gap-2 px-3 py-2 rounded-lg text-white text-sm font-bold transition-all no-print shrink-0"
-      style={{background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(240,180,41,0.35)'}}
+      style={{background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(201,162,39,0.35)'}}
       title={theme === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
     >
-      {theme === 'dark' ? <Sun className="w-4 h-4" style={{color: '#F0B429'}} /> : <Moon className="w-4 h-4" style={{color: '#F0B429'}} />}
+      {theme === 'dark' ? <Sun className="w-4 h-4" style={{color: '#C9A227'}} /> : <Moon className="w-4 h-4" style={{color: '#C9A227'}} />}
       {theme === 'dark' ? 'Claro' : 'Escuro'}
     </button>
   );
@@ -4685,7 +4685,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col font-sans text-slate-900 dark:text-slate-100 relative bg-[#f7f5ef] dark:bg-slate-950 bg-[radial-gradient(ellipse_1400px_520px_at_50%_-8%,rgba(2,13,47,0.05),transparent_65%)] dark:bg-[radial-gradient(ellipse_1400px_520px_at_50%_-8%,rgba(240,180,41,0.05),transparent_65%)]">
+    <div className="min-h-screen flex flex-col font-sans text-slate-900 dark:text-slate-100 relative bg-[#FCFBF8] dark:bg-slate-950 bg-[radial-gradient(ellipse_1400px_520px_at_50%_-8%,rgba(23,21,15,0.05),transparent_65%)] dark:bg-[radial-gradient(ellipse_1400px_520px_at_50%_-8%,rgba(201,162,39,0.05),transparent_65%)]">
       {/* Loading Overlay */}
       <AnimatePresence>
         {isProcessing && (
@@ -4701,7 +4701,7 @@ export default function App() {
                 animate={{ rotate: 360 }}
                 transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
                 className="absolute inset-0 rounded-full"
-                style={{border: '4px solid rgba(240,180,41,0.25)', borderTopColor: '#F0B429'}}
+                style={{border: '4px solid rgba(201,162,39,0.25)', borderTopColor: '#C9A227'}}
               />
               <motion.div 
                 animate={{ rotate: -360 }}
@@ -4717,7 +4717,7 @@ export default function App() {
             <div className="w-64 h-2 rounded-full overflow-hidden mb-4" style={{background: 'rgba(255,255,255,0.1)'}}>
               <motion.div 
                 className="h-full"
-                style={{background: 'linear-gradient(90deg, #F0B429, #f5d060)'}}
+                style={{background: 'linear-gradient(90deg, #C9A227, #E7C453)'}}
                 initial={{ width: 0 }}
                 animate={{ width: `${(processingProgress.current / processingProgress.total) * 100}%` }}
               />
@@ -4744,17 +4744,17 @@ export default function App() {
                 animate={{ rotate: 360 }}
                 transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
                 className="absolute inset-0 rounded-full"
-                style={{border: '4px solid rgba(240,180,41,0.25)', borderTopColor: '#F0B429'}}
+                style={{border: '4px solid rgba(201,162,39,0.25)', borderTopColor: '#C9A227'}}
               />
               <div className="absolute inset-0 flex items-center justify-center">
-                <FileSpreadsheet className="w-9 h-9" style={{color: '#F0B429'}} />
+                <FileSpreadsheet className="w-9 h-9" style={{color: '#C9A227'}} />
               </div>
             </div>
             <h2 className="text-2xl font-bold mb-2">{exportProgress.titulo || 'Gerando Planilha Completa'}</h2>
             <div className="w-64 h-2 rounded-full overflow-hidden mb-4" style={{background: 'rgba(255,255,255,0.1)'}}>
               <motion.div
                 className="h-full"
-                style={{background: 'linear-gradient(90deg, #F0B429, #f5d060)'}}
+                style={{background: 'linear-gradient(90deg, #C9A227, #E7C453)'}}
                 initial={{ width: 0 }}
                 animate={{ width: `${(exportProgress.atual / exportProgress.total) * 100}%` }}
               />
@@ -4986,15 +4986,15 @@ export default function App() {
       </AnimatePresence>
 
       {/* Header */}
-      <header className="text-white relative print:shadow-none" style={{background: '#020D2F', boxShadow: '0 12px 32px -12px rgba(2,13,47,0.45)'}}>
-        <div className="absolute inset-x-0 bottom-0 h-[3px] print:hidden" style={{background: 'linear-gradient(90deg, transparent, #F0B429 20%, #F0B429 80%, transparent)'}} />
+      <header className="text-white relative print:shadow-none" style={{background: '#17150F', boxShadow: '0 12px 32px -12px rgba(23,21,15,0.45)'}}>
+        <div className="absolute inset-x-0 bottom-0 h-[3px] print:hidden" style={{background: 'linear-gradient(90deg, transparent, #C9A227 20%, #C9A227 80%, transparent)'}} />
         <div className="max-w-[1920px] mx-auto px-6 pt-8 pb-14 print:px-4 print:py-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div className="flex items-center gap-5 print:gap-4">
             <img src="/logo-sf.png" alt="Contador de Padarias" className="h-16 print:h-14 object-contain" />
             <div className="hidden md:block w-px h-12 print:h-10 bg-white/15" />
             <div>
               <h1 className="font-serif text-3xl print:text-2xl font-semibold tracking-tight text-white mb-0.5 print:mb-0.5">Sequência Fiscal</h1>
-              <p className="font-medium text-[0.95rem] print:text-sm" style={{color: 'rgba(240,180,41,0.8)'}}>Auditoria de Sequência de Vendas e Saídas</p>
+              <p className="font-medium text-[0.95rem] print:text-sm" style={{color: 'rgba(201,162,39,0.8)'}}>Auditoria de Sequência de Vendas e Saídas</p>
             </div>
           </div>
 
@@ -5005,7 +5005,7 @@ export default function App() {
                 <button
                   onClick={reset}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-bold transition-all shrink-0"
-                  style={{background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(240,180,41,0.35)'}}
+                  style={{background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(201,162,39,0.35)'}}
                 >
                   <FileSearch className="w-4 h-4" />
                   Nova Análise
@@ -5016,7 +5016,7 @@ export default function App() {
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 className="backdrop-blur-md rounded-xl p-5 flex flex-col gap-1 min-w-[360px] shadow-2xl"
-                style={{background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(240,180,41,0.2)'}}
+                style={{background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(201,162,39,0.2)'}}
               >
                 <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
                   <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Empresa:</span>
@@ -5025,7 +5025,7 @@ export default function App() {
                     <button
                       onClick={() => copiarCampoHeader('empresa', analysis[0].razaoSocial)}
                       className="shrink-0 transition-colors"
-                      style={{color: copiedHeaderField === 'empresa' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
+                      style={{color: copiedHeaderField === 'empresa' ? '#C9A227' : 'rgba(255,255,255,0.3)'}}
                       title="Copiar nome completo da empresa"
                     >
                       {copiedHeaderField === 'empresa' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -5038,7 +5038,7 @@ export default function App() {
                     <button
                       onClick={() => copiarCampoHeader('cnpj', analysis[0].cnpj)}
                       className="shrink-0 transition-colors"
-                      style={{color: copiedHeaderField === 'cnpj' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
+                      style={{color: copiedHeaderField === 'cnpj' ? '#C9A227' : 'rgba(255,255,255,0.3)'}}
                       title="Copiar CNPJ"
                     >
                       {copiedHeaderField === 'cnpj' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -5051,7 +5051,7 @@ export default function App() {
                     <button
                       onClick={() => copiarCampoHeader('ie', analysis[0].ie)}
                       className="shrink-0 transition-colors"
-                      style={{color: copiedHeaderField === 'ie' ? '#F0B429' : 'rgba(255,255,255,0.3)'}}
+                      style={{color: copiedHeaderField === 'ie' ? '#C9A227' : 'rgba(255,255,255,0.3)'}}
                       title="Copiar Inscrição Estadual"
                     >
                       {copiedHeaderField === 'ie' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -5059,7 +5059,7 @@ export default function App() {
                   </div>
 
                   <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Meses:</span>
-                  <div className="min-w-0 overflow-x-auto whitespace-nowrap font-bold text-sm leading-snug pb-0.5" style={{color: '#F0B429'}} title={mesesDisponiveis.join(', ')}>
+                  <div className="min-w-0 overflow-x-auto whitespace-nowrap font-bold text-sm leading-snug pb-0.5" style={{color: '#C9A227'}} title={mesesDisponiveis.join(', ')}>
                     {mesesDisponiveis.length === 0 ? 'N/A' : mesesDisponiveis.join(', ')}
                   </div>
 
@@ -5070,7 +5070,7 @@ export default function App() {
                         <span
                           className="inline-flex items-center w-fit px-2.5 py-0.5 rounded-full text-xs font-bold"
                           style={(regimeTributario.isSimples || regimeTributario.isMei)
-                            ? {background: 'rgba(240,180,41,0.15)', color: '#F0B429', border: '1px solid rgba(240,180,41,0.35)'}
+                            ? {background: 'rgba(201,162,39,0.15)', color: '#C9A227', border: '1px solid rgba(201,162,39,0.35)'}
                             : {background: 'rgba(148,163,184,0.15)', color: '#CBD5E1', border: '1px solid rgba(148,163,184,0.3)'}}
                         >
                           {regimeTributario.label}
@@ -5100,7 +5100,7 @@ export default function App() {
                       <button
                         onClick={() => mainCnpj && consultarSituacaoReceita(mainCnpj)}
                         className="text-xs font-bold underline transition-colors"
-                        style={{color: '#F0B429'}}
+                        style={{color: '#C9A227'}}
                       >
                         Consultar situação (BrasilAPI)
                       </button>
@@ -5352,7 +5352,7 @@ export default function App() {
                         onClick={runAnalysis}
                         disabled={xmlList.length === 0 && nfseList.length === 0}
                         className="flex items-center gap-2 px-10 py-5 text-white rounded-xl font-bold text-xl transition-all shadow-lg disabled:opacity-50 disabled:grayscale scale-105 active:scale-100"
-                      style={{background: '#020D2F', boxShadow: '0 8px 32px rgba(2,13,47,0.4)'}}
+                      style={{background: '#17150F', boxShadow: '0 8px 32px rgba(23,21,15,0.4)'}}
                       >
                         <CheckCircle2 className="w-7 h-7" />
                         Iniciar Auditoria Agora
@@ -5439,7 +5439,7 @@ export default function App() {
                     <button 
                       onClick={() => fileInputRef.current?.click()}
                       className="flex items-center gap-3 px-10 py-5 text-white rounded-xl font-bold transition-all active:scale-95 hover:scale-[1.02] shadow-xl"
-                      style={{background: '#020D2F'}}
+                      style={{background: '#17150F'}}
                     >
                       <Upload className="w-6 h-6 text-blue-400" />
                       Anexar Arquivos (ZIP ou XMLs)
@@ -7587,7 +7587,7 @@ export default function App() {
                     <button
                       onClick={() => setShowPrintMenu(v => !v)}
                       className="flex items-center gap-1 text-white px-2.5 py-1.5 rounded-lg transition-all shrink-0"
-                      style={{background: '#020D2F'}}
+                      style={{background: '#17150F'}}
                       title={window.self !== window.top
                         ? 'Imprimir Relatório / Exportar PDF — se não abrir, use o ícone "Abrir em nova aba" no topo.'
                         : 'Imprimir Relatório / Exportar PDF'}
@@ -8088,7 +8088,7 @@ export default function App() {
         <div className="hidden print:block print:px-3">
           <div className="print-header">
             <div className="flex items-baseline justify-between gap-6">
-              <div className="print-title font-serif" style={{color: '#020D2F'}}>Relatório de Auditoria de Sequência (Vendas/Saídas)</div>
+              <div className="print-title font-serif" style={{color: '#17150F'}}>Relatório de Auditoria de Sequência (Vendas/Saídas)</div>
               <span className="shrink-0 text-[9px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full whitespace-nowrap" style={{background: '#f1f5f9', color: '#475569'}}>Cópia de Auditoria</span>
             </div>
             <div className="mt-2 flex flex-wrap items-baseline gap-x-8 gap-y-1 text-[11px]">
@@ -8463,7 +8463,7 @@ export default function App() {
         );
       })()}
 
-      <footer className="p-8 text-center no-print" style={{background: '#020D2F'}}>
+      <footer className="p-8 text-center no-print" style={{background: '#17150F'}}>
         <img src="/simbolo.png" alt="Contador de Padarias" className="h-8 object-contain mx-auto opacity-70" />
       </footer>
     </div>
