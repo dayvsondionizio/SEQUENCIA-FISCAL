@@ -1376,6 +1376,15 @@ export default function App() {
     return Object.entries(cnpjCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
   }, [xmlList]);
 
+  // A consulta da Receita (BrasilAPI) é sobre um CNPJ específico — se a empresa
+  // principal mudar (nova análise, ou upload de um lote de outro cliente), o
+  // resultado antigo fica errado pra mostrar. Reseta sempre que mainCnpj muda,
+  // pra nunca aparecer "consultado agora" com dado da empresa anterior.
+  useEffect(() => {
+    setReceitaConsulta(null);
+    setReceitaConsultaStatus('idle');
+  }, [mainCnpj]);
+
   // Não restringe por tipo: além do evento de cancelamento normal (tipo
   // 'evento') e consultas, uma nota 'nfe' também pode chegar já carregando
   // seu próprio isCancelamento=true — visto na prática num arquivo malformado
