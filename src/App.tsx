@@ -938,6 +938,160 @@ function SpedValidationPanel({ spedData, crossRef, onClose }: SpedValidationPane
   );
 }
 
+// Easter egg — jogo simples pra passar o tempo enquanto o processamento
+// roda em segundo plano (não interfere nele, é só decorativo). Clique/
+// espaço pra pular as inutilizações (retângulos escuros) que vêm voando;
+// pontuação sobe com a distância. Canvas puro, sem dependências novas.
+function EasterEggGame({ onClose }: { onClose: () => void }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [score, setScore] = useState(0);
+  const [best, setBest] = useState(0);
+  const [gameOver, setGameOver] = useState(false);
+  const stateRef = useRef({
+    playerY: 150,
+    velocity: 0,
+    jumping: false,
+    obstacles: [] as { x: number; w: number; h: number }[],
+    speed: 4,
+    frame: 0,
+    dist: 0,
+    over: false,
+  });
+
+  const jumpOrRestart = () => {
+    const s = stateRef.current;
+    if (s.over) {
+      s.playerY = 150; s.velocity = 0; s.jumping = false; s.obstacles = [];
+      s.speed = 4; s.frame = 0; s.dist = 0; s.over = false;
+      setGameOver(false);
+      setScore(0);
+      return;
+    }
+    if (!s.jumping) {
+      s.jumping = true;
+      s.velocity = -9.5;
+    }
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const GROUND_Y = 150;
+    const PLAYER_X = 36;
+    const PLAYER_SIZE = 22;
+    let raf = 0;
+
+    const loop = () => {
+      const s = stateRef.current;
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      // fundo
+      ctx.fillStyle = '#FCFBF8';
+      ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = '#E5E0D6';
+      ctx.beginPath();
+      ctx.moveTo(0, GROUND_Y + PLAYER_SIZE);
+      ctx.lineTo(W, GROUND_Y + PLAYER_SIZE);
+      ctx.stroke();
+
+      if (!s.over) {
+        s.frame++;
+        s.dist++;
+        if (s.frame % 90 === 0) s.speed = Math.min(s.speed + 0.4, 11);
+
+        // física do pulo
+        s.velocity += 0.55;
+        s.playerY += s.velocity;
+        if (s.playerY > GROUND_Y) { s.playerY = GROUND_Y; s.velocity = 0; s.jumping = false; }
+
+        // spawn de obstáculo
+        if (s.frame % Math.max(45, Math.floor(90 - s.speed * 4)) === 0) {
+          s.obstacles.push({ x: W, w: 16 + Math.random() * 10, h: 20 + Math.random() * 16 });
+        }
+        s.obstacles.forEach(o => { o.x -= s.speed; });
+        s.obstacles = s.obstacles.filter(o => o.x + o.w > 0);
+
+        // colisão (AABB simples)
+        for (const o of s.obstacles) {
+          const px1 = PLAYER_X, px2 = PLAYER_X + PLAYER_SIZE;
+          const py1 = s.playerY, py2 = s.playerY + PLAYER_SIZE;
+          const ox1 = o.x, ox2 = o.x + o.w;
+          const oy1 = GROUND_Y + PLAYER_SIZE - o.h, oy2 = GROUND_Y + PLAYER_SIZE;
+          if (px2 > ox1 && px1 < ox2 && py2 > oy1 && py1 < oy2) {
+            s.over = true;
+            setGameOver(true);
+            setBest(b => Math.max(b, Math.floor(s.dist / 8)));
+          }
+        }
+        setScore(Math.floor(s.dist / 8));
+      }
+
+      // jogador (trigo dourado)
+      ctx.fillStyle = '#C9A227';
+      ctx.beginPath();
+      ctx.roundRect(PLAYER_X, s.playerY, PLAYER_SIZE, PLAYER_SIZE, 6);
+      ctx.fill();
+
+      // obstáculos
+      ctx.fillStyle = '#423C2C';
+      s.obstacles.forEach(o => {
+        ctx.beginPath();
+        ctx.roundRect(o.x, GROUND_Y + PLAYER_SIZE - o.h, o.w, o.h, 3);
+        ctx.fill();
+      });
+
+      raf = requestAnimationFrame(loop);
+    };
+
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jumpOrRestart(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] backdrop-blur-sm flex flex-col items-center justify-center p-6"
+      style={{background: 'rgba(23,21,15,0.85)'}}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-[#FCFBF8] rounded-2xl p-5 shadow-2xl" style={{width: 'min(92vw, 420px)'}}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-serif font-semibold text-[#17150F]">Pulando as Inutilizações</div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors" title="Fechar">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <canvas
+          ref={canvasRef}
+          width={370}
+          height={176}
+          onClick={jumpOrRestart}
+          className="w-full rounded-lg border border-[#E5E0D6] cursor-pointer touch-none"
+        />
+        <div className="flex items-center justify-between mt-3 text-sm">
+          <span className="text-slate-500">Espaço, ↑ ou clique pra pular</span>
+          <span className="font-bold text-[#9A7B12]">Pontos: {score} · Recorde: {best}</span>
+        </div>
+        {gameOver && (
+          <div className="mt-3 text-center">
+            <p className="text-sm text-slate-600 mb-2">Bateu numa inutilização! Clique no jogo pra tentar de novo.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('sequencia-fiscal-theme');
@@ -977,6 +1131,7 @@ export default function App() {
   const [forcarPainelInutilizacao, setForcarPainelInutilizacao] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [copiedHeaderField, setCopiedHeaderField] = useState<string | null>(null);
+  const [showEasterEgg, setShowEasterEgg] = useState(false);
 
   const copiarCampoHeader = (campo: string, valor: string) => {
     navigator.clipboard.writeText(valor);
@@ -4709,13 +4864,17 @@ export default function App() {
                 className="absolute inset-4 rounded-full"
                 style={{border: '4px solid rgba(255,255,255,0.1)', borderTopColor: 'rgba(255,255,255,0.6)'}}
               />
-              <div className="absolute inset-0 flex items-center justify-center">
+              <div
+                className="absolute inset-0 flex items-center justify-center pointer-events-auto cursor-pointer"
+                onClick={() => setShowEasterEgg(true)}
+                title="Clique pra passar o tempo"
+              >
                 <img src="/simbolo.png" alt="" className="w-9 h-9 object-contain animate-pulse" />
               </div>
             </div>
             <h2 className="text-2xl font-bold mb-2">Processando Arquivos</h2>
             <div className="w-64 h-2 rounded-full overflow-hidden mb-4" style={{background: 'rgba(255,255,255,0.1)'}}>
-              <motion.div 
+              <motion.div
                 className="h-full"
                 style={{background: 'linear-gradient(90deg, #C9A227, #E7C453)'}}
                 initial={{ width: 0 }}
@@ -4725,6 +4884,13 @@ export default function App() {
             <p className="text-center max-w-md" style={{color: 'rgba(255,255,255,0.6)'}}>
               Lendo {processingProgress.current} de {processingProgress.total} arquivos...
             </p>
+            <button
+              onClick={() => setShowEasterEgg(true)}
+              className="mt-3 text-xs underline pointer-events-auto"
+              style={{color: 'rgba(255,255,255,0.4)'}}
+            >
+              Enquanto isso, que tal um joguinho?
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
@@ -4746,7 +4912,11 @@ export default function App() {
                 className="absolute inset-0 rounded-full"
                 style={{border: '4px solid rgba(201,162,39,0.25)', borderTopColor: '#C9A227'}}
               />
-              <div className="absolute inset-0 flex items-center justify-center">
+              <div
+                className="absolute inset-0 flex items-center justify-center pointer-events-auto cursor-pointer"
+                onClick={() => setShowEasterEgg(true)}
+                title="Clique pra passar o tempo"
+              >
                 <FileSpreadsheet className="w-9 h-9" style={{color: '#C9A227'}} />
               </div>
             </div>
@@ -4762,12 +4932,21 @@ export default function App() {
             <p className="text-center max-w-md" style={{color: 'rgba(255,255,255,0.6)'}}>
               {exportProgress.etapa} — {exportProgress.atual} de {exportProgress.total} notas
             </p>
+            <button
+              onClick={() => setShowEasterEgg(true)}
+              className="mt-2 text-xs underline pointer-events-auto"
+              style={{color: 'rgba(255,255,255,0.4)'}}
+            >
+              Enquanto isso, que tal um joguinho?
+            </button>
             <p className="text-center max-w-md text-xs mt-2" style={{color: 'rgba(255,255,255,0.4)'}}>
               Não feche nem atualize a página até o download começar.
             </p>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {showEasterEgg && <EasterEggGame onClose={() => setShowEasterEgg(false)} />}
 
       {/* Auditoria de Regime Modal */}
       <AnimatePresence>
