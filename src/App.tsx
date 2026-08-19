@@ -1952,9 +1952,15 @@ export default function App() {
       if ((xml.data || '') > porCrt[crt].ultima) porCrt[crt].ultima = xml.data || '';
       if (!amostraPorCrt.has(crt)) amostraPorCrt.set(crt, xml);
 
-      // Confere se o jeito que o ICMS foi calculado bate com o CRT declarado:
-      // CRT 1/2 (Simples) deveria usar CSOSN em todo item; CRT 3 (Normal)
-      // deveria usar CST. Achar o outro é inconsistência técnica real.
+      // Confere se o jeito que o ICMS foi calculado bate com o CRT declarado.
+      // Por Convênio SINIEF s/nº de 1970 (Anexo III-A, incluído pelo Ajuste
+      // SINIEF 11/2019): CSOSN só vale pra CRT 1 (Simples pleno) e 4 (MEI).
+      // CRT 2 (Simples Nacional com excesso de sublimite) usa CST igual
+      // Regime Normal pra ICMS/ISS — LC 123/2006 arts. 13-A/19/20 e Resolução
+      // CGSN 140/2018 art. 12 tiram o direito de recolher ICMS/ISS pelo
+      // Simples nesse caso, mas a empresa continua Simples Nacional pros
+      // demais tributos. Por isso CRT 2 entra junto com CRT 3 na expectativa
+      // de CST, não junto com 1/4 na expectativa de CSOSN.
       const dets = Array.from(doc.getElementsByTagName('det'));
       let temCsosn = false, temCst = false;
       dets.forEach(det => {
@@ -1963,12 +1969,12 @@ export default function App() {
         if (icmsNode?.getElementsByTagName('CSOSN')[0]) temCsosn = true;
         if (icmsNode?.getElementsByTagName('CST')[0]) temCst = true;
       });
-      // MEI (CRT=4, NT 2024.001) usa CSOSN igual Simples Nacional.
-      const isSimplesCrt = crt === '1' || crt === '2' || crt === '4';
-      if (isSimplesCrt && temCst && !temCsosn) {
+      const esperaCsosn = crt === '1' || crt === '4';
+      const esperaCst = crt === '2' || crt === '3';
+      if (esperaCsosn && temCst && !temCsosn) {
         inconsistencias.push({ xml, motivo: `CRT=${crt} (${crtLabel[crt] || crt}) mas os itens usam CST (padrão Regime Normal) em vez de CSOSN` });
-      } else if (crt === '3' && temCsosn && !temCst) {
-        inconsistencias.push({ xml, motivo: `CRT=3 (Regime Normal) mas os itens usam CSOSN (padrão Simples Nacional) em vez de CST` });
+      } else if (esperaCst && temCsosn && !temCst) {
+        inconsistencias.push({ xml, motivo: `CRT=${crt} (${crtLabel[crt] || crt}) mas os itens usam CSOSN (padrão Simples Nacional) em vez de CST` });
       }
     });
 
