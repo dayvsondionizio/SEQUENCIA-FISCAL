@@ -1556,57 +1556,25 @@ export default function App() {
     );
   }, [xmlList]);
 
-  // Cache de XML parseado — construído em lotes com pausa (setTimeout 0) em
-  // vez de um useMemo síncrono, porque um lote de 30 mil+ notas faz esse
-  // parseFromString rodar 30 mil+ vezes de uma vez só, travando a aba
-  // ("página não responde") logo depois do upload. Fica em state em vez de
-  // useMemo justamente pra poder atualizar em pedaços; os useMemos que
-  // consomem getParsedXml precisam ter xmlDocCache nas dependências pra
-  // recalcular quando o cache terminar de montar.
-  const [xmlDocCache, setXmlDocCache] = useState<Map<string, Document>>(new Map());
-  const [xmlDocCacheReady, setXmlDocCacheReady] = useState(true);
-
-  useEffect(() => {
-    let cancelado = false;
-    // Eventos (Manifestação do Destinatário — Ciência/Confirmação/Desconhecimento
-    // da Operação, e também o próprio cancelamento) referenciam o chNFe da NOTA
-    // ORIGINAL, não uma chave própria — se entrassem aqui, sobrescreveriam no
-    // cache o documento certo da nota (que tem <emit>/<CRT>/etc.) pelo do
-    // evento (que não tem nada disso), corrompendo toda auditoria que depende
-    // desse cache pra essa chave. Só nota fiscal de fato deve ser cacheada aqui.
-    const relevantes = xmlList.filter(xml => xml.tipo === 'nfe' && xml.rawXml && xml.chave);
-    if (relevantes.length === 0) {
-      setXmlDocCache(new Map());
-      setXmlDocCacheReady(true);
-      return;
-    }
-    setXmlDocCacheReady(false);
+  const parsedXmlCache = useMemo(() => {
     const cache = new Map<string, Document>();
-    const LOTE = 500;
-    let i = 0;
-    const processarLote = () => {
-      if (cancelado) return;
-      relevantes.slice(i, i + LOTE).forEach(xml => {
-        cache.set(xml.chave!, parser.parseFromString(xml.rawXml!, 'text/xml'));
-      });
-      i += LOTE;
-      if (i < relevantes.length) {
-        setTimeout(processarLote, 0);
-      } else {
-        setXmlDocCache(cache);
-        setXmlDocCacheReady(true);
-      }
-    };
-    processarLote();
-    return () => { cancelado = true; };
+    xmlList.forEach(xml => {
+      // Eventos (Manifestação do Destinatário — Ciência/Confirmação/Desconhecimento
+      // da Operação, e também o próprio cancelamento) referenciam o chNFe da NOTA
+      // ORIGINAL, não uma chave própria — se entrassem aqui, sobrescreveriam no
+      // cache o documento certo da nota (que tem <emit>/<CRT>/etc.) pelo do
+      // evento (que não tem nada disso), corrompendo toda auditoria que depende
+      // desse cache pra essa chave. Só nota fiscal de fato deve ser cacheada aqui.
+      if (xml.tipo !== 'nfe' || !xml.rawXml || !xml.chave) return;
+      cache.set(xml.chave, parser.parseFromString(xml.rawXml, 'text/xml'));
+    });
+    return cache;
   }, [xmlList]);
 
-  // Notas sem chave são raríssimas (só aconteceria em XML malformado), e notas
-  // fora do cache ainda em construção também caem aqui — nesse caso faz o
-  // parse na hora em vez de quebrar (correção nunca depende do cache estar
-  // pronto, só a performance depende).
+  // Notas sem chave são raríssimas (só aconteceria em XML malformado) — nesse
+  // caso raro faz o parse na hora em vez de quebrar, sem custo perceptível.
   const getParsedXml = (xml: XmlData): Document | null => {
-    if (xml.chave && xmlDocCache.has(xml.chave)) return xmlDocCache.get(xml.chave)!;
+    if (xml.chave && parsedXmlCache.has(xml.chave)) return parsedXmlCache.get(xml.chave)!;
     if (!xml.rawXml) return null;
     return parser.parseFromString(xml.rawXml, 'text/xml');
   };
@@ -1935,7 +1903,7 @@ export default function App() {
     const isMei = crt === '4';
     const label = isSimples ? 'Simples Nacional' : isMei ? 'MEI' : crt === '3' ? 'Regime Normal' : null;
     return { crt, label, isSimples, isMei };
-  }, [xmlList, filterMes, mainCnpj, xmlDocCache]);
+  }, [xmlList, filterMes, mainCnpj]);
 
   const crtLabel: Record<string, string> = { '1': 'Simples Nacional', '2': 'Simples Nacional (sublimite)', '3': 'Regime Normal', '4': 'MEI' };
 
@@ -2037,7 +2005,7 @@ export default function App() {
       semCrt,
       temAlerta: mudouNoPeriodo || semCrt.length > 0,
     };
-  }, [xmlList, filterMes, xmlDocCache]);
+  }, [xmlList, filterMes]);
 
   // Auditoria de IBS/CBS (Reforma Tributária — EC 132/2023 + LC 214/2025):
   // 2026 é o período de teste (0,1% IBS + 0,9% CBS, compensável), quando o
@@ -2094,7 +2062,7 @@ export default function App() {
       amostraSemGrupo,
       amostraComGrupo,
     };
-  }, [xmlList, filterMes, xmlDocCache]);
+  }, [xmlList, filterMes]);
 
   // Responsável Técnico (<infRespTec>): identifica quem desenvolve/mantém o
   // sistema de automação do cliente — mais confiável que <verProc> (que em
@@ -2142,7 +2110,7 @@ export default function App() {
         : fone;
 
     return { cnpj, cnpjFormatado, contato, email, fone, foneFormatado, dominio };
-  }, [xmlList, filterMes, mainCnpj, xmlDocCache]);
+  }, [xmlList, filterMes, mainCnpj]);
 
   // Auditoria de meios de pagamento / TEF: verifica o bloco <pag> de cada nota
   // em busca de inconsistências que geram rejeição SEFAZ (falso TEF, cAut
@@ -2381,7 +2349,7 @@ export default function App() {
       cartaoIndPagSuspeito, foraEscopoNaoPresencial, foraEscopoInterestadual,
       notasForaDoEscopo, totalNotasVendaLiquida: saidas.length
     };
-  }, [xmlList, filterMes, xmlDocCache]);
+  }, [xmlList, filterMes]);
 
   // All saída notes of the main company, plus inutilizações (XML-sourced or
   // manually confirmed), flagged with cancellation status — the searchable
@@ -2456,7 +2424,7 @@ export default function App() {
       if (notaSearchCampo === 'Item') return buscaItem();
       return false;
     });
-  }, [notasSaida, notaSearchQuery, notaSearchCampo, filterNotaModelo, filterNotaSituacao, filterNotaCfop, xmlDocCache]);
+  }, [notasSaida, notaSearchQuery, notaSearchCampo, filterNotaModelo, filterNotaSituacao, filterNotaCfop]);
 
   const periodoAnalise = useMemo(() => {
     const datas = xmlList
@@ -5693,12 +5661,6 @@ export default function App() {
               animate={{ opacity: 1 }}
               className="flex flex-col gap-6"
             >
-              {!xmlDocCacheReady && (
-                <div className="no-print flex items-center gap-2 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-lg px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">
-                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                  Processando dados detalhados (Regime, Malformadas, TEF, IBS/CBS) em segundo plano — os números de sequência/faltantes acima já estão completos; os cards abaixo podem levar alguns segundos pra terminar em lotes grandes.
-                </div>
-              )}
               {/* Faixa de métricas — visão geral, encosta na base do header */}
               <div className="flex flex-wrap gap-6 items-stretch">
                 <div
