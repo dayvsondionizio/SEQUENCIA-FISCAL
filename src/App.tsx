@@ -1565,6 +1565,11 @@ export default function App() {
   // recalcular quando o cache terminar de montar.
   const [xmlDocCache, setXmlDocCache] = useState<Map<string, Document>>(new Map());
   const [xmlDocCacheReady, setXmlDocCacheReady] = useState(true);
+  // Clicar em "Iniciar Auditoria Agora" só deve mostrar a tela de resultado
+  // quando TUDO já foi lido — nada de card aparecendo "depois" enquanto o
+  // resto já está na tela. Se o cache de XML ainda estiver montando (lotes
+  // grandes), fica esperando em vez de já abrir os resultados parcialmente.
+  const [aguardandoCacheParaAnalise, setAguardandoCacheParaAnalise] = useState(false);
 
   useEffect(() => {
     let cancelado = false;
@@ -4557,9 +4562,29 @@ export default function App() {
     });
 
     setAnalysis(result);
-    
+
     setConsolidatedMessage(generateInitialConsolidated(result));
   };
+
+  // Clique no botão "Iniciar Auditoria Agora": se o cache de XML (usado por
+  // Regime/Malformadas/TEF/IBS-CBS) já terminou de montar, roda na hora,
+  // igual sempre foi. Se ainda estiver processando em lotes (arquivo grande),
+  // espera terminar antes de chamar runAnalysis — a tela de resultado só
+  // deve aparecer com tudo já lido, nunca com cards "chegando depois".
+  const handleIniciarAuditoria = () => {
+    if (xmlDocCacheReady) {
+      runAnalysis();
+    } else {
+      setAguardandoCacheParaAnalise(true);
+    }
+  };
+
+  useEffect(() => {
+    if (aguardandoCacheParaAnalise && xmlDocCacheReady) {
+      setAguardandoCacheParaAnalise(false);
+      runAnalysis();
+    }
+  }, [aguardandoCacheParaAnalise, xmlDocCacheReady]);
 
   const generateInitialConsolidated = (all: SerieAnalysis[]) => {
     const withProblems = all.filter(s => s.faltantes.length > 0);
@@ -4921,6 +4946,49 @@ export default function App() {
             </div>
             <p className="text-center max-w-md" style={{color: 'rgba(255,255,255,0.6)'}}>
               Lendo {processingProgress.current} de {processingProgress.total} arquivos...
+            </p>
+            <button
+              onClick={() => setShowEasterEgg(true)}
+              className="mt-3 text-xs underline pointer-events-auto"
+              style={{color: 'rgba(255,255,255,0.4)'}}
+            >
+              Enquanto isso, que tal um joguinho?
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Aguardando o cache de XML terminar antes de abrir a auditoria — só
+          aparece em lotes grandes onde esse cache ainda não tinha terminado
+          de montar no momento do clique; a tela de resultado só abre com
+          tudo já lido, nunca com card aparecendo depois. */}
+      <AnimatePresence>
+        {aguardandoCacheParaAnalise && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] backdrop-blur-sm flex flex-col items-center justify-center text-white p-6 pointer-events-none"
+            style={{background: 'rgba(23,21,15,0.88)'}}
+          >
+            <div className="relative w-24 h-24 mb-8">
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                className="absolute inset-0 rounded-full"
+                style={{border: '4px solid rgba(201,162,39,0.25)', borderTopColor: '#C9A227'}}
+              />
+              <div
+                className="absolute inset-0 flex items-center justify-center pointer-events-auto cursor-pointer"
+                onClick={() => setShowEasterEgg(true)}
+                title="Clique pra passar o tempo"
+              >
+                <img src="/simbolo.png" alt="" className="w-9 h-9 object-contain animate-pulse" />
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold mb-2">Preparando Auditoria</h2>
+            <p className="text-center max-w-md" style={{color: 'rgba(255,255,255,0.6)'}}>
+              Lendo os dados detalhados de cada nota antes de abrir os resultados — em lotes grandes isso pode levar alguns segundos.
             </p>
             <button
               onClick={() => setShowEasterEgg(true)}
@@ -5566,7 +5634,7 @@ export default function App() {
                   <div className="p-10 bg-slate-50 flex flex-col items-center gap-6 border-t border-slate-100">
                     <div className="flex gap-4">
                       <button
-                        onClick={runAnalysis}
+                        onClick={handleIniciarAuditoria}
                         disabled={xmlList.length === 0 && nfseList.length === 0}
                         className="flex items-center gap-2 px-10 py-5 text-white rounded-xl font-bold text-xl transition-all shadow-lg disabled:opacity-50 disabled:grayscale scale-105 active:scale-100"
                       style={{background: '#17150F', boxShadow: '0 8px 32px rgba(23,21,15,0.4)'}}
@@ -5693,12 +5761,6 @@ export default function App() {
               animate={{ opacity: 1 }}
               className="flex flex-col gap-6"
             >
-              {!xmlDocCacheReady && (
-                <div className="no-print flex items-center gap-2 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-lg px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">
-                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                  Processando dados detalhados (Regime, Malformadas, TEF, IBS/CBS) em segundo plano — os números de sequência/faltantes acima já estão completos; os cards abaixo podem levar alguns segundos pra terminar em lotes grandes.
-                </div>
-              )}
               {/* Faixa de métricas — visão geral, encosta na base do header */}
               <div className="flex flex-wrap gap-6 items-stretch">
                 <div
