@@ -292,7 +292,7 @@ interface WorkerResults {
   localValidNfCount: number;
   localInutsCount: number;
   localNonXmlCount: number;
-  localSped: SpedData | null;
+  localSpeds: SpedData[];
 }
 
 export interface PendingArchive {
@@ -347,7 +347,7 @@ async function processZipRecursively(
           const xmlText = await entry.async('text');
           if (xmlText.trimStart().startsWith('|0000|')) {
             const sped = parseSped(xmlText, baseName);
-            if (sped && (!results.localSped || sped.c100.length > results.localSped.c100.length)) results.localSped = sped;
+            if (sped) results.localSpeds.push(sped);
             continue;
           }
           const looksLikeXml = xmlText.trim().startsWith('<');
@@ -411,7 +411,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   const results: WorkerResults = {
     localXmls: [], localInuts: [], localOthers: [], localNfse: [],
     localTotalCount: 0, localCancellations: 0, localValidNfCount: 0,
-    localInutsCount: 0, localNonXmlCount: 0, localSped: null,
+    localInutsCount: 0, localNonXmlCount: 0, localSpeds: [],
   };
   const sourceMap = new Map<string, SourceMetadata>();
   const processedNames = new Set<string>();

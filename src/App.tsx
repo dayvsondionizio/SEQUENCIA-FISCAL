@@ -635,6 +635,50 @@ function getMonthYear(dateStr?: string) {
   return '';
 }
 
+// Chave de período de um SPED no mesmo formato do filtro de mês da tela
+// ("Julho/2026") — é o que permite guardar um SPED por mês e puxar o certo
+// quando o usuário troca o filtro, em vez de um único SPED ativo por vez.
+function spedPeriodKey(sped: SpedData): string {
+  const mIdx = parseInt(sped.dtIni.slice(2, 4)) - 1;
+  const ano = sped.dtIni.slice(4, 8);
+  if (mIdx >= 0 && mIdx < 12 && ano) return `${MESES[mIdx]}/${ano}`;
+  return sped.dtIni;
+}
+
+type SpedEntry = { data: SpedData; original?: SpedData };
+type SpedEntries = Record<string, SpedEntry>;
+
+// Upload manual (botão "Anexar SPED"): o arquivo anexado agora sempre vira o
+// atual do seu próprio mês — se já havia um SPED daquele mesmo mês, ele vira o
+// "original" (usado só pra o diff de "adicionados" entre duas versões da MESMA
+// competência, ex: retificadora). Meses diferentes não se sobrescrevem mais.
+function upsertSpedManual(entries: SpedEntries, sped: SpedData): SpedEntries {
+  const key = spedPeriodKey(sped);
+  return { ...entries, [key]: { data: sped, original: entries[key]?.data } };
+}
+
+// Upload em lote: pode trazer vários SPEDs de uma vez (um por mês, ou
+// duplicados do mesmo mês vindos de arquivos diferentes). Agrupa por
+// competência; dentro da mesma competência o que tiver mais notas C100 vence
+// e o outro vira "original" — igual à regra que já existia, só que agora
+// aplicada por mês em vez de globalmente (senão o SPED de um mês apagava o
+// de outro mês só por ter mais linhas).
+function mergeSpedBatch(entries: SpedEntries, found: SpedData[]): SpedEntries {
+  let result = entries;
+  for (const sped of found) {
+    const key = spedPeriodKey(sped);
+    const existing = result[key];
+    if (!existing) {
+      result = { ...result, [key]: { data: sped } };
+    } else if (sped.c100.length > existing.data.c100.length) {
+      result = { ...result, [key]: { data: sped, original: existing.data } };
+    } else {
+      result = { ...result, [key]: { data: existing.data, original: sped } };
+    }
+  }
+  return result;
+}
+
 // Standard CFOP descriptions (Ajuste SINIEF 07/2001), keyed by the last 3 digits.
 // The same 3-digit suffix has the same meaning for saída dentro do Estado (5xxx),
 // para outro Estado (6xxx) or para o exterior (7xxx), so one table covers all prefixes.
@@ -1270,8 +1314,9 @@ export default function App() {
   const [processedFileNames, setProcessedFileNames] = useState<Set<string>>(new Set());
   const [entradaCount, setEntradaCount] = useState(0);
   const [fornecedorEntradaInfo, setFornecedorEntradaInfo] = useState<{ count: number; nomes: string } | null>(null);
-  const [spedData, setSpedData] = useState<SpedData | null>(null);
-  const [spedDataOriginal, setSpedDataOriginal] = useState<SpedData | null>(null);
+  // Um SPED por competência (mês/ano), não um único SPED global — permite
+  // anexar o SPED de julho e o de agosto juntos e cada um valer só pro seu mês.
+  const [spedEntries, setSpedEntries] = useState<SpedEntries>({});
   const [spedCardFiltro, setSpedCardFiltro] = useState<'Todas' | 'SemXML' | 'Canceladas' | 'NaoDeclarado' | 'Adicionados'>('Todas');
   const [spedCardOpen, setSpedCardOpen] = useState(false);
   const [spedSearch, setSpedSearch] = useState('');
@@ -1364,11 +1409,36 @@ export default function App() {
     return `${partes.join('_')}.${extensao}`;
   };
 
+  // SPED(s) ativos para o filtro de mês atual: com um mês específico selecionado,
+  // é só o SPED daquele mês (se houver); com "Todos", combina os SPEDs de todas as
+  // competências carregadas — permite ver os dois meses cruzados ao mesmo tempo.
+  const activeSpedList = useMemo<SpedData[]>(() => {
+    const keys = Object.keys(spedEntries);
+    if (keys.length === 0) return [];
+    if (filterMes !== 'Todos') {
+      return spedEntries[filterMes] ? [spedEntries[filterMes].data] : [];
+    }
+    return keys.map(k => spedEntries[k].data);
+  }, [spedEntries, filterMes]);
+
+  // Representante pra exibição (razão social/CNPJ/nome de arquivo) — em modo
+  // combinado ("Todos" com mais de um mês) o diff "adicionados" e o download do
+  // SPED corrigido só valem pra um único SPED por vez, então ficam desabilitados
+  // nesse caso (checar activeSpedList.length === 1 antes de usar spedData.rawText).
+  const spedData = useMemo<SpedData | null>(
+    () => activeSpedList.length > 0 ? activeSpedList[activeSpedList.length - 1] : null,
+    [activeSpedList]
+  );
+  const spedDataOriginal = useMemo<SpedData | null>(() => {
+    if (filterMes === 'Todos' || activeSpedList.length !== 1) return null;
+    return spedEntries[filterMes]?.original ?? null;
+  }, [spedEntries, filterMes, activeSpedList]);
+
   const spedCrossRef = useMemo(() => {
-    if (!spedData) return null;
+    if (activeSpedList.length === 0) return null;
     const xmlChaves = new Set(xmlList.filter(x => x.chave).map(x => x.chave!));
-    const spedSaidas = spedData.c100.filter(c => c.indOper === '1');
-    const spedEntradasTotal = spedData.c100.filter(c => c.indOper === '0').length;
+    const spedSaidas = activeSpedList.flatMap(s => s.c100.filter(c => c.indOper === '1'));
+    const spedEntradasTotal = activeSpedList.reduce((n, s) => n + s.c100.filter(c => c.indOper === '0').length, 0);
     const comChave = spedSaidas.filter(c => c.chave);
     const saidaFaltantes = comChave.filter(c => !xmlChaves.has(c.chave));
     const saidaFaltantesSet = new Set(saidaFaltantes.map(c => c.chave));
@@ -1379,22 +1449,28 @@ export default function App() {
     // Chave NF-e: cUF(2) + AAMM(4) + CNPJ(14) + ... → posições 2-5 = AAMM (ex: "2606" = jun/26)
     const toAaMm = (ddmmaaaa: string) =>
       ddmmaaaa.length === 8 ? ddmmaaaa.slice(6, 8) + ddmmaaaa.slice(2, 4) : '';
-    const iniAaMm = toAaMm(spedData.dtIni);
-    const finAaMm = toAaMm(spedData.dtFin);
+    // Cada SPED ativo cobre seu próprio intervalo — trata como uma lista de faixas,
+    // não uma única faixa contínua (min ini / max fin): senão um mês SEM SPED entre
+    // dois meses que TÊM SPED cairia "dentro do período" por engano e seria cobrado
+    // como se devesse estar declarado num SPED que não existe.
+    const periodos = activeSpedList
+      .map(s => ({ ini: toAaMm(s.dtIni), fin: toAaMm(s.dtFin) }))
+      .filter(p => p.ini);
+    const dentroDeAlgumPeriodo = (aaMm: string) => periodos.some(p => aaMm >= p.ini && aaMm <= p.fin);
     // Filtra apenas NF-e emitidas pela própria empresa (emitCnpj = CNPJ do SPED)
     // tpNF=1 sozinho não basta: XMLs de fornecedor também têm tpNF=1
     // Só remove pontuação (não \D inteiro) — o CNPJ alfanumérico (NT 2026.004)
     // usa letras nos 12 primeiros dígitos, e \D também apagaria essas letras.
     const cleanCnpj = (c: string) => c.replace(/[.\-/\s]/g, '');
-    const companyCnpj = cleanCnpj(spedData.cnpj);
+    const companyCnpj = cleanCnpj(activeSpedList[0].cnpj);
     const xmlSaidasNfe = xmlList.filter(x =>
       x.chave && x.tipo === 'nfe' && cleanCnpj(x.emitCnpj ?? '') === companyCnpj
     );
-    const xmlsForaPeriodo = iniAaMm
-      ? xmlSaidasNfe.filter(x => { const aa = x.chave!.slice(2, 6); return aa < iniAaMm || aa > finAaMm; })
+    const xmlsForaPeriodo = periodos.length
+      ? xmlSaidasNfe.filter(x => !dentroDeAlgumPeriodo(x.chave!.slice(2, 6)))
       : [];
-    const xmlsNoPeriodo = iniAaMm
-      ? xmlSaidasNfe.filter(x => { const aa = x.chave!.slice(2, 6); return aa >= iniAaMm && aa <= finAaMm; })
+    const xmlsNoPeriodo = periodos.length
+      ? xmlSaidasNfe.filter(x => dentroDeAlgumPeriodo(x.chave!.slice(2, 6)))
       : xmlSaidasNfe;
     const spedChavesSet = new Set(comChave.map(c => c.chave));
     const xmlsNaoDeclarados = xmlsNoPeriodo.filter(x => !spedChavesSet.has(x.chave!) && !!x.protocolo);
@@ -1406,6 +1482,8 @@ export default function App() {
     }))].sort();
 
     // Diff: registros que estão no SPED atual mas não estavam no original (adicionados)
+    // — só faz sentido comparando duas versões do MESMO mês, por isso fica de fora
+    // quando "Todos" está combinando SPEDs de meses diferentes.
     const originalChaves = spedDataOriginal
       ? new Set(spedDataOriginal.c100.filter(c => c.chave).map(c => c.chave))
       : null;
@@ -1421,14 +1499,14 @@ export default function App() {
       saidaFaltantes,
       saidaFaltantesSet,
       formatDt,
-      periodo: `${formatDt(spedData.dtIni)} – ${formatDt(spedData.dtFin)}`,
+      periodo: activeSpedList.map(s => `${formatDt(s.dtIni)} – ${formatDt(s.dtFin)}`).join(' + '),
       xmlsNaoDeclarados,
       xmlsForaPeriodo,
       mesesFora,
       adicionados,
       temOriginal: !!spedDataOriginal,
     };
-  }, [spedData, spedDataOriginal, xmlList]);
+  }, [activeSpedList, spedDataOriginal, xmlList]);
 
   const spedRowsFiltradas = useMemo(() => {
     if (!spedData || !spedCrossRef) return [];
@@ -3830,8 +3908,7 @@ export default function App() {
     let finalInuts: XmlData[] = [];
     let finalOthers: XmlData[] = [];
     let finalNfse: XmlData[] = [];
-    let foundSped: SpedData | null = null;
-    let foundSpedOriginal: SpedData | null = null;
+    const foundSpeds: SpedData[] = [];
     // Acumulador local (não o state React) — setExtractionErrors é assíncrono,
     // então ler o state extractionErrors mais adiante NESTA MESMA execução
     // pegaria o valor antigo (stale closure). Esse array local reflete tudo
@@ -3889,7 +3966,7 @@ export default function App() {
                 const xmlText = await entry.async('text');
                 if (xmlText.trimStart().startsWith('|0000|')) {
                   const sped = parseSped(xmlText, baseName);
-                  if (sped && (!results.localSped || sped.c100.length > results.localSped.c100.length)) results.localSped = sped;
+                  if (sped) results.localSpeds.push(sped);
                   continue;
                 }
                 const looksLikeXml = xmlText.trim().startsWith('<');
@@ -3978,7 +4055,7 @@ export default function App() {
               const xmlText = await fileData.text();
               if (xmlText.trimStart().startsWith('|0000|')) {
                 const sped = parseSped(xmlText, baseName);
-                if (sped && (!results.localSped || sped.c100.length > results.localSped.c100.length)) results.localSped = sped;
+                if (sped) results.localSpeds.push(sped);
                 continue;
               }
               const looksLikeXml = xmlText.trim().startsWith('<');
@@ -4049,7 +4126,7 @@ export default function App() {
                 const xmlText = new TextDecoder().decode(file.extraction);
                 if (xmlText.trimStart().startsWith('|0000|')) {
                   const sped = parseSped(xmlText, baseName);
-                  if (sped && (!results.localSped || sped.c100.length > results.localSped.c100.length)) results.localSped = sped;
+                  if (sped) results.localSpeds.push(sped);
                   continue;
                 }
                 if (xmlText.trim().startsWith('<') || name.toLowerCase().endsWith('.xml')) {
@@ -4104,7 +4181,7 @@ export default function App() {
             localValidNfCount: 0,
             localInutsCount: 0,
             localNonXmlCount: 0,
-            localSped: null as SpedData | null
+            localSpeds: [] as SpedData[]
           };
 
           const nameLower = file.name.toLowerCase();
@@ -4156,9 +4233,7 @@ export default function App() {
               res.localValidNfCount += workerResp.results.localValidNfCount;
               res.localInutsCount += workerResp.results.localInutsCount;
               res.localNonXmlCount += workerResp.results.localNonXmlCount;
-              if (workerResp.results.localSped && (!res.localSped || workerResp.results.localSped.c100.length > res.localSped.c100.length)) {
-                res.localSped = workerResp.results.localSped;
-              }
+              res.localSpeds.push(...workerResp.results.localSpeds);
               workerResp.sourceEntries.forEach(([entryName, meta]) => {
                 if (!sourceMap.has(entryName)) sourceMap.set(entryName, meta);
               });
@@ -4192,7 +4267,7 @@ export default function App() {
             const text = await file.text();
             if (text.trimStart().startsWith('|0000|')) {
               const sped = parseSped(text, file.name);
-              if (sped && !res.localSped) res.localSped = sped;
+              if (sped) res.localSpeds.push(sped);
             } else {
               res.localNonXmlCount++;
             }
@@ -4218,16 +4293,7 @@ export default function App() {
           finalInuts.push(...res.localInuts);
           finalOthers.push(...res.localOthers);
           finalNfse.push(...res.localNfse);
-          if (res.localSped) {
-            if (!foundSped) {
-              foundSped = res.localSped;
-            } else if (res.localSped.c100.length > foundSped.c100.length) {
-              foundSpedOriginal = foundSped;
-              foundSped = res.localSped;
-            } else {
-              foundSpedOriginal = res.localSped;
-            }
-          }
+          foundSpeds.push(...res.localSpeds);
           
           setStats(prev => ({
             ...prev,
@@ -4339,8 +4405,7 @@ export default function App() {
         setFornecedorEntradaInfo(null);
       }
 
-      if (foundSped) setSpedData(foundSped);
-      if (foundSpedOriginal) setSpedDataOriginal(foundSpedOriginal);
+      if (foundSpeds.length > 0) setSpedEntries(prev => mergeSpedBatch(prev, foundSpeds));
       setAttachedSources(Array.from(sourceMap.values()));
       setProcessedFileNames(updatedProcessedNames);
       setXmlList(mergedXmls);
@@ -4578,8 +4643,7 @@ export default function App() {
     setProcessedFileNames(new Set());
     setEntradaCount(0);
     setFornecedorEntradaInfo(null);
-    setSpedData(null);
-    setSpedDataOriginal(null);
+    setSpedEntries({});
     setSpedCardFiltro('Todas');
     setSpedCardOpen(false);
     setSpedSearch('');
@@ -5434,7 +5498,12 @@ export default function App() {
                     <SpedValidationPanel
                       spedData={spedData}
                       crossRef={spedCrossRef}
-                      onClose={() => setSpedData(null)}
+                      onClose={() => setSpedEntries(prev => {
+                        if (filterMes === 'Todos') return {};
+                        const next = { ...prev };
+                        delete next[filterMes];
+                        return next;
+                      })}
                     />
                   )}
 
@@ -6072,17 +6141,25 @@ export default function App() {
                       <button
                         onClick={() => spedInputRef.current?.click()}
                         className="text-[11px] font-normal normal-case text-slate-400 hover:text-slate-600 transition-colors"
-                        title="Substituir pelo SPED corrigido sem reiniciar a análise"
+                        title="Anexar SPED de outro mês (ou substituir o do mesmo mês) sem reiniciar a análise"
                       >
-                        Trocar
+                        Anexar +
                       </button>
                     )}
                   </div>
 
+                  {Object.keys(spedEntries).length > 0 && (
+                    <div className="px-6 pb-1 text-[10px] text-slate-400">
+                      SPED carregado: {Object.keys(spedEntries).join(', ')}
+                    </div>
+                  )}
+
                   {!spedData ? (
                     <div className="px-6 pb-5 flex flex-col gap-3">
                       <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                        Anexe o SPED Fiscal para cruzar com os XMLs e identificar faltantes.
+                        {Object.keys(spedEntries).length > 0
+                          ? `Nenhum SPED anexado para ${filterMes} ainda — anexe o SPED dessa competência para cruzar com os XMLs.`
+                          : 'Anexe o SPED Fiscal para cruzar com os XMLs e identificar faltantes.'}
                       </p>
                       <button
                         onClick={() => spedInputRef.current?.click()}
@@ -6148,8 +6225,7 @@ export default function App() {
                       const text = await file.text();
                       const sped = parseSped(text, file.name);
                       if (sped) {
-                        if (spedData) setSpedDataOriginal(spedData);
-                        setSpedData(sped);
+                        setSpedEntries(prev => upsertSpedManual(prev, sped));
                         setSpedCardFiltro('Todas');
                         setSpedSearch('');
                         setSpedCardOpen(true);
@@ -6197,20 +6273,25 @@ export default function App() {
                       {spedCrossRef.xmlsNaoDeclarados.length > 0 && (
                         <span className="flex items-center gap-2">
                           <span className="text-slate-500">Não declarados: <strong className="text-red-600">{spedCrossRef.xmlsNaoDeclarados.length}</strong></span>
+                          {activeSpedList.length !== 1 ? (
+                            <span className="text-[11px] text-slate-400" title="Selecione um único mês no filtro para baixar o SPED corrigido daquela competência">
+                              (selecione um mês para baixar o corrigido)
+                            </span>
+                          ) : (
                           <button
                             onClick={() => {
-                              const corrigido = gerarSpedCorrigido(spedData, spedCrossRef.xmlsNaoDeclarados);
+                              const corrigido = gerarSpedCorrigido(spedData!, spedCrossRef.xmlsNaoDeclarados);
                               const blob = new Blob([corrigido], { type: 'text/plain;charset=utf-8' });
                               const url = URL.createObjectURL(blob);
                               const a = document.createElement('a');
                               a.href = url;
                               const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-                              const mmI = parseInt(spedData.dtIni.slice(2, 4)) - 1;
-                              const aaI = spedData.dtIni.slice(4, 8);
-                              const mmF = parseInt(spedData.dtFin.slice(2, 4)) - 1;
-                              const aaF = spedData.dtFin.slice(4, 8);
+                              const mmI = parseInt(spedData!.dtIni.slice(2, 4)) - 1;
+                              const aaI = spedData!.dtIni.slice(4, 8);
+                              const mmF = parseInt(spedData!.dtFin.slice(2, 4)) - 1;
+                              const aaF = spedData!.dtFin.slice(4, 8);
                               const per = mmI === mmF && aaI === aaF ? `${meses[mmI]}${aaI}` : `${meses[mmI]}${aaI}-${meses[mmF]}${aaF}`;
-                              const emp = spedData.razaoSocial.replace(/[/\\:*?"<>|]/g, '').trim();
+                              const emp = spedData!.razaoSocial.replace(/[/\\:*?"<>|]/g, '').trim();
                               a.download = `SPED ${emp} ${per} ATUALIZADO - SEQUENCIA FISCAL.txt`;
                               a.click();
                               URL.revokeObjectURL(url);
@@ -6221,6 +6302,7 @@ export default function App() {
                             <Download className="w-3 h-3" />
                             Baixar SPED Corrigido
                           </button>
+                          )}
                         </span>
                       )}
                     </div>
