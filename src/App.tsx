@@ -2447,6 +2447,185 @@ ${secoesPorCodigo}
     if (win) win.onload = () => setTimeout(() => win.print(), 400);
   };
 
+  // ——— Três auditorias aditivas (não alteram nenhum cálculo existente) ———
+
+  // (1) Conferência aritmética do IBS/CBS: valor destacado bate com base ×
+  // alíquota efetiva? vIBS = UF + Município? Totais da nota (IBSCBSTot) batem
+  // com a soma dos itens? Pega emissor com fórmula/arredondamento errado —
+  // barato de achar agora no ano-teste, caro de descobrir em 2027.
+  const auditoriaIbsCbsAritmetica = useMemo(() => {
+    type Diverg = { motivo: string; itens: number; notas: Set<string>; exemplo: string };
+    const vazio = { itensVerificados: 0, notasVerificadas: 0, divergencias: [] as Diverg[] };
+    if (!mainCnpj) return vazio;
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    if (saidas.length === 0) return vazio;
+
+    const divergencias = new Map<string, Diverg>();
+    const registrar = (motivo: string, xml: XmlData) => {
+      let d = divergencias.get(motivo);
+      if (!d) { d = { motivo, itens: 0, notas: new Set(), exemplo: `${xml.serie}/${xml.numero}` }; divergencias.set(motivo, d); }
+      d.itens++;
+      if (xml.chave) d.notas.add(xml.chave);
+    };
+    const filhoDireto = (el: Element | undefined, tag: string): Element | undefined =>
+      el ? Array.from(el.children).find(e => e.tagName === tag) : undefined;
+    const num = (el: Element | undefined): number | null => {
+      const t = el?.textContent?.trim();
+      if (!t) return null;
+      const n = parseFloat(t);
+      return isNaN(n) ? null : n;
+    };
+    // ±R$ 0,011 de tolerância — arredondamento a 2 casas pode divergir 1 centavo
+    const bate = (a: number, b: number) => Math.abs(a - b) <= 0.011;
+
+    let itensVerificados = 0;
+    const notasVerificadas = new Set<string>();
+
+    saidas.forEach(xml => {
+      const doc = getParsedXml(xml);
+      if (!doc) return;
+      let somaVBC = 0, somaVIBS = 0, somaVCBS = 0, temItens = false;
+      Array.from(doc.getElementsByTagName('det')).forEach(det => {
+        const ibscbs = det.getElementsByTagName('imposto')[0]?.getElementsByTagName('IBSCBS')[0];
+        const g = ibscbs ? filhoDireto(ibscbs, 'gIBSCBS') : undefined;
+        if (!g) return; // sem grupo padrão (ausente ou monofásico) — fora desta conferência
+        itensVerificados++;
+        temItens = true;
+        if (xml.chave) notasVerificadas.add(xml.chave);
+        const vBC = num(filhoDireto(g, 'vBC')) ?? 0;
+        somaVBC += vBC;
+        // Alíquota efetiva: com gRed presente vale pAliqEfet; sem gRed, a cheia.
+        const conferirParcela = (grupoTag: string, pTag: string, vTag: string, rotulo: string): number => {
+          const grupo = filhoDireto(g, grupoTag);
+          if (!grupo) return 0;
+          const gRed = filhoDireto(grupo, 'gRed');
+          const aliq = gRed ? num(filhoDireto(gRed, 'pAliqEfet')) : num(filhoDireto(grupo, pTag));
+          const v = num(filhoDireto(grupo, vTag));
+          if (aliq != null && v != null && !bate(v, vBC * aliq / 100)) {
+            registrar(`${rotulo}: valor destacado difere de base × alíquota efetiva`, xml);
+          }
+          return v ?? 0;
+        };
+        const vUF = conferirParcela('gIBSUF', 'pIBSUF', 'vIBSUF', 'IBS (UF)');
+        const vMun = conferirParcela('gIBSMun', 'pIBSMun', 'vIBSMun', 'IBS (Município)');
+        const vIBS = num(filhoDireto(g, 'vIBS'));
+        if (vIBS != null && !bate(vIBS, vUF + vMun)) registrar('vIBS do item difere de IBS UF + IBS Município', xml);
+        somaVIBS += vIBS ?? 0;
+        somaVCBS += conferirParcela('gCBS', 'pCBS', 'vCBS', 'CBS');
+      });
+      if (!temItens) return;
+      // Totais da nota — a NT define IBSCBSTot como somatório dos campos dos itens
+      const tot = doc.getElementsByTagName('IBSCBSTot')[0];
+      if (!tot) { registrar('nota com itens IBS/CBS mas sem o grupo de totais (IBSCBSTot)', xml); return; }
+      const vBCTot = num(filhoDireto(tot, 'vBCIBSCBS'));
+      if (vBCTot != null && !bate(vBCTot, somaVBC)) registrar('total da base (vBCIBSCBS) difere da soma das bases dos itens', xml);
+      const vIBSTot = num(filhoDireto(filhoDireto(tot, 'gIBS'), 'vIBS'));
+      if (vIBSTot != null && !bate(vIBSTot, somaVIBS)) registrar('total de IBS da nota difere da soma dos itens', xml);
+      const vCBSTot = num(filhoDireto(filhoDireto(tot, 'gCBS'), 'vCBS'));
+      if (vCBSTot != null && !bate(vCBSTot, somaVCBS)) registrar('total de CBS da nota difere da soma dos itens', xml);
+    });
+
+    return {
+      itensVerificados,
+      notasVerificadas: notasVerificadas.size,
+      divergencias: Array.from(divergencias.values()).sort((a, b) => b.itens - a.itens),
+    };
+  }, [xmlList, filterMes]);
+
+  // (2) Linha do tempo de cadastro por cProd: o mesmo código interno de
+  // produto mudou de NCM, CEST ou cClassTrib dentro do período? Compara o
+  // produto com ele mesmo — zero interpretação de descrição. CFOP e CST de
+  // ICMS ficam de fora de propósito: variam legitimamente por tipo de
+  // operação/destino e gerariam falso positivo.
+  const auditoriaCadastroProdutos = useMemo(() => {
+    type ValorVisto = { valor: string; primeira: string; ultima: string; itens: number };
+    type Mudanca = { cProd: string; xProd: string; campo: string; valores: ValorVisto[] };
+    const vazio = { totalProdutos: 0, mudancas: [] as Mudanca[] };
+    if (!mainCnpj) return vazio;
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    if (saidas.length === 0) return vazio;
+
+    const ordenadas = [...saidas].sort((a, b) => (a.data || '').localeCompare(b.data || ''));
+    const registro = new Map<string, { xProd: string; campos: Record<string, Map<string, ValorVisto>> }>();
+
+    ordenadas.forEach(xml => {
+      const doc = getParsedXml(xml);
+      if (!doc) return;
+      const dia = (xml.data || '').slice(0, 10);
+      Array.from(doc.getElementsByTagName('det')).forEach(det => {
+        const prod = det.getElementsByTagName('prod')[0];
+        if (!prod) return;
+        const filho = (el: Element, tag: string) => Array.from(el.children).find(e => e.tagName === tag)?.textContent?.trim() ?? '';
+        const cProd = filho(prod, 'cProd');
+        if (!cProd) return;
+        let r = registro.get(cProd);
+        if (!r) {
+          r = { xProd: '', campos: { NCM: new Map(), CEST: new Map(), cClassTrib: new Map() } };
+          registro.set(cProd, r);
+        }
+        r.xProd = filho(prod, 'xProd') || r.xProd;
+        const anotar = (campo: string, valor: string) => {
+          const v = r!.campos[campo].get(valor) ?? { valor, primeira: dia, ultima: dia, itens: 0 };
+          v.itens++;
+          v.ultima = dia;
+          r!.campos[campo].set(valor, v);
+        };
+        anotar('NCM', filho(prod, 'NCM') || '(vazio)');
+        anotar('CEST', filho(prod, 'CEST') || '(vazio)');
+        // cClassTrib só é anotado quando o item TEM o grupo IBSCBS — nota
+        // anterior à adoção do grupo não pode contar como "mudança de código".
+        const ibscbs = det.getElementsByTagName('imposto')[0]?.getElementsByTagName('IBSCBS')[0];
+        const cClassTrib = ibscbs ? (Array.from(ibscbs.children).find(e => e.tagName === 'cClassTrib')?.textContent?.trim() ?? '') : '';
+        if (ibscbs) anotar('cClassTrib', cClassTrib || '(vazio)');
+      });
+    });
+
+    const mudancas: Mudanca[] = [];
+    registro.forEach((r, cProd) => {
+      Object.entries(r.campos).forEach(([campo, m]) => {
+        if (m.size > 1) {
+          mudancas.push({
+            cProd, xProd: r.xProd, campo,
+            valores: Array.from(m.values()).sort((a, b) => a.primeira.localeCompare(b.primeira)),
+          });
+        }
+      });
+    });
+    mudancas.sort((a, b) => a.cProd.localeCompare(b.cProd, undefined, { numeric: true }) || a.campo.localeCompare(b.campo));
+    return { totalProdutos: registro.size, mudancas };
+  }, [xmlList, filterMes]);
+
+  // (3) Nota de homologação (tpAmb=2) misturada no lote de produção — não tem
+  // validade fiscal nenhuma e infla o faturamento auditado silenciosamente.
+  const notasHomologacao = useMemo(() => {
+    const vazio = { total: 0, amostra: [] as XmlData[] };
+    if (!mainCnpj) return vazio;
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    if (saidas.length === 0) return vazio;
+    const afetadas: XmlData[] = [];
+    saidas.forEach(xml => {
+      const doc = getParsedXml(xml);
+      if (!doc) return;
+      // tpAmb DENTRO de <ide> — o protNFe tem um tpAmb próprio que não é este
+      const ide = doc.getElementsByTagName('ide')[0];
+      const tpAmb = ide ? Array.from(ide.children).find(e => e.tagName === 'tpAmb')?.textContent?.trim() : '';
+      if (tpAmb === '2') afetadas.push(xml);
+    });
+    return { total: afetadas.length, amostra: afetadas.slice(0, 10) };
+  }, [xmlList, filterMes]);
+
   // Responsável Técnico (<infRespTec>): identifica quem desenvolve/mantém o
   // sistema de automação do cliente — mais confiável que <verProc> (que em
   // vários sistemas só traz um número de versão, tipo "26.03.04", sem nome
@@ -7630,6 +7809,86 @@ ${secoesPorCodigo}
                             )}
                           </div>
                         )}
+
+                        {/* Conferência aritmética: o valor destacado bate com base × alíquota? */}
+                        {auditoriaIbsCbsAritmetica.itensVerificados > 0 && (
+                          <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
+                              Conferência Aritmética do IBS/CBS
+                            </div>
+                            <div className="text-[11px] text-slate-400 dark:text-slate-500 mb-3">
+                              {auditoriaIbsCbsAritmetica.itensVerificados} item(ns) em {auditoriaIbsCbsAritmetica.notasVerificadas} nota(s): valor destacado × (base × alíquota efetiva), vIBS = UF + Município, e totais da nota × soma dos itens (tolerância de R$ 0,01 por arredondamento)
+                            </div>
+                            {auditoriaIbsCbsAritmetica.divergencias.length === 0 ? (
+                              <div className="rounded-lg px-4 py-3 text-xs bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                ✓ Toda a matemática confere — o sistema do cliente está calculando IBS e CBS de forma consistente.
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                {auditoriaIbsCbsAritmetica.divergencias.map((d, i) => (
+                                  <div key={i} className="rounded-lg px-4 py-2.5 text-xs border bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800 flex items-start gap-2">
+                                    <span className="shrink-0 font-bold">🔴</span>
+                                    <span>
+                                      {d.motivo}
+                                      <span className="block mt-0.5 opacity-75">{d.itens} ocorrência(s) em {d.notas.size} nota(s) · ex: nota {d.exemplo}</span>
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Linha do tempo de cadastro por cProd: mesmo código interno mudou de NCM/CEST/cClassTrib no período? */}
+                        {auditoriaCadastroProdutos.totalProdutos > 0 && (
+                          <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
+                              Mudanças de Cadastro no Período (por código de produto)
+                            </div>
+                            <div className="text-[11px] text-slate-400 dark:text-slate-500 mb-3">
+                              {auditoriaCadastroProdutos.totalProdutos} produto(s) distinto(s) acompanhados pelo código interno (cProd) — NCM, CEST e cClassTrib. CFOP e CST de ICMS ficam de fora porque variam legitimamente por tipo de operação.
+                            </div>
+                            {auditoriaCadastroProdutos.mudancas.length === 0 ? (
+                              <div className="rounded-lg px-4 py-3 text-xs bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                ✓ Nenhum produto mudou de NCM, CEST ou cClassTrib dentro do período — cadastro estável.
+                              </div>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <div className="rounded-lg px-4 py-2.5 text-xs border bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 mb-2">
+                                  🟡 {auditoriaCadastroProdutos.mudancas.length} mudança(s) de cadastro detectada(s) no meio do período — o mesmo código de produto saiu com classificações diferentes em datas diferentes. Vale confirmar se foi correção intencional ou mexida acidental no cadastro.
+                                </div>
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                      <th className="py-1.5 pr-3">cProd</th>
+                                      <th className="py-1.5 pr-3">Produto</th>
+                                      <th className="py-1.5 pr-3">Campo</th>
+                                      <th className="py-1.5">Valores no período (primeira → última aparição)</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {auditoriaCadastroProdutos.mudancas.map((m, i) => (
+                                      <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                        <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{m.cProd}</td>
+                                        <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{m.xProd}</td>
+                                        <td className="py-1.5 pr-3 font-semibold text-slate-700 dark:text-slate-300">{m.campo}</td>
+                                        <td className="py-1.5 text-slate-600 dark:text-slate-400">
+                                          {m.valores.map((v, j) => (
+                                            <span key={j}>
+                                              {j > 0 && <span className="text-slate-300 dark:text-slate-600"> → </span>}
+                                              <strong className="font-mono">{v.valor}</strong>
+                                              <span className="opacity-60"> ({v.primeira.split('-').reverse().join('/')} a {v.ultima.split('-').reverse().join('/')}, {v.itens} item(ns))</span>
+                                            </span>
+                                          ))}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
                     </div>
                   </div>
                 );
@@ -8036,6 +8295,18 @@ ${secoesPorCodigo}
                   </div>
                 );
               })()}
+
+              {/* Nota de homologação/teste (tpAmb=2) no meio da produção: não tem
+                  validade fiscal e infla o faturamento auditado sem ninguém notar. */}
+              {notasHomologacao.total > 0 && (
+                <div className="bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 rounded-xl p-4 text-sm text-rose-800 dark:text-rose-300">
+                  <span className="font-bold">⚠ {notasHomologacao.total} nota(s) de AMBIENTE DE HOMOLOGAÇÃO (teste) misturada(s) no movimento.</span>{' '}
+                  Nota emitida com tpAmb=2 não tem validade fiscal — não é venda de verdade e não deveria estar no lote. Confira a configuração do sistema emissor.
+                  <span className="block mt-1 text-xs opacity-80">
+                    {notasHomologacao.amostra.map(n => `${n.serie}/${n.numero}`).join(', ')}{notasHomologacao.total > notasHomologacao.amostra.length ? ` e mais ${notasHomologacao.total - notasHomologacao.amostra.length}…` : ''}
+                  </span>
+                </div>
+              )}
 
               {(() => {
                 // Portal buttons only show up automatically while the whole analysis found
