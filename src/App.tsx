@@ -6,6 +6,7 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
+import { CCLASSTRIB_TABELA, CCLASSTRIB_VERSAO } from './cclasstribTabela';
 import { createExtractorFromData } from 'node-unrar-js';
 // @ts-ignore
 // Usando CDN para garantir que o motor WASM seja carregado corretamente em qualquer ambiente
@@ -2145,6 +2146,135 @@ export default function App() {
       pctComGrupo: (notasComGrupo / saidas.length) * 100,
       amostraSemGrupo,
       amostraComGrupo,
+    };
+  }, [xmlList, filterMes]);
+
+  // Auditoria estrutural de cClassTrib: valida cada item que já traz o grupo
+  // <IBSCBS> contra a tabela oficial do Portal da NF-e (embutida em
+  // cclasstribTabela.ts). Só checagens determinísticas — código × código:
+  // formato, prefixo CST↔cClassTrib, existência na tabela, vigência na data
+  // de emissão, permissão pro modelo (NF-e/NFC-e) e redução de alíquota
+  // compatível. NUNCA interpreta nome de produto nem sugere qual código
+  // "deveria" ser — isso é decisão do contador, não do app.
+  const auditoriaClassTrib = useMemo(() => {
+    type Problema = {
+      nivel: 'erro' | 'alerta';
+      code: string;
+      motivo: string;
+      itens: number;
+      notas: Set<string>;
+      exemplo: string; // "série/número" da primeira nota afetada
+    };
+    type CodigoUsado = { code: string; nome: string; cst: string; redIBS: number; redCBS: number; itens: number; naTabela: boolean };
+    const vazio = { totalItens: 0, itensOk: 0, problemas: [] as Problema[], codigosUsados: [] as CodigoUsado[] };
+    if (!mainCnpj) return vazio;
+
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    if (saidas.length === 0) return vazio;
+
+    const problemas = new Map<string, Problema>();
+    const registrar = (nivel: 'erro' | 'alerta', code: string, motivo: string, xml: XmlData) => {
+      const key = `${code}|${motivo}`;
+      let p = problemas.get(key);
+      if (!p) {
+        p = { nivel, code, motivo, itens: 0, notas: new Set(), exemplo: `${xml.serie}/${xml.numero}` };
+        problemas.set(key, p);
+      }
+      p.itens++;
+      if (xml.chave) p.notas.add(xml.chave);
+    };
+
+    const usados = new Map<string, CodigoUsado>();
+    let totalItens = 0;
+    let itensComProblema = 0;
+
+    saidas.forEach(xml => {
+      const doc = getParsedXml(xml);
+      if (!doc) return;
+      const dataEmissao = (xml.data || '').slice(0, 10); // YYYY-MM-DD, comparável como string
+      Array.from(doc.getElementsByTagName('det')).forEach(det => {
+        const ibscbs = det.getElementsByTagName('imposto')[0]?.getElementsByTagName('IBSCBS')[0];
+        if (!ibscbs) return; // ausência do grupo já é coberta pela auditoria IBS/CBS acima
+        totalItens++;
+        // CST e cClassTrib são filhos DIRETOS de <IBSCBS> — getElementsByTagName
+        // desce em todos os níveis e pegaria CSTReg/cClassTribReg de gTribRegular.
+        const filhoDireto = (tag: string) =>
+          Array.from(ibscbs.children).find(el => el.tagName === tag)?.textContent?.trim() ?? '';
+        const cst = filhoDireto('CST');
+        const code = filhoDireto('cClassTrib');
+        let temProblema = false;
+        const erro = (c: string, m: string) => { registrar('erro', c, m, xml); temProblema = true; };
+        const alerta = (c: string, m: string) => { registrar('alerta', c, m, xml); temProblema = true; };
+
+        // 1. Formato
+        if (!/^\d{3}$/.test(cst)) erro(code || '—', `CST "${cst || '(vazio)'}" fora do formato oficial (3 dígitos)`);
+        if (!/^\d{6}$/.test(code)) erro(code || '—', `cClassTrib "${code || '(vazio)'}" fora do formato oficial (6 dígitos)`);
+
+        if (/^\d{6}$/.test(code)) {
+          // 2. Prefixo: os 3 primeiros dígitos do cClassTrib são o próprio CST
+          if (/^\d{3}$/.test(cst) && code.slice(0, 3) !== cst) {
+            erro(code, `prefixo do cClassTrib (${code.slice(0, 3)}) não bate com o CST declarado (${cst})`);
+          }
+
+          const entry = CCLASSTRIB_TABELA[code];
+          const u = usados.get(code) ?? {
+            code, nome: entry?.nome ?? '(não consta na tabela oficial)', cst: entry?.cst ?? cst,
+            redIBS: entry?.redIBS ?? 0, redCBS: entry?.redCBS ?? 0, itens: 0, naTabela: !!entry,
+          };
+          u.itens++;
+          usados.set(code, u);
+
+          if (!entry) {
+            // 3. Existência
+            erro(code, `cClassTrib não localizado na tabela oficial (${CCLASSTRIB_VERSAO})`);
+          } else {
+            // 4. Vigência na data de emissão
+            if (dataEmissao && (dataEmissao < entry.ini || (entry.fim && dataEmissao > entry.fim))) {
+              erro(code, `fora de vigência na data de emissão (válido de ${entry.ini}${entry.fim ? ` a ${entry.fim}` : ' em diante'})`);
+            }
+            // 5. Permissão pro modelo do documento
+            if (xml.modelo === '65' && !entry.nfce) erro(code, 'código não permitido em NFC-e (indNFCe = Não na tabela oficial)');
+            if (xml.modelo === '55' && !entry.nfe) erro(code, 'código não permitido em NF-e (indNFe = Não na tabela oficial)');
+
+            // 6. Redução de alíquota × tabela — só quando o grupo padrão gIBSCBS
+            // existe (regimes monofásicos usam outra estrutura e ficam de fora).
+            const gIbsCbs = ibscbs.getElementsByTagName('gIBSCBS')[0];
+            if (gIbsCbs) {
+              const pRed = (grupo: string): number | null => {
+                const g = gIbsCbs.getElementsByTagName(grupo)[0];
+                const v = g?.getElementsByTagName('gRed')[0]?.getElementsByTagName('pRedAliq')[0]?.textContent;
+                return v != null ? parseFloat(v) : null;
+              };
+              const conferir = (rotulo: string, xmlRed: number | null, tabRed: number) => {
+                if (tabRed > 0) {
+                  if (xmlRed === null) alerta(code, `tabela prevê redução de ${tabRed}% no ${rotulo}, mas o XML não traz o grupo de redução (gRed)`);
+                  else if (Math.abs(xmlRed - tabRed) > 0.001) erro(code, `redução de ${rotulo} divergente: XML informa ${xmlRed}%, tabela oficial prevê ${tabRed}%`);
+                } else if (xmlRed !== null && xmlRed > 0) {
+                  erro(code, `XML informa redução de ${xmlRed}% no ${rotulo}, mas a tabela oficial não prevê redução pra esse código`);
+                }
+              };
+              conferir('IBS (UF)', pRed('gIBSUF'), entry.redIBS);
+              conferir('IBS (Município)', pRed('gIBSMun'), entry.redIBS);
+              conferir('CBS', pRed('gCBS'), entry.redCBS);
+            }
+          }
+        }
+
+        if (temProblema) itensComProblema++;
+      });
+    });
+
+    const lista = Array.from(problemas.values())
+      .sort((a, b) => (a.nivel === b.nivel ? b.itens - a.itens : a.nivel === 'erro' ? -1 : 1));
+    return {
+      totalItens,
+      itensOk: totalItens - itensComProblema,
+      problemas: lista,
+      codigosUsados: Array.from(usados.values()).sort((a, b) => b.itens - a.itens),
     };
   }, [xmlList, filterMes]);
 
@@ -7217,6 +7347,77 @@ export default function App() {
                                 </tbody>
                               </table>
                             </div>
+                          </div>
+                        )}
+
+                        {/* Validação estrutural de cClassTrib × tabela oficial — só código × código,
+                            sem nenhuma interpretação de produto/NCM (essa fica pro contador). */}
+                        {auditoriaClassTrib.totalItens > 0 && (
+                          <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
+                              Validação cClassTrib × Tabela Oficial
+                            </div>
+                            <div className="text-[11px] text-slate-400 dark:text-slate-500 mb-3">
+                              {CCLASSTRIB_VERSAO} · {auditoriaClassTrib.totalItens} item(ns) com grupo IBS/CBS verificados · checagem estrutural (formato, prefixo CST, existência, vigência, modelo e redução) — não avalia se o código escolhido é o adequado pro produto
+                            </div>
+
+                            {auditoriaClassTrib.problemas.length === 0 ? (
+                              <div className="rounded-lg px-4 py-3 text-xs bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                ✓ Todos os {auditoriaClassTrib.totalItens} itens usam códigos existentes na tabela oficial, vigentes na data de emissão, permitidos pro modelo do documento e com redução de alíquota compatível.
+                              </div>
+                            ) : (
+                              <div className="space-y-2 mb-3">
+                                {auditoriaClassTrib.problemas.map((p, i) => (
+                                  <div
+                                    key={i}
+                                    className={cn(
+                                      'rounded-lg px-4 py-2.5 text-xs border flex items-start gap-2',
+                                      p.nivel === 'erro'
+                                        ? 'bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800'
+                                        : 'bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                                    )}
+                                  >
+                                    <span className="shrink-0 font-bold">{p.nivel === 'erro' ? '🔴' : '🟡'}</span>
+                                    <span>
+                                      <strong className="font-mono">{p.code}</strong> — {p.motivo}
+                                      <span className="block mt-0.5 opacity-75">
+                                        {p.itens} item(ns) em {p.notas.size} nota(s) · ex: nota {p.exemplo}
+                                      </span>
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {auditoriaClassTrib.codigosUsados.length > 0 && (
+                              <div className="mt-3">
+                                <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Códigos em uso neste período</div>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-xs">
+                                    <thead>
+                                      <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                        <th className="py-1.5 pr-3">cClassTrib</th>
+                                        <th className="py-1.5 pr-3">Descrição oficial</th>
+                                        <th className="py-1.5 pr-3 text-right">Red. IBS</th>
+                                        <th className="py-1.5 pr-3 text-right">Red. CBS</th>
+                                        <th className="py-1.5 text-right">Itens</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {auditoriaClassTrib.codigosUsados.map(c => (
+                                        <tr key={c.code} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                          <td className={cn('py-1.5 pr-3 font-mono', c.naTabela ? 'text-slate-700 dark:text-slate-300' : 'text-rose-600 dark:text-rose-400 font-bold')}>{c.code}</td>
+                                          <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{c.nome}</td>
+                                          <td className="py-1.5 pr-3 text-right text-slate-600 dark:text-slate-400">{c.naTabela ? `${c.redIBS}%` : '—'}</td>
+                                          <td className="py-1.5 pr-3 text-right text-slate-600 dark:text-slate-400">{c.naTabela ? `${c.redCBS}%` : '—'}</td>
+                                          <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300">{c.itens}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
                     </div>
