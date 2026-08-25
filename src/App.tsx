@@ -2165,8 +2165,8 @@ export default function App() {
       notas: Set<string>;
       exemplo: string; // "série/número" da primeira nota afetada
     };
-    type CodigoUsado = { code: string; nome: string; cst: string; redIBS: number; redCBS: number; itens: number; naTabela: boolean };
-    const vazio = { totalItens: 0, itensOk: 0, problemas: [] as Problema[], codigosUsados: [] as CodigoUsado[] };
+    type CodigoUsado = { code: string; nome: string; cst: string; redIBS: number; redCBS: number; itens: number; notas: Set<string>; valor: number; naTabela: boolean };
+    const vazio = { totalItens: 0, totalNotas: 0, itensOk: 0, problemas: [] as Problema[], codigosUsados: [] as CodigoUsado[] };
     if (!mainCnpj) return vazio;
 
     const saidas = xmlList.filter(xml =>
@@ -2189,6 +2189,7 @@ export default function App() {
     };
 
     const usados = new Map<string, CodigoUsado>();
+    const notasComItemVerificado = new Set<string>();
     let totalItens = 0;
     let itensComProblema = 0;
 
@@ -2196,10 +2197,15 @@ export default function App() {
       const doc = getParsedXml(xml);
       if (!doc) return;
       const dataEmissao = (xml.data || '').slice(0, 10); // YYYY-MM-DD, comparável como string
+      const idNota = xml.chave || `${xml.serie}/${xml.numero}`;
       Array.from(doc.getElementsByTagName('det')).forEach(det => {
         const ibscbs = det.getElementsByTagName('imposto')[0]?.getElementsByTagName('IBSCBS')[0];
         if (!ibscbs) return; // ausência do grupo já é coberta pela auditoria IBS/CBS acima
         totalItens++;
+        notasComItemVerificado.add(idNota);
+        // Valor do item pra dar ao analista a noção de quanto da venda cai em
+        // cada classificação (vProd bruto do item, sem rateio de desconto da nota).
+        const vProd = parseFloat(det.getElementsByTagName('prod')[0]?.getElementsByTagName('vProd')[0]?.textContent || '0') || 0;
         // CST e cClassTrib são filhos DIRETOS de <IBSCBS> — getElementsByTagName
         // desce em todos os níveis e pegaria CSTReg/cClassTribReg de gTribRegular.
         const filhoDireto = (tag: string) =>
@@ -2223,9 +2229,11 @@ export default function App() {
           const entry = CCLASSTRIB_TABELA[code];
           const u = usados.get(code) ?? {
             code, nome: entry?.nome ?? '(não consta na tabela oficial)', cst: entry?.cst ?? cst,
-            redIBS: entry?.redIBS ?? 0, redCBS: entry?.redCBS ?? 0, itens: 0, naTabela: !!entry,
+            redIBS: entry?.redIBS ?? 0, redCBS: entry?.redCBS ?? 0, itens: 0, notas: new Set<string>(), valor: 0, naTabela: !!entry,
           };
           u.itens++;
+          u.notas.add(idNota);
+          u.valor += vProd;
           usados.set(code, u);
 
           if (!entry) {
@@ -2272,6 +2280,7 @@ export default function App() {
       .sort((a, b) => (a.nivel === b.nivel ? b.itens - a.itens : a.nivel === 'erro' ? -1 : 1));
     return {
       totalItens,
+      totalNotas: notasComItemVerificado.size,
       itensOk: totalItens - itensComProblema,
       problemas: lista,
       codigosUsados: Array.from(usados.values()).sort((a, b) => b.itens - a.itens),
@@ -7358,7 +7367,7 @@ export default function App() {
                               Validação cClassTrib × Tabela Oficial
                             </div>
                             <div className="text-[11px] text-slate-400 dark:text-slate-500 mb-3">
-                              {CCLASSTRIB_VERSAO} · {auditoriaClassTrib.totalItens} item(ns) com grupo IBS/CBS verificados · checagem estrutural (formato, prefixo CST, existência, vigência, modelo e redução) — não avalia se o código escolhido é o adequado pro produto
+                              {CCLASSTRIB_VERSAO} · {auditoriaClassTrib.totalItens} item(ns) em {auditoriaClassTrib.totalNotas} nota(s) verificados · checagem estrutural (formato, prefixo CST, existência, vigência, modelo e redução) — não avalia se o código escolhido é o adequado pro produto
                             </div>
 
                             {auditoriaClassTrib.problemas.length === 0 ? (
@@ -7400,7 +7409,9 @@ export default function App() {
                                         <th className="py-1.5 pr-3">Descrição oficial</th>
                                         <th className="py-1.5 pr-3 text-right">Red. IBS</th>
                                         <th className="py-1.5 pr-3 text-right">Red. CBS</th>
-                                        <th className="py-1.5 text-right">Itens</th>
+                                        <th className="py-1.5 pr-3 text-right">Itens</th>
+                                        <th className="py-1.5 pr-3 text-right">Notas</th>
+                                        <th className="py-1.5 text-right">Valor (vProd)</th>
                                       </tr>
                                     </thead>
                                     <tbody>
@@ -7410,7 +7421,9 @@ export default function App() {
                                           <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{c.nome}</td>
                                           <td className="py-1.5 pr-3 text-right text-slate-600 dark:text-slate-400">{c.naTabela ? `${c.redIBS}%` : '—'}</td>
                                           <td className="py-1.5 pr-3 text-right text-slate-600 dark:text-slate-400">{c.naTabela ? `${c.redCBS}%` : '—'}</td>
-                                          <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300">{c.itens}</td>
+                                          <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300">{c.itens}</td>
+                                          <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300">{c.notas.size}</td>
+                                          <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300 tabular-nums">{formatarMoeda(c.valor)}</td>
                                         </tr>
                                       ))}
                                     </tbody>
