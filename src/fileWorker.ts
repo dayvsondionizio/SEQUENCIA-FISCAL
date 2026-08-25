@@ -247,6 +247,7 @@ function parseXML(xmlText: string, fileName: string): XmlData {
         dhRecbto: getTextContent('dhRecbto') || undefined,
         tpNF,
         cfopValores,
+        extract: extrairAuditoria(doc),
         fileName,
         rawXml: xmlText
       };
@@ -254,6 +255,103 @@ function parseXML(xmlText: string, fileName: string): XmlData {
   }
 
   return { tipo: 'outro', fileName };
+}
+
+// Cópia literal de extrairAuditoria de App.tsx — não mude uma sem mudar a
+// outra. Usa childNodes+nodeType (não .children) de propósito: o @xmldom/xmldom
+// daqui não implementa .children, e o DOM nativo do App.tsx aceita os dois.
+function extrairAuditoria(doc: any): any {
+  const filhos = (el: any): any[] => el ? Array.from(el.childNodes).filter((n: any) => n.nodeType === 1) : [];
+  const filho = (el: any, tag: string): any => filhos(el).find((e: any) => e.tagName === tag);
+  const txt = (el: any): string => el?.textContent?.trim() ?? '';
+  const num = (el: any): number | null => {
+    const t = txt(el);
+    if (!t) return null;
+    const n = parseFloat(t);
+    return isNaN(n) ? null : n;
+  };
+  const primeiro = (tag: string) => doc.getElementsByTagName(tag)[0];
+
+  const emit = primeiro('emit');
+  const ide = primeiro('ide');
+  const infRespTec = primeiro('infRespTec');
+
+  const parcela = (grupo: any, pTag: string, vTag: string) => {
+    if (!grupo) return undefined;
+    const gRed = filho(grupo, 'gRed');
+    return {
+      aliq: num(filho(grupo, pTag)),
+      temRed: !!gRed,
+      red: gRed ? num(filho(gRed, 'pRedAliq')) : null,
+      aliqEfet: gRed ? num(filho(gRed, 'pAliqEfet')) : null,
+      v: num(filho(grupo, vTag)),
+    };
+  };
+
+  const dets = Array.from(doc.getElementsByTagName('det')).map((det: any) => {
+    const prod = det.getElementsByTagName('prod')[0];
+    const imposto = det.getElementsByTagName('imposto')[0];
+    const icmsGroup = imposto?.getElementsByTagName('ICMS')[0];
+    const icmsNode = icmsGroup ? filhos(icmsGroup)[0] : undefined;
+    const ibscbs = imposto?.getElementsByTagName('IBSCBS')[0];
+    const g = ibscbs ? filho(ibscbs, 'gIBSCBS') : undefined;
+    return {
+      cProd: txt(filho(prod, 'cProd')),
+      xProd: txt(filho(prod, 'xProd')),
+      ncm: txt(filho(prod, 'NCM')),
+      cest: txt(filho(prod, 'CEST')),
+      vProd: num(filho(prod, 'vProd')) ?? 0,
+      icmsTemCst: !!icmsNode?.getElementsByTagName('CST')[0],
+      icmsTemCsosn: !!icmsNode?.getElementsByTagName('CSOSN')[0],
+      temIbsCbs: !!ibscbs,
+      ibsCst: txt(filho(ibscbs, 'CST')),
+      cClassTrib: txt(filho(ibscbs, 'cClassTrib')),
+      temGIbsCbs: !!g,
+      vBC: g ? num(filho(g, 'vBC')) : null,
+      vIBS: g ? num(filho(g, 'vIBS')) : null,
+      uf: g ? parcela(filho(g, 'gIBSUF'), 'pIBSUF', 'vIBSUF') : undefined,
+      mun: g ? parcela(filho(g, 'gIBSMun'), 'pIBSMun', 'vIBSMun') : undefined,
+      cbs: g ? parcela(filho(g, 'gCBS'), 'pCBS', 'vCBS') : undefined,
+    };
+  });
+
+  const detPags = Array.from(doc.getElementsByTagName('detPag')).map((detPag: any) => {
+    const card = detPag.getElementsByTagName('card')[0];
+    return {
+      tPag: txt(detPag.getElementsByTagName('tPag')[0]),
+      indPag: txt(detPag.getElementsByTagName('indPag')[0]),
+      vPag: num(detPag.getElementsByTagName('vPag')[0]) ?? 0,
+      xPag: txt(detPag.getElementsByTagName('xPag')[0]),
+      temCard: !!card,
+      tpIntegra: txt(card?.getElementsByTagName('tpIntegra')[0]),
+      cardCnpj: txt(card?.getElementsByTagName('CNPJ')[0]),
+      cardTBand: txt(card?.getElementsByTagName('tBand')[0]),
+      cardCAut: txt(card?.getElementsByTagName('cAut')[0]),
+    };
+  });
+
+  const tot = primeiro('IBSCBSTot');
+
+  return {
+    crt: txt(emit?.getElementsByTagName('CRT')[0]),
+    tpAmb: txt(filho(ide, 'tpAmb')),
+    indPres: txt(primeiro('indPres')),
+    finNFe: txt(primeiro('finNFe')),
+    vTroco: num(primeiro('vTroco')) ?? 0,
+    ufEmit: txt(primeiro('enderEmit')?.getElementsByTagName('UF')[0]),
+    ufDest: txt(primeiro('enderDest')?.getElementsByTagName('UF')[0]),
+    respTecCnpj: txt(infRespTec?.getElementsByTagName('CNPJ')[0]),
+    respTecContato: txt(infRespTec?.getElementsByTagName('xContato')[0]),
+    respTecEmail: txt(infRespTec?.getElementsByTagName('email')[0]),
+    respTecFone: txt(infRespTec?.getElementsByTagName('fone')[0]),
+    detPags,
+    dets,
+    tot: tot ? {
+      vBC: num(filho(tot, 'vBCIBSCBS')),
+      vIBS: num(filho(filho(tot, 'gIBS'), 'vIBS')),
+      vCBS: num(filho(filho(tot, 'gCBS'), 'vCBS')),
+    } : undefined,
+  };
 }
 
 function parseSped(text: string, fileName: string): SpedData | null {

@@ -130,6 +130,148 @@ interface XmlData {
   // chave em `chave`) que o evento de cancelamento de NFS-e referencia qual
   // nota está sendo cancelada.
   nfseNumeroDFSe?: string;
+  // Campos de auditoria extraídos UMA vez no momento do parse (mesmo padrão do
+  // cfopValores). Antes, os memos de auditoria re-parseavam cada XML na thread
+  // principal e guardavam todos os DOMs num cache — com 30k+ notas isso
+  // estourava a RAM (DOM ocupa 5-10× o tamanho do XML) e congelava o
+  // computador inteiro (reproduzido em 2026-08-25 com lote real de 33k).
+  extract?: NotaExtract;
+}
+
+// ——— Extração pra auditoria (ver comentário do campo `extract` acima) ———
+interface ParcelaIbsExtract {
+  aliq: number | null;     // alíquota cheia (pIBSUF/pIBSMun/pCBS)
+  temRed: boolean;         // grupo gRed presente
+  red: number | null;      // pRedAliq (só com gRed)
+  aliqEfet: number | null; // pAliqEfet (só com gRed)
+  v: number | null;        // valor destacado (vIBSUF/vIBSMun/vCBS)
+}
+interface DetExtract {
+  cProd: string; xProd: string; ncm: string; cest: string; vProd: number;
+  icmsTemCst: boolean; icmsTemCsosn: boolean;
+  temIbsCbs: boolean;      // grupo <IBSCBS> presente no item
+  ibsCst: string;          // CST filho direto de <IBSCBS>
+  cClassTrib: string;      // idem
+  temGIbsCbs: boolean;     // grupo padrão <gIBSCBS> presente (monofásico não tem)
+  vBC: number | null;
+  vIBS: number | null;     // filho direto de gIBSCBS
+  uf?: ParcelaIbsExtract; mun?: ParcelaIbsExtract; cbs?: ParcelaIbsExtract;
+}
+interface DetPagExtract {
+  tPag: string; indPag: string; vPag: number; xPag: string;
+  temCard: boolean; tpIntegra: string; cardCnpj: string; cardTBand: string; cardCAut: string;
+}
+interface NotaExtract {
+  crt: string;
+  tpAmb: string;           // o de <ide> — o protNFe tem um tpAmb próprio que não é este
+  indPres: string; finNFe: string; vTroco: number;
+  ufEmit: string; ufDest: string;
+  respTecCnpj: string; respTecContato: string; respTecEmail: string; respTecFone: string;
+  detPags: DetPagExtract[];
+  dets: DetExtract[];
+  tot?: { vBC: number | null; vIBS: number | null; vCBS: number | null }; // IBSCBSTot
+}
+
+// Extrai do DOM (já aberto pelo parseXML) tudo que os memos de auditoria leem.
+// IMPORTANTE: usa childNodes+nodeType (não .children) porque o fileWorker roda
+// esta mesma função com @xmldom/xmldom, que não implementa .children — e os
+// nomes de tag repetem entre contextos (CST, vBC, vIBS...), então navegação
+// por filho direto é obrigatória pra não pegar campo de outro grupo.
+// Espelhada em fileWorker.ts — não mude uma sem mudar a outra.
+function extrairAuditoria(doc: Document): NotaExtract {
+  const filhos = (el: any): any[] => el ? Array.from(el.childNodes).filter((n: any) => n.nodeType === 1) : [];
+  const filho = (el: any, tag: string): any => filhos(el).find((e: any) => e.tagName === tag);
+  const txt = (el: any): string => el?.textContent?.trim() ?? '';
+  const num = (el: any): number | null => {
+    const t = txt(el);
+    if (!t) return null;
+    const n = parseFloat(t);
+    return isNaN(n) ? null : n;
+  };
+  const primeiro = (tag: string) => (doc as any).getElementsByTagName(tag)[0];
+
+  const emit = primeiro('emit');
+  const ide = primeiro('ide');
+  const infRespTec = primeiro('infRespTec');
+
+  const parcela = (grupo: any, pTag: string, vTag: string): ParcelaIbsExtract | undefined => {
+    if (!grupo) return undefined;
+    const gRed = filho(grupo, 'gRed');
+    return {
+      aliq: num(filho(grupo, pTag)),
+      temRed: !!gRed,
+      red: gRed ? num(filho(gRed, 'pRedAliq')) : null,
+      aliqEfet: gRed ? num(filho(gRed, 'pAliqEfet')) : null,
+      v: num(filho(grupo, vTag)),
+    };
+  };
+
+  const dets: DetExtract[] = Array.from((doc as any).getElementsByTagName('det')).map((det: any) => {
+    const prod = det.getElementsByTagName('prod')[0];
+    const imposto = det.getElementsByTagName('imposto')[0];
+    // ICMS: o primeiro elemento-filho do grupo <ICMS> (ICMS00/ICMS60/ICMSSN102...)
+    // é quem carrega CST ou CSOSN — mesma navegação da auditoriaRegime original.
+    const icmsGroup = imposto?.getElementsByTagName('ICMS')[0];
+    const icmsNode = icmsGroup ? filhos(icmsGroup)[0] : undefined;
+    const ibscbs = imposto?.getElementsByTagName('IBSCBS')[0];
+    const g = ibscbs ? filho(ibscbs, 'gIBSCBS') : undefined;
+    return {
+      cProd: txt(filho(prod, 'cProd')),
+      xProd: txt(filho(prod, 'xProd')),
+      ncm: txt(filho(prod, 'NCM')),
+      cest: txt(filho(prod, 'CEST')),
+      vProd: num(filho(prod, 'vProd')) ?? 0,
+      icmsTemCst: !!icmsNode?.getElementsByTagName('CST')[0],
+      icmsTemCsosn: !!icmsNode?.getElementsByTagName('CSOSN')[0],
+      temIbsCbs: !!ibscbs,
+      ibsCst: txt(filho(ibscbs, 'CST')),
+      cClassTrib: txt(filho(ibscbs, 'cClassTrib')),
+      temGIbsCbs: !!g,
+      vBC: g ? num(filho(g, 'vBC')) : null,
+      vIBS: g ? num(filho(g, 'vIBS')) : null,
+      uf: g ? parcela(filho(g, 'gIBSUF'), 'pIBSUF', 'vIBSUF') : undefined,
+      mun: g ? parcela(filho(g, 'gIBSMun'), 'pIBSMun', 'vIBSMun') : undefined,
+      cbs: g ? parcela(filho(g, 'gCBS'), 'pCBS', 'vCBS') : undefined,
+    };
+  });
+
+  const detPags: DetPagExtract[] = Array.from((doc as any).getElementsByTagName('detPag')).map((detPag: any) => {
+    const card = detPag.getElementsByTagName('card')[0];
+    return {
+      tPag: txt(detPag.getElementsByTagName('tPag')[0]),
+      indPag: txt(detPag.getElementsByTagName('indPag')[0]),
+      vPag: num(detPag.getElementsByTagName('vPag')[0]) ?? 0,
+      xPag: txt(detPag.getElementsByTagName('xPag')[0]),
+      temCard: !!card,
+      tpIntegra: txt(card?.getElementsByTagName('tpIntegra')[0]),
+      cardCnpj: txt(card?.getElementsByTagName('CNPJ')[0]),
+      cardTBand: txt(card?.getElementsByTagName('tBand')[0]),
+      cardCAut: txt(card?.getElementsByTagName('cAut')[0]),
+    };
+  });
+
+  const tot = primeiro('IBSCBSTot');
+
+  return {
+    crt: txt(emit?.getElementsByTagName('CRT')[0]),
+    tpAmb: txt(filho(ide, 'tpAmb')),
+    indPres: txt(primeiro('indPres')),
+    finNFe: txt(primeiro('finNFe')),
+    vTroco: num(primeiro('vTroco')) ?? 0,
+    ufEmit: txt(primeiro('enderEmit')?.getElementsByTagName('UF')[0]),
+    ufDest: txt(primeiro('enderDest')?.getElementsByTagName('UF')[0]),
+    respTecCnpj: txt(infRespTec?.getElementsByTagName('CNPJ')[0]),
+    respTecContato: txt(infRespTec?.getElementsByTagName('xContato')[0]),
+    respTecEmail: txt(infRespTec?.getElementsByTagName('email')[0]),
+    respTecFone: txt(infRespTec?.getElementsByTagName('fone')[0]),
+    detPags,
+    dets,
+    tot: tot ? {
+      vBC: num(filho(tot, 'vBCIBSCBS')),
+      vIBS: num(filho(filho(tot, 'gIBS'), 'vIBS')),
+      vCBS: num(filho(filho(tot, 'gCBS'), 'vCBS')),
+    } : undefined,
+  };
 }
 
 interface SourceMetadata {
@@ -472,12 +614,13 @@ function parseXML(xmlText: string, fileName: string): XmlData {
         dhRecbto: getTextContent('dhRecbto') || undefined,
         tpNF,
         cfopValores,
+        extract: extrairAuditoria(doc),
         fileName,
         rawXml: xmlText
       };
     }
   }
-  
+
   return { tipo: 'outro', fileName };
 }
 
@@ -1649,27 +1792,21 @@ export default function App() {
     );
   }, [xmlList]);
 
-  const parsedXmlCache = useMemo(() => {
-    const cache = new Map<string, Document>();
-    xmlList.forEach(xml => {
-      // Eventos (Manifestação do Destinatário — Ciência/Confirmação/Desconhecimento
-      // da Operação, e também o próprio cancelamento) referenciam o chNFe da NOTA
-      // ORIGINAL, não uma chave própria — se entrassem aqui, sobrescreveriam no
-      // cache o documento certo da nota (que tem <emit>/<CRT>/etc.) pelo do
-      // evento (que não tem nada disso), corrompendo toda auditoria que depende
-      // desse cache pra essa chave. Só nota fiscal de fato deve ser cacheada aqui.
-      if (xml.tipo !== 'nfe' || !xml.rawXml || !xml.chave) return;
-      cache.set(xml.chave, parser.parseFromString(xml.rawXml, 'text/xml'));
-    });
-    return cache;
-  }, [xmlList]);
-
-  // Notas sem chave são raríssimas (só aconteceria em XML malformado) — nesse
-  // caso raro faz o parse na hora em vez de quebrar, sem custo perceptível.
-  const getParsedXml = (xml: XmlData): Document | null => {
-    if (xml.chave && parsedXmlCache.has(xml.chave)) return parsedXmlCache.get(xml.chave)!;
-    if (!xml.rawXml) return null;
-    return parser.parseFromString(xml.rawXml, 'text/xml');
+  // ATENÇÃO — aqui existia o parsedXmlCache: um useMemo que re-parseava TODOS
+  // os XMLs na thread principal e guardava os 33k+ DOMs num Map. Com lotes
+  // grandes isso estourava a RAM (DOM ocupa 5-10× o tamanho do XML) e congelava
+  // o computador inteiro (reproduzido em 2026-08-25 com lote real de 33.261
+  // notas — travou o notebook do usuário). NÃO reintroduzir cache de DOM em
+  // massa. Os memos de auditoria agora leem xml.extract (campos extraídos no
+  // momento do parse, dentro do worker — mesmo padrão do cfopValores).
+  const getNotaExtract = (xml: XmlData): NotaExtract | null => {
+    if (xml.extract) return xml.extract;
+    if (!xml.rawXml || xml.tipo !== 'nfe') return null;
+    // Fallback raro (nota que chegou por um caminho sem extração): parseia UMA
+    // vez, guarda só o extrato pequeno no próprio objeto e descarta o DOM.
+    const ex = extrairAuditoria(parser.parseFromString(xml.rawXml, 'text/xml'));
+    xml.extract = ex;
+    return ex;
   };
 
   const faturamentoTotal = useMemo(() => {
@@ -1979,8 +2116,7 @@ export default function App() {
     // se nenhuma do período tiver CRT.
     const buscarCrt = (notas: XmlData[]) => {
       for (const nota of notas) {
-        const doc = getParsedXml(nota);
-        const valor = doc?.getElementsByTagName('emit')[0]?.getElementsByTagName('CRT')[0]?.textContent?.trim();
+        const valor = getNotaExtract(nota)?.crt;
         if (valor) return valor;
       }
       return '';
@@ -2035,8 +2171,8 @@ export default function App() {
     const semCrt: XmlData[] = [];
 
     saidas.forEach(xml => {
-      const doc = getParsedXml(xml)!;
-      const crt = doc.getElementsByTagName('emit')[0]?.getElementsByTagName('CRT')[0]?.textContent?.trim() || '';
+      const ex = getNotaExtract(xml);
+      const crt = ex?.crt || '';
       if (!crt) { semCrt.push(xml); return; }
 
       if (!porCrt[crt]) porCrt[crt] = { qtd: 0, primeira: xml.data || '', ultima: xml.data || '' };
@@ -2054,14 +2190,8 @@ export default function App() {
       // Simples nesse caso, mas a empresa continua Simples Nacional pros
       // demais tributos. Por isso CRT 2 entra junto com CRT 3 na expectativa
       // de CST, não junto com 1/4 na expectativa de CSOSN.
-      const dets = Array.from(doc.getElementsByTagName('det'));
-      let temCsosn = false, temCst = false;
-      dets.forEach(det => {
-        const icmsGroup = det.getElementsByTagName('imposto')[0]?.getElementsByTagName('ICMS')[0];
-        const icmsNode = icmsGroup ? Array.from(icmsGroup.childNodes).find(c => c.nodeType === 1) as Element | undefined : undefined;
-        if (icmsNode?.getElementsByTagName('CSOSN')[0]) temCsosn = true;
-        if (icmsNode?.getElementsByTagName('CST')[0]) temCst = true;
-      });
+      const temCsosn = ex!.dets.some(d => d.icmsTemCsosn);
+      const temCst = ex!.dets.some(d => d.icmsTemCst);
       const esperaCsosn = crt === '1' || crt === '4';
       const esperaCst = crt === '2' || crt === '3';
       if (esperaCsosn && temCst && !temCsosn) {
@@ -2129,10 +2259,7 @@ export default function App() {
     const saidasOrdenadas = [...saidas].sort((a, b) => (a.data || '').localeCompare(b.data || ''));
 
     saidasOrdenadas.forEach(xml => {
-      const doc = getParsedXml(xml)!;
-      const temGrupo = Array.from(doc.getElementsByTagName('det')).some(det =>
-        !!det.getElementsByTagName('imposto')[0]?.getElementsByTagName('IBSCBS')[0]
-      );
+      const temGrupo = getNotaExtract(xml)?.dets.some(d => d.temIbsCbs) ?? false;
       const dia = xml.data ? xml.data.slice(0, 10) : '';
       if (temGrupo) {
         notasComGrupo++;
@@ -2204,41 +2331,31 @@ export default function App() {
     let itensComProblema = 0;
 
     saidas.forEach(xml => {
-      const doc = getParsedXml(xml);
-      if (!doc) return;
+      const ex = getNotaExtract(xml);
+      if (!ex) return;
       const dataEmissao = (xml.data || '').slice(0, 10); // YYYY-MM-DD, comparável como string
       const idNota = xml.chave || `${xml.serie}/${xml.numero}`;
-      Array.from(doc.getElementsByTagName('det')).forEach(det => {
-        const ibscbs = det.getElementsByTagName('imposto')[0]?.getElementsByTagName('IBSCBS')[0];
-        if (!ibscbs) return; // ausência do grupo já é coberta pela auditoria IBS/CBS acima
+      ex.dets.forEach(det => {
+        if (!det.temIbsCbs) return; // ausência do grupo já é coberta pela auditoria IBS/CBS acima
         totalItens++;
         notasComItemVerificado.add(idNota);
         // Valor do item pra dar ao analista a noção de quanto da venda cai em
         // cada classificação (vProd bruto do item, sem rateio de desconto da nota).
-        const vProd = parseFloat(det.getElementsByTagName('prod')[0]?.getElementsByTagName('vProd')[0]?.textContent || '0') || 0;
+        const vProd = det.vProd;
         // IBS/CBS já calculados pelo sistema do cliente e destacados no próprio
-        // item (vIBS soma UF+Município; vCBS dentro de gCBS) — nenhum cálculo
-        // nosso, só leitura do que o XML declara. Monofásico (gIBSCBSMono) tem
-        // outra estrutura e fica de fora dessa soma.
-        const gIbsCbsDoItem = ibscbs.getElementsByTagName('gIBSCBS')[0];
-        const lerValor = (tag: string, escopo: Element | undefined) => {
-          const el = escopo ? Array.from(escopo.children).find(e => e.tagName === tag) : undefined;
-          return parseFloat(el?.textContent || '0') || 0;
-        };
-        const vIBSItem = lerValor('vIBS', gIbsCbsDoItem);
-        const vCBSItem = lerValor('vCBS', gIbsCbsDoItem?.getElementsByTagName('gCBS')[0]);
+        // item — nenhum cálculo nosso, só leitura do que o XML declara.
+        // Monofásico (sem gIBSCBS) fica de fora dessa soma.
+        const vIBSItem = det.vIBS ?? 0;
+        const vCBSItem = det.cbs?.v ?? 0;
         // Nome e NCM do produto COMO O CLIENTE CADASTROU — vão pro laudo pra o
         // analista enxergar qual produto caiu em qual classificação; o app não
         // julga se a classificação é adequada, só lista.
-        const prodEl = det.getElementsByTagName('prod')[0];
-        const xProdItem = prodEl?.getElementsByTagName('xProd')[0]?.textContent?.trim() || '(sem descrição)';
-        const ncmItem = prodEl?.getElementsByTagName('NCM')[0]?.textContent?.trim() || '';
-        // CST e cClassTrib são filhos DIRETOS de <IBSCBS> — getElementsByTagName
-        // desce em todos os níveis e pegaria CSTReg/cClassTribReg de gTribRegular.
-        const filhoDireto = (tag: string) =>
-          Array.from(ibscbs.children).find(el => el.tagName === tag)?.textContent?.trim() ?? '';
-        const cst = filhoDireto('CST');
-        const code = filhoDireto('cClassTrib');
+        const xProdItem = det.xProd || '(sem descrição)';
+        const ncmItem = det.ncm;
+        // CST e cClassTrib já vieram extraídos como filhos DIRETOS de <IBSCBS>
+        // (nunca o CSTReg/cClassTribReg de gTribRegular).
+        const cst = det.ibsCst;
+        const code = det.cClassTrib;
         let temProblema = false;
         const erro = (c: string, m: string) => { registrar('erro', c, m, xml); temProblema = true; };
         const alerta = (c: string, m: string) => { registrar('alerta', c, m, xml); temProblema = true; };
@@ -2286,13 +2403,7 @@ export default function App() {
 
             // 6. Redução de alíquota × tabela — só quando o grupo padrão gIBSCBS
             // existe (regimes monofásicos usam outra estrutura e ficam de fora).
-            const gIbsCbs = ibscbs.getElementsByTagName('gIBSCBS')[0];
-            if (gIbsCbs) {
-              const pRed = (grupo: string): number | null => {
-                const g = gIbsCbs.getElementsByTagName(grupo)[0];
-                const v = g?.getElementsByTagName('gRed')[0]?.getElementsByTagName('pRedAliq')[0]?.textContent;
-                return v != null ? parseFloat(v) : null;
-              };
+            if (det.temGIbsCbs) {
               const conferir = (rotulo: string, xmlRed: number | null, tabRed: number) => {
                 if (tabRed > 0) {
                   if (xmlRed === null) alerta(code, `tabela prevê redução de ${tabRed}% no ${rotulo}, mas o XML não traz o grupo de redução (gRed)`);
@@ -2301,9 +2412,9 @@ export default function App() {
                   erro(code, `XML informa redução de ${xmlRed}% no ${rotulo}, mas a tabela oficial não prevê redução pra esse código`);
                 }
               };
-              conferir('IBS (UF)', pRed('gIBSUF'), entry.redIBS);
-              conferir('IBS (Município)', pRed('gIBSMun'), entry.redIBS);
-              conferir('CBS', pRed('gCBS'), entry.redCBS);
+              conferir('IBS (UF)', det.uf?.red ?? null, entry.redIBS);
+              conferir('IBS (Município)', det.mun?.red ?? null, entry.redIBS);
+              conferir('CBS', det.cbs?.red ?? null, entry.redCBS);
             }
           }
         }
@@ -2471,14 +2582,6 @@ ${secoesPorCodigo}
       d.itens++;
       if (xml.chave) d.notas.add(xml.chave);
     };
-    const filhoDireto = (el: Element | undefined, tag: string): Element | undefined =>
-      el ? Array.from(el.children).find(e => e.tagName === tag) : undefined;
-    const num = (el: Element | undefined): number | null => {
-      const t = el?.textContent?.trim();
-      if (!t) return null;
-      const n = parseFloat(t);
-      return isNaN(n) ? null : n;
-    };
     // ±R$ 0,011 de tolerância — arredondamento a 2 casas pode divergir 1 centavo
     const bate = (a: number, b: number) => Math.abs(a - b) <= 0.011;
 
@@ -2486,47 +2589,37 @@ ${secoesPorCodigo}
     const notasVerificadas = new Set<string>();
 
     saidas.forEach(xml => {
-      const doc = getParsedXml(xml);
-      if (!doc) return;
+      const ex = getNotaExtract(xml);
+      if (!ex) return;
       let somaVBC = 0, somaVIBS = 0, somaVCBS = 0, temItens = false;
-      Array.from(doc.getElementsByTagName('det')).forEach(det => {
-        const ibscbs = det.getElementsByTagName('imposto')[0]?.getElementsByTagName('IBSCBS')[0];
-        const g = ibscbs ? filhoDireto(ibscbs, 'gIBSCBS') : undefined;
-        if (!g) return; // sem grupo padrão (ausente ou monofásico) — fora desta conferência
+      ex.dets.forEach(det => {
+        if (!det.temGIbsCbs) return; // sem grupo padrão (ausente ou monofásico) — fora desta conferência
         itensVerificados++;
         temItens = true;
         if (xml.chave) notasVerificadas.add(xml.chave);
-        const vBC = num(filhoDireto(g, 'vBC')) ?? 0;
+        const vBC = det.vBC ?? 0;
         somaVBC += vBC;
         // Alíquota efetiva: com gRed presente vale pAliqEfet; sem gRed, a cheia.
-        const conferirParcela = (grupoTag: string, pTag: string, vTag: string, rotulo: string): number => {
-          const grupo = filhoDireto(g, grupoTag);
-          if (!grupo) return 0;
-          const gRed = filhoDireto(grupo, 'gRed');
-          const aliq = gRed ? num(filhoDireto(gRed, 'pAliqEfet')) : num(filhoDireto(grupo, pTag));
-          const v = num(filhoDireto(grupo, vTag));
-          if (aliq != null && v != null && !bate(v, vBC * aliq / 100)) {
+        const conferirParcela = (p: ParcelaIbsExtract | undefined, rotulo: string): number => {
+          if (!p) return 0;
+          const aliq = p.temRed ? p.aliqEfet : p.aliq;
+          if (aliq != null && p.v != null && !bate(p.v, vBC * aliq / 100)) {
             registrar(`${rotulo}: valor destacado difere de base × alíquota efetiva`, xml);
           }
-          return v ?? 0;
+          return p.v ?? 0;
         };
-        const vUF = conferirParcela('gIBSUF', 'pIBSUF', 'vIBSUF', 'IBS (UF)');
-        const vMun = conferirParcela('gIBSMun', 'pIBSMun', 'vIBSMun', 'IBS (Município)');
-        const vIBS = num(filhoDireto(g, 'vIBS'));
-        if (vIBS != null && !bate(vIBS, vUF + vMun)) registrar('vIBS do item difere de IBS UF + IBS Município', xml);
-        somaVIBS += vIBS ?? 0;
-        somaVCBS += conferirParcela('gCBS', 'pCBS', 'vCBS', 'CBS');
+        const vUF = conferirParcela(det.uf, 'IBS (UF)');
+        const vMun = conferirParcela(det.mun, 'IBS (Município)');
+        if (det.vIBS != null && !bate(det.vIBS, vUF + vMun)) registrar('vIBS do item difere de IBS UF + IBS Município', xml);
+        somaVIBS += det.vIBS ?? 0;
+        somaVCBS += conferirParcela(det.cbs, 'CBS');
       });
       if (!temItens) return;
       // Totais da nota — a NT define IBSCBSTot como somatório dos campos dos itens
-      const tot = doc.getElementsByTagName('IBSCBSTot')[0];
-      if (!tot) { registrar('nota com itens IBS/CBS mas sem o grupo de totais (IBSCBSTot)', xml); return; }
-      const vBCTot = num(filhoDireto(tot, 'vBCIBSCBS'));
-      if (vBCTot != null && !bate(vBCTot, somaVBC)) registrar('total da base (vBCIBSCBS) difere da soma das bases dos itens', xml);
-      const vIBSTot = num(filhoDireto(filhoDireto(tot, 'gIBS'), 'vIBS'));
-      if (vIBSTot != null && !bate(vIBSTot, somaVIBS)) registrar('total de IBS da nota difere da soma dos itens', xml);
-      const vCBSTot = num(filhoDireto(filhoDireto(tot, 'gCBS'), 'vCBS'));
-      if (vCBSTot != null && !bate(vCBSTot, somaVCBS)) registrar('total de CBS da nota difere da soma dos itens', xml);
+      if (!ex.tot) { registrar('nota com itens IBS/CBS mas sem o grupo de totais (IBSCBSTot)', xml); return; }
+      if (ex.tot.vBC != null && !bate(ex.tot.vBC, somaVBC)) registrar('total da base (vBCIBSCBS) difere da soma das bases dos itens', xml);
+      if (ex.tot.vIBS != null && !bate(ex.tot.vIBS, somaVIBS)) registrar('total de IBS da nota difere da soma dos itens', xml);
+      if (ex.tot.vCBS != null && !bate(ex.tot.vCBS, somaVCBS)) registrar('total de CBS da nota difere da soma dos itens', xml);
     });
 
     return {
@@ -2557,34 +2650,29 @@ ${secoesPorCodigo}
     const registro = new Map<string, { xProd: string; campos: Record<string, Map<string, ValorVisto>> }>();
 
     ordenadas.forEach(xml => {
-      const doc = getParsedXml(xml);
-      if (!doc) return;
+      const ex = getNotaExtract(xml);
+      if (!ex) return;
       const dia = (xml.data || '').slice(0, 10);
-      Array.from(doc.getElementsByTagName('det')).forEach(det => {
-        const prod = det.getElementsByTagName('prod')[0];
-        if (!prod) return;
-        const filho = (el: Element, tag: string) => Array.from(el.children).find(e => e.tagName === tag)?.textContent?.trim() ?? '';
-        const cProd = filho(prod, 'cProd');
+      ex.dets.forEach(det => {
+        const cProd = det.cProd;
         if (!cProd) return;
         let r = registro.get(cProd);
         if (!r) {
           r = { xProd: '', campos: { NCM: new Map(), CEST: new Map(), cClassTrib: new Map() } };
           registro.set(cProd, r);
         }
-        r.xProd = filho(prod, 'xProd') || r.xProd;
+        r.xProd = det.xProd || r.xProd;
         const anotar = (campo: string, valor: string) => {
           const v = r!.campos[campo].get(valor) ?? { valor, primeira: dia, ultima: dia, itens: 0 };
           v.itens++;
           v.ultima = dia;
           r!.campos[campo].set(valor, v);
         };
-        anotar('NCM', filho(prod, 'NCM') || '(vazio)');
-        anotar('CEST', filho(prod, 'CEST') || '(vazio)');
+        anotar('NCM', det.ncm || '(vazio)');
+        anotar('CEST', det.cest || '(vazio)');
         // cClassTrib só é anotado quando o item TEM o grupo IBSCBS — nota
         // anterior à adoção do grupo não pode contar como "mudança de código".
-        const ibscbs = det.getElementsByTagName('imposto')[0]?.getElementsByTagName('IBSCBS')[0];
-        const cClassTrib = ibscbs ? (Array.from(ibscbs.children).find(e => e.tagName === 'cClassTrib')?.textContent?.trim() ?? '') : '';
-        if (ibscbs) anotar('cClassTrib', cClassTrib || '(vazio)');
+        if (det.temIbsCbs) anotar('cClassTrib', det.cClassTrib || '(vazio)');
       });
     });
 
@@ -2616,12 +2704,8 @@ ${secoesPorCodigo}
     if (saidas.length === 0) return vazio;
     const afetadas: XmlData[] = [];
     saidas.forEach(xml => {
-      const doc = getParsedXml(xml);
-      if (!doc) return;
       // tpAmb DENTRO de <ide> — o protNFe tem um tpAmb próprio que não é este
-      const ide = doc.getElementsByTagName('ide')[0];
-      const tpAmb = ide ? Array.from(ide.children).find(e => e.tagName === 'tpAmb')?.textContent?.trim() : '';
-      if (tpAmb === '2') afetadas.push(xml);
+      if (getNotaExtract(xml)?.tpAmb === '2') afetadas.push(xml);
     });
     return { total: afetadas.length, amostra: afetadas.slice(0, 10) };
   }, [xmlList, filterMes]);
@@ -2642,17 +2726,9 @@ ${secoesPorCodigo}
     // preenchido (nem toda nota traz <infRespTec>, varia por sistema).
     const buscarInfRespTec = (notas: XmlData[]) => {
       for (const nota of notas) {
-        const doc = getParsedXml(nota);
-        const infRespTec = doc?.getElementsByTagName('infRespTec')[0];
-        const cnpj = infRespTec?.getElementsByTagName('CNPJ')[0]?.textContent?.trim() || '';
-        const email = infRespTec?.getElementsByTagName('email')[0]?.textContent?.trim() || '';
-        if (cnpj || email) {
-          return {
-            cnpj,
-            contato: infRespTec?.getElementsByTagName('xContato')[0]?.textContent?.trim() || '',
-            email,
-            fone: infRespTec?.getElementsByTagName('fone')[0]?.textContent?.trim() || '',
-          };
+        const ex = getNotaExtract(nota);
+        if (ex && (ex.respTecCnpj || ex.respTecEmail)) {
+          return { cnpj: ex.respTecCnpj, contato: ex.respTecContato, email: ex.respTecEmail, fone: ex.respTecFone };
         }
       }
       return null;
@@ -2770,17 +2846,18 @@ ${secoesPorCodigo}
     let cartaoIndPagSuspeito = 0;
 
     saidas.forEach(xml => {
-      const doc = getParsedXml(xml)!;
-      if (doc.getElementsByTagName('detPag').length > 1) notasComPagamentoDividido++;
+      const ex = getNotaExtract(xml);
+      if (!ex) return;
+      if (ex.detPags.length > 1) notasComPagamentoDividido++;
       // Troco (vTroco) é o valor devolvido ao cliente no pagamento em dinheiro —
       // entra no vPag do detPag de Dinheiro mas NÃO faz parte do valor da venda
       // (vNF), senão a soma do breakdown por forma de pagamento ultrapassa o
       // Total de Saídas Auditadas sempre que há troco.
-      let vTrocoRestante = parseFloat(doc.getElementsByTagName('vTroco')[0]?.textContent?.trim() || '0') || 0;
-      const indPres = doc.getElementsByTagName('indPres')[0]?.textContent?.trim() || '';
+      let vTrocoRestante = ex.vTroco;
+      const indPres = ex.indPres;
       const isPresencial = indPres === '' || indPres === '1' || indPres === '5';
-      const ufEmit = doc.getElementsByTagName('enderEmit')[0]?.getElementsByTagName('UF')[0]?.textContent?.trim() || '';
-      const ufDest = doc.getElementsByTagName('enderDest')[0]?.getElementsByTagName('UF')[0]?.textContent?.trim() || '';
+      const ufEmit = ex.ufEmit;
+      const ufDest = ex.ufDest;
       const isInterestadual = !!ufEmit && !!ufDest && ufEmit !== ufDest;
       // finNFe=1 é venda normal — o código 90 (Sem Pagamento) é reservado pra
       // Ajuste/Devolução (finNFe 2/3/4). Uma venda normal com valor real
@@ -2793,29 +2870,28 @@ ${secoesPorCodigo}
       // Complementar/Devolução usam 2/3/4) e legitimamente não têm pagamento.
       // O CFOP predominante da nota (por valor, via cfopValores) decide se ela
       // é venda de verdade antes de acusar "Sem Pagamento" como inconformidade.
-      const finNFe = doc.getElementsByTagName('finNFe')[0]?.textContent?.trim() || '';
-      const vNF = parseFloat(doc.getElementsByTagName('vNF')[0]?.textContent?.trim() || '0') || 0;
+      const finNFe = ex.finNFe;
+      const vNF = parseFloat(xml.valor || '0') || 0;
       const cfopMap: Record<string, number> = xml.cfopValores || {};
       const cfopPredominante = Object.entries(cfopMap).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
       const isSaidaVenda = !cfopPredominante || isCfopVenda(cfopPredominante);
 
-      const detPags = Array.from(doc.getElementsByTagName('detPag'));
-      detPags.forEach(detPag => {
-        const tPag = detPag.getElementsByTagName('tPag')[0]?.textContent?.trim() || '';
-        const indPag = detPag.getElementsByTagName('indPag')[0]?.textContent?.trim() || '0';
+      ex.detPags.forEach(detPag => {
+        const tPag = detPag.tPag;
+        const indPag = detPag.indPag || '0';
         const isAVista = indPag !== '1';
         const isCartao = tPag === '03' || tPag === '04';
-        const card = detPag.getElementsByTagName('card')[0];
-        const tpIntegra = card?.getElementsByTagName('tpIntegra')[0]?.textContent?.trim() || '';
-        const cardCnpj = card?.getElementsByTagName('CNPJ')[0]?.textContent?.trim() || '';
-        const cardTBand = card?.getElementsByTagName('tBand')[0]?.textContent?.trim() || '';
-        const cardCAut = card?.getElementsByTagName('cAut')[0]?.textContent?.trim() || '';
+        const card = detPag.temCard;
+        const tpIntegra = detPag.tpIntegra;
+        const cardCnpj = detPag.cardCnpj;
+        const cardTBand = detPag.cardTBand;
+        const cardCAut = detPag.cardCAut;
         // xPag é o campo de descrição livre que o próprio layout da NF-e prevê
         // pra quando o código de tPag não é um dos catalogados aqui — mostra
         // isso em vez de só o número cru quando não reconhecemos o código.
-        const xPag = detPag.getElementsByTagName('xPag')[0]?.textContent?.trim() || '';
+        const xPag = detPag.xPag;
         const tPagNome = tPagLabel[tPag] || (xPag ? `${xPag} (código ${tPag})` : `Código ${tPag} (não catalogado)`);
-        const vPagBruto = parseFloat(detPag.getElementsByTagName('vPag')[0]?.textContent?.trim() || '0') || 0;
+        const vPagBruto = detPag.vPag;
         // Desconta o troco (se houver) do pagamento em dinheiro desta nota — só
         // uma vez, mesmo que o troco seja maior que este detPag específico.
         let vPag = vPagBruto;
@@ -2971,9 +3047,8 @@ ${secoesPorCodigo}
 
       const buscaItem = () => {
         if (!nota.rawXml || nota.tipo !== 'nfe') return false;
-        const doc = getParsedXml(nota);
-        if (!doc) return false;
-        return Array.from(doc.getElementsByTagName('xProd')).some(el => (el.textContent || '').toLowerCase().includes(query));
+        const ex = getNotaExtract(nota);
+        return ex?.dets.some(d => d.xProd.toLowerCase().includes(query)) ?? false;
       };
 
       // Campo específico selecionado: busca só ali, pra não trazer resultado de
