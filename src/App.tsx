@@ -210,6 +210,16 @@ interface SpedC100 {
   vlDoc: string;
 }
 
+// Agregado por produto dentro de um código de classificação IBS/CBS — vai pro
+// laudo pra o analista ver qual produto o cliente cadastrou em qual código.
+interface ProdutoDoCodigo {
+  xProd: string;
+  ncm: string;
+  itens: number;
+  valor: number;
+  vIbsCbs: number;
+}
+
 interface SpedData {
   cnpj: string;
   razaoSocial: string;
@@ -2165,8 +2175,8 @@ export default function App() {
       notas: Set<string>;
       exemplo: string; // "série/número" da primeira nota afetada
     };
-    type CodigoUsado = { code: string; nome: string; cst: string; redIBS: number; redCBS: number; itens: number; notas: Set<string>; valor: number; naTabela: boolean };
-    const vazio = { totalItens: 0, totalNotas: 0, itensOk: 0, problemas: [] as Problema[], codigosUsados: [] as CodigoUsado[] };
+    type CodigoUsado = { code: string; nome: string; cst: string; redIBS: number; redCBS: number; itens: number; notas: Set<string>; valor: number; vIBS: number; vCBS: number; naTabela: boolean; produtos: Map<string, ProdutoDoCodigo> };
+    const vazio = { totalItens: 0, totalNotas: 0, itensOk: 0, problemas: [] as Problema[], codigosUsados: [] as CodigoUsado[], totalIBS: 0, totalCBS: 0 };
     if (!mainCnpj) return vazio;
 
     const saidas = xmlList.filter(xml =>
@@ -2206,6 +2216,23 @@ export default function App() {
         // Valor do item pra dar ao analista a noção de quanto da venda cai em
         // cada classificação (vProd bruto do item, sem rateio de desconto da nota).
         const vProd = parseFloat(det.getElementsByTagName('prod')[0]?.getElementsByTagName('vProd')[0]?.textContent || '0') || 0;
+        // IBS/CBS já calculados pelo sistema do cliente e destacados no próprio
+        // item (vIBS soma UF+Município; vCBS dentro de gCBS) — nenhum cálculo
+        // nosso, só leitura do que o XML declara. Monofásico (gIBSCBSMono) tem
+        // outra estrutura e fica de fora dessa soma.
+        const gIbsCbsDoItem = ibscbs.getElementsByTagName('gIBSCBS')[0];
+        const lerValor = (tag: string, escopo: Element | undefined) => {
+          const el = escopo ? Array.from(escopo.children).find(e => e.tagName === tag) : undefined;
+          return parseFloat(el?.textContent || '0') || 0;
+        };
+        const vIBSItem = lerValor('vIBS', gIbsCbsDoItem);
+        const vCBSItem = lerValor('vCBS', gIbsCbsDoItem?.getElementsByTagName('gCBS')[0]);
+        // Nome e NCM do produto COMO O CLIENTE CADASTROU — vão pro laudo pra o
+        // analista enxergar qual produto caiu em qual classificação; o app não
+        // julga se a classificação é adequada, só lista.
+        const prodEl = det.getElementsByTagName('prod')[0];
+        const xProdItem = prodEl?.getElementsByTagName('xProd')[0]?.textContent?.trim() || '(sem descrição)';
+        const ncmItem = prodEl?.getElementsByTagName('NCM')[0]?.textContent?.trim() || '';
         // CST e cClassTrib são filhos DIRETOS de <IBSCBS> — getElementsByTagName
         // desce em todos os níveis e pegaria CSTReg/cClassTribReg de gTribRegular.
         const filhoDireto = (tag: string) =>
@@ -2229,11 +2256,20 @@ export default function App() {
           const entry = CCLASSTRIB_TABELA[code];
           const u = usados.get(code) ?? {
             code, nome: entry?.nome ?? '(não consta na tabela oficial)', cst: entry?.cst ?? cst,
-            redIBS: entry?.redIBS ?? 0, redCBS: entry?.redCBS ?? 0, itens: 0, notas: new Set<string>(), valor: 0, naTabela: !!entry,
+            redIBS: entry?.redIBS ?? 0, redCBS: entry?.redCBS ?? 0, itens: 0, notas: new Set<string>(), valor: 0, vIBS: 0, vCBS: 0, naTabela: !!entry,
+            produtos: new Map<string, ProdutoDoCodigo>(),
           };
           u.itens++;
           u.notas.add(idNota);
           u.valor += vProd;
+          u.vIBS += vIBSItem;
+          u.vCBS += vCBSItem;
+          const prodKey = `${xProdItem}|${ncmItem}`;
+          const p = u.produtos.get(prodKey) ?? { xProd: xProdItem, ncm: ncmItem, itens: 0, valor: 0, vIbsCbs: 0 };
+          p.itens++;
+          p.valor += vProd;
+          p.vIbsCbs += vIBSItem + vCBSItem;
+          u.produtos.set(prodKey, p);
           usados.set(code, u);
 
           if (!entry) {
@@ -2278,14 +2314,138 @@ export default function App() {
 
     const lista = Array.from(problemas.values())
       .sort((a, b) => (a.nivel === b.nivel ? b.itens - a.itens : a.nivel === 'erro' ? -1 : 1));
+    const codigos = Array.from(usados.values()).sort((a, b) => b.itens - a.itens);
     return {
       totalItens,
       totalNotas: notasComItemVerificado.size,
       itensOk: totalItens - itensComProblema,
       problemas: lista,
-      codigosUsados: Array.from(usados.values()).sort((a, b) => b.itens - a.itens),
+      codigosUsados: codigos,
+      totalIBS: codigos.reduce((s, c) => s + c.vIBS, 0),
+      totalCBS: codigos.reduce((s, c) => s + c.vCBS, 0),
     };
   }, [xmlList, filterMes]);
+
+  // Laudo de Classificação Tributária IBS/CBS em janela própria pra imprimir/
+  // salvar como PDF — lista os produtos DO CADASTRO DO CLIENTE dentro de cada
+  // código, pra o analista enxergar visualmente qual classificação destoa
+  // (ex: pão em "tributação integral" numa padaria) e corrigir no cadastro.
+  // O laudo não julga nada: só organiza o que o XML declara.
+  const exportarLaudoIbsCbs = () => {
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const empresa = analysis?.[0]?.razaoSocial || notasSaida[0]?.razaoSocial || '';
+    const periodo = periodoParaNomeArquivo();
+    const hoje = new Date().toLocaleDateString('pt-BR');
+    const moeda = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+    const secoesProblemas = auditoriaClassTrib.problemas.length === 0
+      ? `<div class="box ok">✓ Todos os ${auditoriaClassTrib.totalItens} itens verificados usam códigos existentes na tabela oficial, vigentes na data de emissão, permitidos pro modelo do documento e com redução de alíquota compatível.</div>`
+      : auditoriaClassTrib.problemas.map(p => `
+        <div class="box ${p.nivel === 'erro' ? 'erro' : 'alerta'}">
+          ${p.nivel === 'erro' ? '🔴' : '🟡'} <strong class="mono">${esc(p.code)}</strong> — ${esc(p.motivo)}<br/>
+          <span class="sub">${p.itens} item(ns) em ${p.notas.size} nota(s) · ex: nota ${esc(p.exemplo)}</span>
+        </div>`).join('');
+
+    const linhasResumo = auditoriaClassTrib.codigosUsados.map(c => `
+      <tr>
+        <td class="mono${c.naTabela ? '' : ' erro-txt'}">${esc(c.code)}</td>
+        <td>${esc(c.nome)}</td>
+        <td class="num">${c.naTabela ? `${c.redIBS}%` : '—'}</td>
+        <td class="num">${c.naTabela ? `${c.redCBS}%` : '—'}</td>
+        <td class="num">${c.itens}</td>
+        <td class="num">${c.notas.size}</td>
+        <td class="num">${moeda(c.valor)}</td>
+        <td class="num">${moeda(c.vIBS + c.vCBS)}</td>
+      </tr>`).join('');
+
+    const secoesPorCodigo = auditoriaClassTrib.codigosUsados.map(c => {
+      const produtos = (Array.from(c.produtos.values()) as ProdutoDoCodigo[]).sort((a, b) => b.valor - a.valor);
+      const linhas = produtos.map(p => `
+        <tr>
+          <td>${esc(p.xProd)}</td>
+          <td class="mono">${esc(p.ncm)}</td>
+          <td class="num">${p.itens}</td>
+          <td class="num">${moeda(p.valor)}</td>
+          <td class="num">${moeda(p.vIbsCbs)}</td>
+        </tr>`).join('');
+      return `
+        <div class="secao">
+          <h2><span class="mono">${esc(c.code)}</span> — ${esc(c.nome)}</h2>
+          <div class="meta">Redução IBS ${c.naTabela ? `${c.redIBS}%` : '—'} · Redução CBS ${c.naTabela ? `${c.redCBS}%` : '—'} · ${produtos.length} produto(s) distinto(s) · ${c.itens} item(ns) · ${moeda(c.valor)} em vendas</div>
+          <table>
+            <thead><tr><th>Produto (como consta no cadastro do cliente)</th><th>NCM</th><th class="num">Itens</th><th class="num">Valor</th><th class="num">IBS+CBS destacado</th></tr></thead>
+            <tbody>${linhas}</tbody>
+          </table>
+        </div>`;
+    }).join('');
+
+    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/>
+<title>Laudo IBS-CBS ${esc(empresa)} ${esc(periodo)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'IBM Plex Sans', sans-serif; color: #17150F; background: #fff; font-size: 11px; padding: 32px 40px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .mono { font-family: ui-monospace, monospace; }
+  header { border-bottom: 2px solid #C9A227; padding-bottom: 14px; margin-bottom: 18px; }
+  h1 { font-family: 'Newsreader', serif; font-size: 22px; font-weight: 600; }
+  .empresa { font-size: 13px; font-weight: 700; margin-top: 8px; }
+  .head-meta { color: #78736A; margin-top: 3px; }
+  h2 { font-family: 'Newsreader', serif; font-size: 15px; font-weight: 600; border-left: 3px solid #C9A227; padding-left: 8px; margin: 0 0 4px; }
+  .secao { margin-top: 22px; page-break-inside: avoid; }
+  .meta { color: #78736A; margin-bottom: 6px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #A29C92; border-bottom: 1px solid #E5E0D6; padding: 4px 8px 4px 0; }
+  th.num { text-align: right; }
+  td { border-bottom: 1px solid #EFEBE3; padding: 3.5px 8px 3.5px 0; vertical-align: top; }
+  tr.total td { border-top: 2px solid #E5E0D6; font-weight: 700; }
+  .box { border-radius: 6px; padding: 8px 12px; margin: 6px 0; border: 1px solid; }
+  .box.ok { background: #f2f8f2; border-color: #cde3cd; color: #2c6e2c; }
+  .box.erro { background: #fdf2f2; border-color: #f0caca; color: #a33030; }
+  .box.alerta { background: #fdf8ec; border-color: #ecdcae; color: #8a6d1a; }
+  .erro-txt { color: #a33030; font-weight: 700; }
+  .sub { opacity: 0.75; font-size: 10px; }
+  footer { margin-top: 28px; border-top: 1px solid #E5E0D6; padding-top: 10px; color: #78736A; font-size: 10px; line-height: 1.5; }
+  @media print { body { padding: 0; } .no-print { display: none; } }
+  @page { margin: 14mm; size: A4; }
+</style></head><body>
+<header>
+  <h1>Laudo de Classificação Tributária — IBS/CBS</h1>
+  <div class="empresa">${esc(empresa)}</div>
+  <div class="head-meta">CNPJ ${esc(mainCnpj || '')} · Período: ${esc(periodo)} · Gerado em ${hoje} · Tabela oficial: ${esc(CCLASSTRIB_VERSAO)} (Portal Nacional da NF-e)</div>
+</header>
+
+<div class="secao">
+  <h2>Resultado da verificação estrutural</h2>
+  <div class="meta">${auditoriaClassTrib.totalItens} item(ns) em ${auditoriaClassTrib.totalNotas} nota(s) verificados — formato, prefixo CST, existência na tabela oficial, vigência, permissão pro modelo do documento e redução de alíquota.</div>
+  ${secoesProblemas}
+</div>
+
+<div class="secao">
+  <h2>Resumo por código de classificação</h2>
+  <table>
+    <thead><tr><th>cClassTrib</th><th>Descrição oficial</th><th class="num">Red. IBS</th><th class="num">Red. CBS</th><th class="num">Itens</th><th class="num">Notas</th><th class="num">Valor (vProd)</th><th class="num">IBS+CBS destacado</th></tr></thead>
+    <tbody>
+      ${linhasResumo}
+      <tr class="total"><td colspan="6" class="num">Total do período</td><td class="num">${moeda(auditoriaClassTrib.codigosUsados.reduce((s, c) => s + c.valor, 0))}</td><td class="num">${moeda(auditoriaClassTrib.totalIBS + auditoriaClassTrib.totalCBS)}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+${secoesPorCodigo}
+
+<footer>
+  <strong>Metodologia e limites deste laudo.</strong> As checagens acima são estruturais e determinísticas — cada código do XML foi comparado com a Tabela de Classificação Tributária do IBS e da CBS (${esc(CCLASSTRIB_VERSAO)}, Portal Nacional da NF-e / Informe Técnico 2025.002). Os valores de IBS e CBS exibidos são os que o próprio sistema emissor do contribuinte calculou e destacou nos documentos (vIBS + vCBS); em 2026, período de teste da Reforma Tributária (EC 132/2023, LC 214/2025), esses valores são compensáveis e não representam recolhimento efetivo. <strong>Este laudo não avalia se o código atribuído a cada produto é o adequado</strong> — a lista de produtos por código existe justamente para que o analista identifique classificações que destoam do enquadramento esperado (Anexos da LC 214/2025) e providencie a correção no cadastro do sistema emissor. Documento gerado pelo Sequência Fiscal.
+</footer>
+</body></html>`;
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, '_blank');
+    // Espera as fontes carregarem antes de abrir o diálogo de impressão
+    if (win) win.onload = () => setTimeout(() => win.print(), 400);
+  };
 
   // Responsável Técnico (<infRespTec>): identifica quem desenvolve/mantém o
   // sistema de automação do cliente — mais confiável que <verProc> (que em
@@ -7363,8 +7523,18 @@ export default function App() {
                             sem nenhuma interpretação de produto/NCM (essa fica pro contador). */}
                         {auditoriaClassTrib.totalItens > 0 && (
                           <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
-                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
-                              Validação cClassTrib × Tabela Oficial
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                Validação cClassTrib × Tabela Oficial
+                              </div>
+                              <button
+                                onClick={exportarLaudoIbsCbs}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors no-print"
+                                title="Abre o laudo em uma janela pra imprimir/salvar como PDF — com a lista de produtos do cadastro do cliente dentro de cada código, pra identificar visualmente qual classificação destoa"
+                              >
+                                <Download className="w-3 h-3" />
+                                Exportar Laudo (PDF)
+                              </button>
                             </div>
                             <div className="text-[11px] text-slate-400 dark:text-slate-500 mb-3">
                               {CCLASSTRIB_VERSAO} · {auditoriaClassTrib.totalItens} item(ns) em {auditoriaClassTrib.totalNotas} nota(s) verificados · checagem estrutural (formato, prefixo CST, existência, vigência, modelo e redução) — não avalia se o código escolhido é o adequado pro produto
@@ -7411,7 +7581,8 @@ export default function App() {
                                         <th className="py-1.5 pr-3 text-right">Red. CBS</th>
                                         <th className="py-1.5 pr-3 text-right">Itens</th>
                                         <th className="py-1.5 pr-3 text-right">Notas</th>
-                                        <th className="py-1.5 text-right">Valor (vProd)</th>
+                                        <th className="py-1.5 pr-3 text-right">Valor (vProd)</th>
+                                        <th className="py-1.5 text-right" title="Soma do vIBS + vCBS que o sistema do cliente destacou nos itens — leitura direta do XML, sem cálculo do app">IBS+CBS destacado</th>
                                       </tr>
                                     </thead>
                                     <tbody>
@@ -7423,11 +7594,20 @@ export default function App() {
                                           <td className="py-1.5 pr-3 text-right text-slate-600 dark:text-slate-400">{c.naTabela ? `${c.redCBS}%` : '—'}</td>
                                           <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300">{c.itens}</td>
                                           <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300">{c.notas.size}</td>
-                                          <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300 tabular-nums">{formatarMoeda(c.valor)}</td>
+                                          <td className="py-1.5 pr-3 text-right font-semibold text-slate-700 dark:text-slate-300 tabular-nums">{formatarMoeda(c.valor)}</td>
+                                          <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300 tabular-nums">{formatarMoeda(c.vIBS + c.vCBS)}</td>
                                         </tr>
                                       ))}
+                                      <tr className="border-t-2 border-slate-200 dark:border-slate-700">
+                                        <td colSpan={6} className="py-1.5 pr-3 text-right text-slate-500 dark:text-slate-400 font-bold">Total do período</td>
+                                        <td className="py-1.5 pr-3 text-right font-bold text-slate-700 dark:text-slate-200 tabular-nums">{formatarMoeda(auditoriaClassTrib.codigosUsados.reduce((s, c) => s + c.valor, 0))}</td>
+                                        <td className="py-1.5 text-right font-bold text-slate-700 dark:text-slate-200 tabular-nums">{formatarMoeda(auditoriaClassTrib.totalIBS + auditoriaClassTrib.totalCBS)}</td>
+                                      </tr>
                                     </tbody>
                                   </table>
+                                </div>
+                                <div className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
+                                  "IBS+CBS destacado" é a soma do que o próprio sistema do cliente calculou e destacou nos itens (vIBS + vCBS do XML) — em 2026, período de teste da Reforma (0,1% IBS + 0,9% CBS), esse valor é compensável e não é recolhido de fato.
                                 </div>
                                 {(() => {
                                   // Nota com itens em códigos diferentes conta em cada linha onde
@@ -8884,6 +9064,50 @@ export default function App() {
                       {auditoriaIbsCbs.amostraSemGrupo.length > 15 && (
                         <div className="text-[10px] text-slate-400 mt-1">Mostrando 15 de {auditoriaIbsCbs.amostraSemGrupo.length}.</div>
                       )}
+                    </div>
+                  )}
+
+                  {auditoriaClassTrib.totalItens > 0 && (
+                    <div className="mt-4">
+                      <div className="text-sm font-bold text-slate-700 mb-1">Validação cClassTrib × Tabela Oficial ({CCLASSTRIB_VERSAO})</div>
+                      <div className="text-xs text-slate-500 mb-2">
+                        {auditoriaClassTrib.totalItens} item(ns) em {auditoriaClassTrib.totalNotas} nota(s) verificados — formato, prefixo CST, existência, vigência, modelo e redução.
+                        {auditoriaClassTrib.problemas.length === 0
+                          ? ' Nenhuma inconsistência estrutural encontrada.'
+                          : ` ${auditoriaClassTrib.problemas.length} inconsistência(s) encontrada(s):`}
+                      </div>
+                      {auditoriaClassTrib.problemas.length > 0 && (
+                        <ul className="text-xs text-slate-600 mb-2 list-disc pl-4">
+                          {auditoriaClassTrib.problemas.map((p, i) => (
+                            <li key={i}>{p.nivel === 'erro' ? '🔴' : '🟡'} <strong>{p.code}</strong> — {p.motivo} ({p.itens} item(ns) em {p.notas.size} nota(s), ex: nota {p.exemplo})</li>
+                          ))}
+                        </ul>
+                      )}
+                      <table>
+                        <thead><tr><th>cClassTrib</th><th>Descrição oficial</th><th>Red. IBS</th><th>Red. CBS</th><th>Itens</th><th>Notas</th><th>Valor (vProd)</th><th>IBS+CBS destacado</th></tr></thead>
+                        <tbody>
+                          {auditoriaClassTrib.codigosUsados.map(c => (
+                            <tr key={c.code}>
+                              <td>{c.code}</td>
+                              <td>{c.nome}</td>
+                              <td>{c.naTabela ? `${c.redIBS}%` : '—'}</td>
+                              <td>{c.naTabela ? `${c.redCBS}%` : '—'}</td>
+                              <td>{c.itens}</td>
+                              <td>{c.notas.size}</td>
+                              <td>{formatarMoeda(c.valor)}</td>
+                              <td>{formatarMoeda(c.vIBS + c.vCBS)}</td>
+                            </tr>
+                          ))}
+                          <tr>
+                            <td colSpan={6}><strong>Total do período</strong></td>
+                            <td><strong>{formatarMoeda(auditoriaClassTrib.codigosUsados.reduce((s, c) => s + c.valor, 0))}</strong></td>
+                            <td><strong>{formatarMoeda(auditoriaClassTrib.totalIBS + auditoriaClassTrib.totalCBS)}</strong></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        "IBS+CBS destacado" = soma do vIBS + vCBS que o sistema do cliente calculou nos itens (2026: período de teste, valores compensáveis). A lista completa de produtos por código sai no Laudo IBS/CBS específico (botão "Exportar Laudo" no card da auditoria).
+                      </div>
                     </div>
                   )}
                 </div>
