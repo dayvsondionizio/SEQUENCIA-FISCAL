@@ -7429,6 +7429,23 @@ export default function App() {
                                     </tbody>
                                   </table>
                                 </div>
+                                {(() => {
+                                  // Nota com itens em códigos diferentes conta em cada linha onde
+                                  // aparece — sem esse aviso a coluna "Notas" parece somável e a
+                                  // soma ultrapassando o total parece bug.
+                                  const aparicoesPorNota = new Map<string, number>();
+                                  auditoriaClassTrib.codigosUsados.forEach(c =>
+                                    c.notas.forEach(n => aparicoesPorNota.set(n, (aparicoesPorNota.get(n) || 0) + 1))
+                                  );
+                                  const notasMistas = Array.from(aparicoesPorNota.values()).filter(v => v > 1).length;
+                                  if (notasMistas === 0) return null;
+                                  const somaNotas = auditoriaClassTrib.codigosUsados.reduce((s, c) => s + c.notas.size, 0);
+                                  return (
+                                    <div className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
+                                      ℹ A coluna "Notas" não é somável: {notasMistas} nota(s) têm itens em mais de um código na mesma venda e contam em cada linha onde aparecem — por isso a soma da coluna dá {somaNotas}, acima das {auditoriaClassTrib.totalNotas} notas verificadas. "Itens" e "Valor" não se repetem e somam certinho.
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             )}
                           </div>
