@@ -1376,6 +1376,10 @@ export default function App() {
     }).format(valor);
   };
 
+  // Mostra 1 casa decimal só quando não é um número redondo — evita que 443/444
+  // (99,77%) apareça como "100%" na tela e esconda a nota que ainda falta.
+  const formatarPct = (p: number) => (Number.isInteger(p) ? String(p) : p.toFixed(1).replace('.', ','));
+
   // Nome de arquivo padrão pra qualquer export: tipo + empresa + período, sem
   // acento/espaço/caractere especial, pra identificar o arquivo sem precisar abrir.
   const sanitizarNomeArquivo = (v: string) =>
@@ -2136,7 +2140,9 @@ export default function App() {
     return {
       totalNotas: saidas.length,
       notasComGrupo,
-      pctComGrupo: Math.round((notasComGrupo / saidas.length) * 100),
+      // Sem arredondar pra inteiro: 443/444 vira 99,77% e não pode virar "100%" na tela
+      // (arredondar escondia justamente a nota que falta o grupo IBS/CBS).
+      pctComGrupo: (notasComGrupo / saidas.length) * 100,
       amostraSemGrupo,
       amostraComGrupo,
     };
@@ -5832,7 +5838,7 @@ export default function App() {
                           <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 group-hover:text-slate-500 transition-all duration-300", showAuditoriaIbsCbs && "rotate-90")} />
                         </div>
                       </div>
-                      <div className={cn("text-3xl font-bold mt-2", corIbsCbs)}>{auditoriaIbsCbs.pctComGrupo}%</div>
+                      <div className={cn("text-3xl font-bold mt-2", corIbsCbs)}>{formatarPct(auditoriaIbsCbs.pctComGrupo)}%</div>
                       <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mt-1">
                         {auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) com o grupo IBS/CBS
                       </div>
@@ -7113,7 +7119,7 @@ export default function App() {
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                             <strong className={cn(
                               auditoriaIbsCbs.pctComGrupo === 0 ? "text-rose-600 dark:text-rose-400" : auditoriaIbsCbs.pctComGrupo === 100 ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
-                            )}>{auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) ({auditoriaIbsCbs.pctComGrupo}%)</strong> já trazem o grupo IBS/CBS preenchido
+                            )}>{auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) ({formatarPct(auditoriaIbsCbs.pctComGrupo)}%)</strong> já trazem o grupo IBS/CBS preenchido
                           </div>
                         </div>
                       </div>
@@ -8625,7 +8631,7 @@ export default function App() {
                 <div className="print-section">
                   <h3 className="font-serif text-lg font-semibold text-slate-800 mb-4 border-l-4 border-slate-900 pl-3">Auditoria de IBS/CBS (Reforma Tributária)</h3>
                   <div className="text-sm mb-3">
-                    <strong>{auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) ({auditoriaIbsCbs.pctComGrupo}%)</strong> já trazem o grupo IBS/CBS preenchido.
+                    <strong>{auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) ({formatarPct(auditoriaIbsCbs.pctComGrupo)}%)</strong> já trazem o grupo IBS/CBS preenchido.
                     {auditoriaIbsCbs.pctComGrupo === 0 && ' Nenhuma nota desse período traz o grupo IBSCBS preenchido — 2026 é o período de teste da Reforma Tributária; vale confirmar com o suporte do sistema do cliente antes de virar obrigatório de verdade.'}
                     {auditoriaIbsCbs.pctComGrupo === 100 && ' Sistema do cliente parece adaptado à Reforma Tributária.'}
                     {auditoriaIbsCbs.pctComGrupo > 0 && auditoriaIbsCbs.pctComGrupo < 100 && ' Pode ser uma atualização de sistema no meio do período ou inconsistência a esclarecer com o suporte do sistema.'}
