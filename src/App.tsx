@@ -5220,6 +5220,23 @@ ${secoesPorCodigo}
     setManualInutIni('');
     setManualInutFim('');
     setManualInutData('');
+    // Cards de detalhe (IBS/CBS, TEF, Regime, etc.) não devem carregar o
+    // estado "aberto" da análise anterior pra próxima — senão o card já
+    // nasce expandido antes mesmo do usuário clicar nele.
+    setShowCfopBreakdown(false);
+    setShowCfopPorModelo(false);
+    setShowAnomalias(false);
+    setShowSemAutorizacao(false);
+    setShowMalformadas(false);
+    setShowAuditoriaPagamento(false);
+    setShowAuditoriaRegime(false);
+    setShowAuditoriaIbsCbs(false);
+    setShowNfse(false);
+    setShowForaDoEscopoDetalhe(false);
+    setShowForaDoPrazo(false);
+    setShowExportOptions(false);
+    setShowPrintMenu(false);
+    setShowExportXmlMenu(false);
   };
 
   const filteredAnalysis = useMemo(() => {
@@ -6375,8 +6392,8 @@ ${secoesPorCodigo}
                     : auditoriaIbsCbs.pctComGrupo === 100 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400';
                   return (
                     <div
-                      onClick={() => setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs)}
-                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs); } }}
+                      onClick={() => { setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs); setShowAuditoriaPagamento(false); }}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowAuditoriaIbsCbs(!showAuditoriaIbsCbs); setShowAuditoriaPagamento(false); } }}
                       role="button"
                       tabIndex={0}
                       title="Ver auditoria de IBS/CBS (Reforma Tributária)"
@@ -6413,8 +6430,8 @@ ${secoesPorCodigo}
                     : pctNaoIntegradoResumo >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400';
                   return (
                     <div
-                      onClick={() => setShowAuditoriaPagamento(!showAuditoriaPagamento)}
-                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowAuditoriaPagamento(!showAuditoriaPagamento); } }}
+                      onClick={() => { setShowAuditoriaPagamento(!showAuditoriaPagamento); setShowAuditoriaIbsCbs(false); }}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowAuditoriaPagamento(!showAuditoriaPagamento); setShowAuditoriaIbsCbs(false); } }}
                       role="button"
                       tabIndex={0}
                       title="Ver auditoria de pagamento (TEF)"
