@@ -147,7 +147,8 @@ interface ParcelaIbsExtract {
   v: number | null;        // valor destacado (vIBSUF/vIBSMun/vCBS)
 }
 interface DetExtract {
-  cProd: string; xProd: string; ncm: string; cest: string; vProd: number;
+  cProd: string; xProd: string; ncm: string; cest: string; cfop: string; vProd: number; qCom: number; uCom: string;
+  cEan: string; cBenef: string;
   icmsTemCst: boolean; icmsTemCsosn: boolean;
   temIbsCbs: boolean;      // grupo <IBSCBS> presente no item
   ibsCst: string;          // CST filho direto de <IBSCBS>
@@ -220,7 +221,12 @@ function extrairAuditoria(doc: Document): NotaExtract {
       xProd: txt(filho(prod, 'xProd')),
       ncm: txt(filho(prod, 'NCM')),
       cest: txt(filho(prod, 'CEST')),
+      cfop: txt(filho(prod, 'CFOP')),
       vProd: num(filho(prod, 'vProd')) ?? 0,
+      qCom: num(filho(prod, 'qCom')) ?? 0,
+      uCom: txt(filho(prod, 'uCom')),
+      cEan: txt(filho(prod, 'cEAN')),
+      cBenef: txt(filho(prod, 'cBenef')),
       icmsTemCst: !!icmsNode?.getElementsByTagName('CST')[0],
       icmsTemCsosn: !!icmsNode?.getElementsByTagName('CSOSN')[0],
       temIbsCbs: !!ibscbs,
@@ -776,6 +782,17 @@ const MESES = [
   'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
 ];
 
+const DIAS_SEMANA = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+
+// Dia da semana só a partir do calendário (Y-M-D), sem passar pelo fuso do
+// dhEmi nem do navegador — "new Date(isoComOffset).getDay()" pode escorregar
+// pro dia errado perto da meia-noite dependendo do fuso local de quem roda o
+// app. Date.UTC com os 3 números soltos elimina essa ambiguidade.
+function diaDaSemana(dataYMD: string): number {
+  const [y, m, d] = dataYMD.split('-').map(Number);
+  return new Date(Date.UTC(y, (m || 1) - 1, d || 1)).getUTCDay();
+}
+
 function getMonthYear(dateStr?: string) {
   if (!dateStr || dateStr.length < 7) return '';
   const parts = dateStr.split('-');
@@ -947,6 +964,51 @@ const CFOP_DESCRICOES: Record<string, string> = {
 function descricaoCfop(cfop: string): string {
   const suffix = cfop.slice(-3);
   return CFOP_DESCRICOES[suffix] || `CFOP ${cfop} - Não classificado`;
+}
+
+// Usa o texto oficial do CFOP_DESCRICOES pra separar "produção do
+// estabelecimento" de "mercadoria adquirida ou recebida de terceiros" — não
+// é uma lista própria de sufixos, é literalmente a descrição oficial que já
+// existe no dicionário acima, então cobre toda a família 101/102, 401/403/
+// 405 etc. sem precisar listar sufixo por sufixo.
+function classificarOrigemCfop(cfop: string): 'propria' | 'revenda' | null {
+  if (!cfop) return null;
+  const desc = CFOP_DESCRICOES[cfop.slice(-3)];
+  if (!desc) return null;
+  if (desc.includes('produção do estabelecimento')) return 'propria';
+  if (desc.includes('adquirida ou recebida de terceiros')) return 'revenda';
+  return null;
+}
+
+// Ortogonal a própria/revenda — um item pode ser produção própria SUJEITA a
+// ST, ou revenda sujeita a ST. Também vem do texto oficial do CFOP, não de
+// uma lista de sufixos própria.
+function cfopSujeitoAST(cfop: string): boolean {
+  if (!cfop) return false;
+  const desc = CFOP_DESCRICOES[cfop.slice(-3)];
+  return !!desc && desc.includes('substituição tributária');
+}
+
+// "24944" e "0000000024944" são o MESMO código, só com zero à esquerda vindo
+// de sistemas diferentes — sem normalizar isso, qualquer comparação entre
+// cProd de notas diferentes vira falso positivo em massa.
+function normalizarCprod(cProd: string): string {
+  if (/^\d+$/.test(cProd)) return cProd.replace(/^0+/, '') || '0';
+  return cProd;
+}
+
+// Devolução de venda tem CFOP próprio (1201/1202/1410/1411/1918/1919 e os
+// equivalentes interestaduais 2201/2202/2410/2411/2918/2919) — NÃO dá pra
+// usar CFOP_DESCRICOES por sufixo aqui, porque o mesmo sufixo (ex: "201")
+// tem texto diferente do lado de entrada ("devolução de venda") e do lado
+// de saída ("devolução de compra"); por isso essa é uma lista fechada dos
+// códigos reais de devolução de venda, não um texto genérico.
+const CFOPS_DEVOLUCAO_VENDA = new Set([
+  '1201', '1202', '1203', '1204', '1410', '1411', '1918', '1919',
+  '2201', '2202', '2203', '2204', '2410', '2411', '2918', '2919',
+]);
+function isCfopDevolucaoVenda(cfop: string): boolean {
+  return CFOPS_DEVOLUCAO_VENDA.has(cfop);
 }
 
 function deduplicateXmls(list: XmlData[]): XmlData[] {
@@ -1482,6 +1544,19 @@ export default function App() {
   // Filters
   const [filterModelo, setFilterModelo] = useState('Todos');
   const [filterMes, setFilterMes] = useState('Todos');
+  // Easter egg: Mapa Fiscal só existe pra quem sabe que existe — clicar na
+  // logomarca do cabeçalho libera (e esconde de novo, é um toggle). Fica
+  // falso por padrão e volta a falso em toda "Nova Análise" de propósito,
+  // pra ninguém que pegar o navegador depois já achar destravado.
+  const [mapaFiscalDesbloqueado, setMapaFiscalDesbloqueado] = useState(false);
+  const [showMapaFiscal, setShowMapaFiscal] = useState(false);
+  const [showComparativoMensal, setShowComparativoMensal] = useState(false);
+  const [showComparativoSerie, setShowComparativoSerie] = useState(false);
+  const [showRankingProdutos, setShowRankingProdutos] = useState(false);
+  const [filtroOrigemRanking, setFiltroOrigemRanking] = useState<'todos' | 'propria' | 'revenda' | 'misto'>('todos');
+  const [showRankingNcm, setShowRankingNcm] = useState(false);
+  const [showSazonalidade, setShowSazonalidade] = useState(false);
+  const [showDevolucoes, setShowDevolucoes] = useState(false);
   const [showDaysDetail, setShowDaysDetail] = useState(false);
   const [notasPorDiaModoResumido, setNotasPorDiaModoResumido] = useState(false);
   const [showCfopBreakdown, setShowCfopBreakdown] = useState(false);
@@ -1492,6 +1567,7 @@ export default function App() {
   const [showAuditoriaPagamento, setShowAuditoriaPagamento] = useState(false);
   const [showAuditoriaRegime, setShowAuditoriaRegime] = useState(false);
   const [showAuditoriaIbsCbs, setShowAuditoriaIbsCbs] = useState(false);
+  const [showMudancasCadastro, setShowMudancasCadastro] = useState(false);
   const [showNfse, setShowNfse] = useState(false);
   const [nfseBusca, setNfseBusca] = useState('');
   const [auditoriaRegimeBusca, setAuditoriaRegimeBusca] = useState('');
@@ -2635,7 +2711,8 @@ ${secoesPorCodigo}
   // ICMS ficam de fora de propósito: variam legitimamente por tipo de
   // operação/destino e gerariam falso positivo.
   const auditoriaCadastroProdutos = useMemo(() => {
-    type ValorVisto = { valor: string; primeira: string; ultima: string; itens: number };
+    type NotaAmostra = { numero: string; serie: string; chave: string; data: string };
+    type ValorVisto = { valor: string; primeira: string; ultima: string; itens: number; amostra: NotaAmostra[] };
     type Mudanca = { cProd: string; xProd: string; campo: string; valores: ValorVisto[] };
     const vazio = { totalProdutos: 0, mudancas: [] as Mudanca[] };
     if (!mainCnpj) return vazio;
@@ -2658,18 +2735,33 @@ ${secoesPorCodigo}
         if (!cProd) return;
         let r = registro.get(cProd);
         if (!r) {
-          r = { xProd: '', campos: { NCM: new Map(), CEST: new Map(), cClassTrib: new Map() } };
+          r = { xProd: '', campos: { NCM: new Map(), CEST: new Map(), cClassTrib: new Map(), 'Nome do Produto': new Map(), 'Código de Barras (EAN)': new Map(), 'Benefício Fiscal': new Map() } };
           registro.set(cProd, r);
         }
         r.xProd = det.xProd || r.xProd;
+        // Amostra de até 3 notas por valor — prova rápida (número/série/chave)
+        // pra abrir o XML na hora, sem precisar caçar qual nota causou o quê.
         const anotar = (campo: string, valor: string) => {
-          const v = r!.campos[campo].get(valor) ?? { valor, primeira: dia, ultima: dia, itens: 0 };
+          const v = r!.campos[campo].get(valor) ?? { valor, primeira: dia, ultima: dia, itens: 0, amostra: [] };
           v.itens++;
           v.ultima = dia;
+          if (v.amostra.length < 3) {
+            v.amostra.push({ numero: xml.numero || '', serie: xml.serie || '', chave: xml.chave || '', data: dia });
+          }
           r!.campos[campo].set(valor, v);
         };
         anotar('NCM', det.ncm || '(vazio)');
         anotar('CEST', det.cest || '(vazio)');
+        // Nome do produto trocando pro mesmo cProd é tão relevante quanto NCM —
+        // costuma ser código reaproveitado pra outro produto, não só um typo.
+        anotar('Nome do Produto', det.xProd || '(vazio)');
+        // Código de barras trocando pro mesmo cProd é o mesmo alerta: produto
+        // físico diferente usando o código interno de outro.
+        anotar('Código de Barras (EAN)', det.cEan || '(vazio)');
+        // Benefício fiscal quase sempre fica vazio (só existe quando o produto
+        // tem incentivo/redução específica) — por isso o alerta real é quando
+        // ele aparece, some ou muda de código no meio do período.
+        anotar('Benefício Fiscal', det.cBenef || '(vazio)');
         // cClassTrib só é anotado quando o item TEM o grupo IBSCBS — nota
         // anterior à adoção do grupo não pode contar como "mudança de código".
         if (det.temIbsCbs) anotar('cClassTrib', det.cClassTrib || '(vazio)');
@@ -2690,6 +2782,949 @@ ${secoesPorCodigo}
     mudancas.sort((a, b) => a.cProd.localeCompare(b.cProd, undefined, { numeric: true }) || a.campo.localeCompare(b.campo));
     return { totalProdutos: registro.size, mudancas };
   }, [xmlList, filterMes]);
+
+  // Exporta a lista COMPLETA de mudanças de cadastro — a tela tem rolagem
+  // interna, mas nunca corta linha nenhuma; isso aqui é só pra ter em Excel
+  // quando forem muitas mudanças de uma vez.
+  const exportarMudancasCadastroExcel = () => {
+    const formatarData = (d: string) => d.split('-').reverse().join('/');
+    const formatarValor = (v: { valor: string; primeira: string; ultima: string; itens: number; amostra: { numero: string; serie: string; data: string }[] }) => {
+      const amostra = v.amostra.map(a => `nº ${a.numero || '?'}${a.serie ? `/${a.serie}` : ''} (${formatarData(a.data)})`).join(', ');
+      return `${v.valor} (${formatarData(v.primeira)} a ${formatarData(v.ultima)}, ${v.itens} item(ns)${amostra ? `, ex: ${amostra}` : ''})`;
+    };
+
+    // Uma linha por mudança (não por valor) — o "De → Para" fica junto na
+    // mesma linha pra ficar claro que é uma comparação, não dados soltos.
+    const aoa: (string | number)[][] = [
+      ['cProd', 'Produto', 'Campo', 'Qtde de Valores no Período', 'Primeiro Valor', 'Data (1ª aparição)', 'Último Valor', 'Data (última aparição)', 'Detalhe Completo (De → Para)'],
+    ];
+    auditoriaCadastroProdutos.mudancas.forEach(m => {
+      const primeiro = m.valores[0];
+      const ultimo = m.valores[m.valores.length - 1];
+      aoa.push([
+        m.cProd, m.xProd, m.campo, m.valores.length,
+        primeiro.valor, formatarData(primeiro.primeira),
+        ultimo.valor, formatarData(ultimo.ultima),
+        m.valores.map(formatarValor).join(' → '),
+      ]);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 16 }, { wch: 36 }, { wch: 20 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 90 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Mudancas Cadastro');
+
+    // Segunda aba: mesmo nome de produto em cProd diferentes (inverso da
+    // primeira aba) — formato de linha diferente, por isso fica separado.
+    if (produtosSuspeitos.nomeDuplicado.length > 0) {
+      const aoaNomes: (string | number)[][] = [
+        ['Produto', 'Quantidade de Códigos Diferentes', 'cProd Usados (com amostra de nota)'],
+      ];
+      produtosSuspeitos.nomeDuplicado.forEach(p => {
+        const detalhe = p.cProds
+          .map(c => `${c.cProd} (nº ${c.amostra.numero || '?'}${c.amostra.serie ? `/${c.amostra.serie}` : ''}, ${formatarData(c.amostra.data)})`)
+          .join(' | ');
+        aoaNomes.push([p.xProd, p.cProds.length, detalhe]);
+      });
+      const wsNomes = XLSX.utils.aoa_to_sheet(aoaNomes);
+      wsNomes['!cols'] = [{ wch: 36 }, { wch: 14 }, { wch: 80 }];
+      XLSX.utils.book_append_sheet(wb, wsNomes, 'Nomes Duplicados');
+    }
+
+    XLSX.writeFile(wb, nomeArquivoExport('mudancas_cadastro', 'xlsx'), { compression: true });
+  };
+
+  // (2b) Produtos suspeitos: duas checagens pontuais, mais estritas que a
+  // linha do tempo de cadastro acima —
+  //   1. NCM zerado (00000000) — cadastro claramente incompleto, não é uma
+  //      classificação tributária válida.
+  //   2. Mesmo cProd vendido ora com CFOP de "produção do estabelecimento"
+  //      ora de "mercadoria adquirida ou recebida de terceiros" — ao
+  //      contrário da checagem geral de CFOP (deixada de fora do item acima
+  //      de propósito, porque CFOP varia legitimamente por operação), aqui
+  //      o alvo é só essa inconsistência específica de origem da mercadoria,
+  //      que costuma ser erro de cadastro (não variação legítima).
+  const produtosSuspeitos = useMemo(() => {
+    type NotaAmostra = { numero: string; serie: string; chave: string; data: string };
+    type NcmZerado = { cProd: string; xProd: string; ocorrencias: number };
+    type CfopMisto = { cProd: string; xProd: string; cfopsPropria: string[]; cfopsRevenda: string[] };
+    type NomeDuplicado = { xProd: string; cProds: { cProd: string; amostra: NotaAmostra }[] };
+    const vazio = { ncmZerado: [] as NcmZerado[], cfopMisto: [] as CfopMisto[], nomeDuplicado: [] as NomeDuplicado[] };
+    if (!mainCnpj) return vazio;
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    if (saidas.length === 0) return vazio;
+
+    const ncmZeradoMap = new Map<string, NcmZerado>();
+    const cfopMistoMap = new Map<string, { xProd: string; propria: Set<string>; revenda: Set<string> }>();
+    // Inverso do "mudanças de cadastro": lá é "mesmo cProd, valor mudou";
+    // aqui é "mesmo nome, cProd diferente" — pode ser produto cadastrado em
+    // duplicidade (fragmenta relatório/estoque) ou um código reaproveitado.
+    // Chave do mapa interno é o cProd NORMALIZADO (sem zero à esquerda) — sem
+    // isso, "24944" e "0000000024944" contam como dois códigos diferentes.
+    // O valor guarda uma amostra (1 nota) de onde aquele cProd apareceu, pra
+    // facilitar achar a nota sem precisar caçar no XML.
+    const nomeParaCprods = new Map<string, Map<string, { cProd: string; amostra: NotaAmostra }>>();
+
+    saidas.forEach(xml => {
+      const ex = getNotaExtract(xml);
+      if (!ex) return;
+      const dia = (xml.data || '').slice(0, 10);
+      ex.dets.forEach(det => {
+        if (!det.cProd) return;
+
+        if (det.ncm && /^0+$/.test(det.ncm)) {
+          const r = ncmZeradoMap.get(det.cProd) || { cProd: det.cProd, xProd: det.xProd, ocorrencias: 0 };
+          r.ocorrencias++;
+          r.xProd = det.xProd || r.xProd;
+          ncmZeradoMap.set(det.cProd, r);
+        }
+
+        const origem = classificarOrigemCfop(det.cfop);
+        if (origem) {
+          let r = cfopMistoMap.get(det.cProd);
+          if (!r) {
+            r = { xProd: det.xProd, propria: new Set(), revenda: new Set() };
+            cfopMistoMap.set(det.cProd, r);
+          }
+          r.xProd = det.xProd || r.xProd;
+          (origem === 'propria' ? r.propria : r.revenda).add(det.cfop);
+        }
+
+        if (det.xProd) {
+          let m2 = nomeParaCprods.get(det.xProd);
+          if (!m2) { m2 = new Map(); nomeParaCprods.set(det.xProd, m2); }
+          const chave = normalizarCprod(det.cProd);
+          if (!m2.has(chave)) {
+            m2.set(chave, {
+              cProd: det.cProd,
+              amostra: { numero: xml.numero || '', serie: xml.serie || '', chave: xml.chave || '', data: dia },
+            });
+          }
+        }
+      });
+    });
+
+    const cfopMisto: CfopMisto[] = Array.from(cfopMistoMap.entries())
+      .filter(([, r]) => r.propria.size > 0 && r.revenda.size > 0)
+      .map(([cProd, r]) => ({
+        cProd, xProd: r.xProd,
+        cfopsPropria: Array.from(r.propria).sort(),
+        cfopsRevenda: Array.from(r.revenda).sort(),
+      }))
+      .sort((a, b) => a.cProd.localeCompare(b.cProd, undefined, { numeric: true }));
+
+    const nomeDuplicado: NomeDuplicado[] = Array.from(nomeParaCprods.entries())
+      .filter(([, cprods]) => cprods.size > 1)
+      .map(([xProd, cprods]) => ({
+        xProd,
+        cProds: Array.from(cprods.values()).sort((a, b) => a.cProd.localeCompare(b.cProd, undefined, { numeric: true })),
+      }))
+      .sort((a, b) => b.cProds.length - a.cProds.length || a.xProd.localeCompare(b.xProd));
+
+    return {
+      ncmZerado: Array.from(ncmZeradoMap.values()).sort((a, b) => b.ocorrencias - a.ocorrencias),
+      cfopMisto,
+      nomeDuplicado,
+    };
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
+
+  // Mapa Fiscal: raio-X consolidado do período — não calcula nada novo além
+  // do ticket médio, só reúne números que já existem espalhados em outras
+  // auditorias (faturamento, produtos distintos, % IBS/CBS, conformidade
+  // cClassTrib, cadastros divergentes, produtos suspeitos) num resumo único.
+  // Núcleo de agregação do Mapa Fiscal — roda tanto pro card resumo (um grupo
+  // só) quanto pros comparativos por mês e por série (um grupo por chave).
+  // Recebe as notas nfe do CNPJ principal, saída E entrada-própria juntas: a
+  // saída alimenta faturamento/produtos/origem/presença; a entrada-própria
+  // (tpNF=0) só entra pra achar devolução de venda (CFOP dedicado, ver
+  // isCfopDevolucaoVenda) — o resto de entrada-própria (baixa de estoque etc.)
+  // não conta em nenhuma métrica aqui.
+  const calcularMapaFiscalAgregado = (notas: XmlData[]) => {
+    let faturamento = 0, quantidadeNotas = 0, notasComGrupo = 0, notasNaoPresenciais = 0;
+    let valorPropria = 0, valorRevenda = 0, valorST = 0;
+    let valorDevolvido = 0, quantidadeDevolucoes = 0;
+    const produtosSet = new Set<string>();
+
+    notas.forEach(xml => {
+      if (xml.tpNF === '0') {
+        const ex = getNotaExtract(xml);
+        if (!ex) return;
+        let valorDevolucaoNota = 0;
+        let temDevolucao = false;
+        ex.dets.forEach(det => {
+          if (isCfopDevolucaoVenda(det.cfop)) { valorDevolucaoNota += det.vProd; temDevolucao = true; }
+        });
+        if (temDevolucao) { valorDevolvido += valorDevolucaoNota; quantidadeDevolucoes++; }
+        return;
+      }
+
+      faturamento += parseFloat(xml.valor || '0') || 0;
+      quantidadeNotas++;
+
+      const ex = getNotaExtract(xml);
+      if (ex) {
+        let temGrupo = false;
+        ex.dets.forEach(det => {
+          if (det.cProd) produtosSet.add(det.cProd);
+          if (det.temIbsCbs) temGrupo = true;
+          // Origem (própria/revenda) e ST são dimensões independentes — um
+          // item pode ser própria+ST ou revenda+ST. Por isso os 3 % abaixo
+          // não somam 100%: cada um é uma fatia isolada do faturamento,
+          // igual "participação de ST" costuma ser reportado.
+          const origem = classificarOrigemCfop(det.cfop);
+          if (origem === 'propria') valorPropria += det.vProd;
+          else if (origem === 'revenda') valorRevenda += det.vProd;
+          if (cfopSujeitoAST(det.cfop)) valorST += det.vProd;
+        });
+        if (temGrupo) notasComGrupo++;
+        // Mesmo critério da Auditoria de Pagamento: indPres vazio, "1"
+        // (presencial) ou "5" (entrega a domicílio) conta como presencial;
+        // qualquer outro (internet, teleatendimento etc.) é canal não presencial.
+        const isPresencial = ex.indPres === '' || ex.indPres === '1' || ex.indPres === '5';
+        if (!isPresencial) notasNaoPresenciais++;
+      }
+    });
+
+    return {
+      faturamento,
+      quantidadeNotas,
+      ticketMedio: quantidadeNotas > 0 ? faturamento / quantidadeNotas : 0,
+      produtosDistintos: produtosSet.size,
+      pctComGrupoIbsCbs: quantidadeNotas > 0 ? (notasComGrupo / quantidadeNotas) * 100 : 0,
+      pctProducaoPropria: faturamento > 0 ? (valorPropria / faturamento) * 100 : 0,
+      pctRevenda: faturamento > 0 ? (valorRevenda / faturamento) * 100 : 0,
+      pctST: faturamento > 0 ? (valorST / faturamento) * 100 : 0,
+      pctNaoPresencial: quantidadeNotas > 0 ? (notasNaoPresenciais / quantidadeNotas) * 100 : 0,
+      valorDevolvido,
+      quantidadeDevolucoes,
+      pctDevolvido: faturamento > 0 ? (valorDevolvido / faturamento) * 100 : 0,
+    };
+  };
+
+  const mapaFiscal = useMemo(() => {
+    if (!mainCnpj) return null;
+    const notasDoPeriodo = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    const saidas = notasDoPeriodo.filter(xml => xml.tpNF !== '0');
+    if (saidas.length === 0) return null;
+    const agregado = calcularMapaFiscalAgregado(notasDoPeriodo);
+
+    return {
+      faturamento: faturamentoTotal,
+      quantidadeNotas: saidas.length,
+      ticketMedio: faturamentoTotal / saidas.length,
+      produtosDistintos: auditoriaCadastroProdutos.totalProdutos,
+      pctComGrupoIbsCbs: auditoriaIbsCbs.totalNotas > 0 ? auditoriaIbsCbs.pctComGrupo : null,
+      pctConformeCclasstrib: auditoriaClassTrib.totalItens > 0
+        ? (auditoriaClassTrib.itensOk / auditoriaClassTrib.totalItens) * 100
+        : null,
+      cadastrosDivergentes: auditoriaCadastroProdutos.mudancas.length + produtosSuspeitos.nomeDuplicado.length,
+      produtosSuspeitosTotal: produtosSuspeitos.ncmZerado.length + produtosSuspeitos.cfopMisto.length,
+      pctNaoPresencial: agregado.pctNaoPresencial,
+      pctDevolvido: agregado.pctDevolvido,
+      valorDevolvido: agregado.valorDevolvido,
+      quantidadeDevolucoes: agregado.quantidadeDevolucoes,
+    };
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas, faturamentoTotal, auditoriaCadastroProdutos, auditoriaIbsCbs, auditoriaClassTrib, produtosSuspeitos]);
+
+  // Comparativo mensal: a mesma agregação do Mapa Fiscal, mas pra TODOS os
+  // meses de uma vez (uma passada só por xmlList, sem depender do filterMes
+  // atual) — é o que permite comparar os meses lado a lado com variação %.
+  const mapaFiscalPorMes = useMemo(() => {
+    if (!mainCnpj) return [];
+    const porMes = new Map<string, XmlData[]>();
+
+    xmlList.forEach(xml => {
+      if (xml.tipo !== 'nfe' || xml.emitCnpj !== mainCnpj) return;
+      if (!xml.protocolo) return;
+      if (xml.chave && chavesCanceladas.has(xml.chave)) return;
+      const mes = getMonthYear(xml.data);
+      if (!mes) return;
+      const lista = porMes.get(mes);
+      if (lista) lista.push(xml); else porMes.set(mes, [xml]);
+    });
+
+    return Array.from(porMes.entries())
+      .map(([mes, notas]) => ({ mes, ...calcularMapaFiscalAgregado(notas) }))
+      .sort((a, b) => {
+        const [nomeA, anoA] = a.mes.split('/');
+        const [nomeB, anoB] = b.mes.split('/');
+        const chaveA = `${anoA}${String(MESES.indexOf(nomeA)).padStart(2, '0')}`;
+        const chaveB = `${anoB}${String(MESES.indexOf(nomeB)).padStart(2, '0')}`;
+        return chaveA.localeCompare(chaveB);
+      });
+  }, [xmlList, mainCnpj, chavesCanceladas]);
+
+  // Séries por mês: NÃO é um detalhamento rico (isso já vive no Comparativo
+  // Mensal) — é só a contagem de notas de cada série (+ modelo, pra não
+  // confundir série "1" do NF-e com série "1" da NFC-e) em cada mês, lado a
+  // lado. Objetivo bem pontual: o analista bater o olho numa linha (uma
+  // série) e notar que ela sumiu — ou é nova — no mês mais recente, algo que
+  // some dentro de qualquer métrica agregada por mês.
+  // Inclui SAÍDA e ENTRADA-própria (tpNF=0) — ao contrário do resto do Mapa
+  // Fiscal, aqui não é sobre faturamento. Um cliente pode reservar uma série
+  // inteira só pra devolução/transferência recebida (entrada própria); se
+  // essa série fosse filtrada fora, ela sumiria da lista inteira (não só uma
+  // célula), justamente o tipo de "sumiço" que essa tabela existe pra pegar.
+  const matrizSeriePorMes = useMemo(() => {
+    const vazio = { series: [] as string[], meses: [] as string[], matriz: new Map<string, Map<string, number>>() };
+    if (!mainCnpj) return vazio;
+    const seriesSet = new Set<string>();
+    const mesesSet = new Set<string>();
+    const matriz = new Map<string, Map<string, number>>();
+
+    xmlList.forEach(xml => {
+      if (xml.tipo !== 'nfe' || xml.emitCnpj !== mainCnpj) return;
+      if (!xml.protocolo) return;
+      if (xml.chave && chavesCanceladas.has(xml.chave)) return;
+      const mes = getMonthYear(xml.data);
+      if (!mes) return;
+      const serie = `Série ${xml.serie || '?'}${xml.modelo ? ` (mod. ${xml.modelo})` : ''}`;
+      seriesSet.add(serie);
+      mesesSet.add(mes);
+      let porMes = matriz.get(serie);
+      if (!porMes) { porMes = new Map(); matriz.set(serie, porMes); }
+      porMes.set(mes, (porMes.get(mes) || 0) + 1);
+    });
+
+    const meses = Array.from(mesesSet).sort((a, b) => {
+      const [nomeA, anoA] = a.split('/');
+      const [nomeB, anoB] = b.split('/');
+      const chaveA = `${anoA}${String(MESES.indexOf(nomeA)).padStart(2, '0')}`;
+      const chaveB = `${anoB}${String(MESES.indexOf(nomeB)).padStart(2, '0')}`;
+      return chaveA.localeCompare(chaveB);
+    });
+    const series = Array.from(seriesSet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    return { series, meses, matriz };
+  }, [xmlList, mainCnpj, chavesCanceladas]);
+
+  // Ranking de Produtos: quem mais vende, e qual a origem de cada um (própria
+  // vs revenda) — responde "quais produtos compõem a produção própria" e dá
+  // um raio-X de gestão além do fiscal. Valor é a soma de vProd dos itens
+  // (não o valor da nota), então pode divergir um pouco do faturamento
+  // oficial quando há desconto/frete não rateado por item.
+  // Núcleo do ranking, isolado pra poder rodar tanto no período filtrado
+  // inteiro (rankingProdutos) quanto mês a mês (rankingProdutosPorMes) sem
+  // duplicar a lógica de agregação.
+  // Quantidade por unidade — nunca soma qCom cru: "5 KG + 3 UN" não é 8 de
+  // nada. Se o produto só usa uma unidade, é um número limpo; se usa mais de
+  // uma, cada unidade fica separada (front decide como mostrar isso).
+  type QuantidadePorUnidade = { unidade: string; quantidade: number };
+  type ProdutoRanking = { cProd: string; xProd: string; valor: number; porUnidade: QuantidadePorUnidade[]; origem: 'propria' | 'revenda' | 'misto' | 'indefinida'; pct: number; pctAcumulado: number; classeAbc: 'A' | 'B' | 'C' };
+  const calcularRankingDeNotas = (notas: XmlData[]): { produtos: ProdutoRanking[]; faturamentoConsiderado: number } => {
+    type Acum = { cProd: string; xProd: string; valor: number; porUnidade: Map<string, number>; origemPropria: number; origemRevenda: number };
+    const mapa = new Map<string, Acum>();
+    notas.forEach(xml => {
+      const ex = getNotaExtract(xml);
+      if (!ex) return;
+      ex.dets.forEach(det => {
+        if (!det.cProd) return;
+        let p = mapa.get(det.cProd);
+        if (!p) {
+          p = { cProd: det.cProd, xProd: det.xProd || '(sem descrição)', valor: 0, porUnidade: new Map(), origemPropria: 0, origemRevenda: 0 };
+          mapa.set(det.cProd, p);
+        }
+        p.xProd = det.xProd || p.xProd;
+        p.valor += det.vProd;
+        const unidade = det.uCom || '(sem unidade)';
+        p.porUnidade.set(unidade, (p.porUnidade.get(unidade) || 0) + det.qCom);
+        const origem = classificarOrigemCfop(det.cfop);
+        if (origem === 'propria') p.origemPropria++;
+        else if (origem === 'revenda') p.origemRevenda++;
+      });
+    });
+
+    const faturamentoConsiderado = Array.from(mapa.values()).reduce((s, p) => s + p.valor, 0);
+
+    const base = Array.from(mapa.values())
+      .map(p => ({
+        cProd: p.cProd, xProd: p.xProd, valor: p.valor,
+        porUnidade: Array.from(p.porUnidade.entries())
+          .map(([unidade, quantidade]) => ({ unidade, quantidade }))
+          .sort((a, b) => b.quantidade - a.quantidade),
+        origem: (p.origemPropria > 0 && p.origemRevenda > 0) ? 'misto' as const
+          : p.origemPropria > 0 ? 'propria' as const
+          : p.origemRevenda > 0 ? 'revenda' as const
+          : 'indefinida' as const,
+        pct: faturamentoConsiderado > 0 ? (p.valor / faturamentoConsiderado) * 100 : 0,
+      }))
+      .sort((a, b) => b.valor - a.valor);
+
+    // Curva ABC (Pareto clássico): A = até 80% do faturamento acumulado,
+    // B = até 95%, C = o resto — cada produto carrega o % acumulado até ele
+    // na lista ordenada por valor, não o % individual.
+    let acumulado = 0;
+    const produtos: ProdutoRanking[] = base.map(p => {
+      acumulado += p.pct;
+      const classeAbc: 'A' | 'B' | 'C' = acumulado <= 80 ? 'A' : acumulado <= 95 ? 'B' : 'C';
+      return { ...p, pctAcumulado: acumulado, classeAbc };
+    });
+
+    return { produtos, faturamentoConsiderado };
+  };
+
+  // "5 KG + 3 UN" nunca vira "8" — cada unidade fica separada; só junta as
+  // parcelas num texto quando o produto genuinamente usa mais de uma.
+  const formatarQuantidadePorUnidade = (porUnidade: QuantidadePorUnidade[]): string => {
+    const comValor = porUnidade.filter(u => u.quantidade > 0);
+    if (comValor.length === 0) return '—';
+    return comValor
+      .map(u => `${u.quantidade.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${u.unidade}`)
+      .join(' + ');
+  };
+
+  const rankingProdutos = useMemo(() => {
+    const vazio = { produtos: [] as ProdutoRanking[], faturamentoConsiderado: 0 };
+    if (!mainCnpj) return vazio;
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    if (saidas.length === 0) return vazio;
+    return calcularRankingDeNotas(saidas);
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
+
+  // Mesmo ranking, mas um por mês — só usado na exportação, pra quando
+  // "Todos" está selecionado com 2+ meses: sem isso, o Excel soma tudo junto
+  // e esconde se o produto mais vendido mudou de um mês pro outro.
+  const rankingProdutosPorMes = useMemo(() => {
+    type PorMes = Map<string, { produtos: ProdutoRanking[]; faturamentoConsiderado: number }>;
+    if (!mainCnpj) return new Map() as PorMes;
+    const porMes = new Map<string, XmlData[]>();
+    xmlList.forEach(xml => {
+      if (xml.tipo !== 'nfe' || xml.emitCnpj !== mainCnpj || xml.tpNF === '0' || !xml.rawXml) return;
+      if (!xml.protocolo) return;
+      if (xml.chave && chavesCanceladas.has(xml.chave)) return;
+      const mes = getMonthYear(xml.data);
+      if (!mes) return;
+      const lista = porMes.get(mes);
+      if (lista) lista.push(xml); else porMes.set(mes, [xml]);
+    });
+    const resultado = new Map<string, { produtos: ProdutoRanking[]; faturamentoConsiderado: number }>();
+    porMes.forEach((notas, mes) => resultado.set(mes, calcularRankingDeNotas(notas)));
+    return resultado;
+  }, [xmlList, mainCnpj, chavesCanceladas]);
+
+  // Exporta o ranking respeitando o filtro de origem selecionado na tela (se
+  // estiver em "Todos", exporta todos) — a tela só desenha os 20 primeiros,
+  // isso aqui exporta a lista inteira, útil quando o catálogo é grande.
+  const exportarRankingProdutosExcel = () => {
+    const origemLabelExport: Record<string, string> = { propria: 'Produção própria', revenda: 'Revenda', misto: 'Misto', indefinida: 'Indefinida' };
+    const aplicarFiltro = (produtos: ProdutoRanking[]) =>
+      filtroOrigemRanking === 'todos' ? produtos : produtos.filter(p => p.origem === filtroOrigemRanking);
+
+    const montarAba = (produtos: ProdutoRanking[]) => {
+      const linhas = aplicarFiltro(produtos);
+      const aoa: (string | number)[][] = [
+        ['#', 'Produto', 'cProd', 'Origem', 'Quantidade', 'Valor (vProd)', '% do Total', '% Acumulado', 'Curva ABC'],
+      ];
+      linhas.forEach((p, i) => {
+        // Quantidade some como texto de propósito — "5 KG + 3 UN" não é uma
+        // soma válida, então não faz sentido fingir que é um número só.
+        aoa.push([i + 1, p.xProd, p.cProd, origemLabelExport[p.origem], formatarQuantidadePorUnidade(p.porUnidade), p.valor, Math.round(p.pct * 10) / 10, Math.round(p.pctAcumulado * 10) / 10, p.classeAbc]);
+      });
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 5 }, { wch: 36 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 10 }];
+      // Formato de milhar com vírgula decimal (padrão BR) nas colunas de
+      // valor e %, senão sai "44992,47" sem separador de milhar.
+      for (let linha = 0; linha < linhas.length; linha++) {
+        const celValor = XLSX.utils.encode_cell({ r: linha + 1, c: 5 });
+        if (ws[celValor]) ws[celValor].z = '#,##0.00';
+        const celPct = XLSX.utils.encode_cell({ r: linha + 1, c: 6 });
+        if (ws[celPct]) ws[celPct].z = '#,##0.0';
+        const celPctAcum = XLSX.utils.encode_cell({ r: linha + 1, c: 7 });
+        if (ws[celPctAcum]) ws[celPctAcum].z = '#,##0.0';
+      }
+      return ws;
+    };
+
+    const wb = XLSX.utils.book_new();
+
+    // "Todos" com 2+ meses no lote: uma aba por mês (pra dar pra comparar se
+    // o produto mais vendido mudou), mais uma aba "Total" com tudo somado —
+    // sem isso, o Excel escondia justamente essa diferença mês a mês.
+    if (filterMes === 'Todos' && rankingProdutosPorMes.size >= 2) {
+      const mesesOrdenados: string[] = Array.from(rankingProdutosPorMes.keys() as IterableIterator<string>).sort((a: string, b: string) => {
+        const [nomeA, anoA] = a.split('/');
+        const [nomeB, anoB] = b.split('/');
+        const chaveA = `${anoA}${String(MESES.indexOf(nomeA)).padStart(2, '0')}`;
+        const chaveB = `${anoB}${String(MESES.indexOf(nomeB)).padStart(2, '0')}`;
+        return chaveA.localeCompare(chaveB);
+      });
+      mesesOrdenados.forEach(mes => {
+        const dados = rankingProdutosPorMes.get(mes);
+        if (!dados) return;
+        // "/" não é permitido em nome de aba do Excel.
+        const nomeAba = mes.replace('/', ' ').slice(0, 31);
+        XLSX.utils.book_append_sheet(wb, montarAba(dados.produtos), nomeAba);
+      });
+      XLSX.utils.book_append_sheet(wb, montarAba(rankingProdutos.produtos), 'Total (Todos os Meses)'.slice(0, 31));
+    } else {
+      XLSX.utils.book_append_sheet(wb, montarAba(rankingProdutos.produtos), 'Ranking Produtos');
+    }
+
+    XLSX.writeFile(wb, nomeArquivoExport('ranking_produtos', 'xlsx'), { compression: true });
+  };
+
+  // Top NCMs: qual categoria fiscal mais fatura no período — concentração de
+  // faturamento por NCM ajuda a enxergar risco de ST/IBS-CBS por categoria,
+  // não só por produto isolado. xProdAmostra é só um produto real daquele
+  // NCM, pra dar contexto — o NCM sozinho (8 dígitos) não diz muita coisa.
+  type NcmRanking = { ncm: string; xProdAmostra: string; valor: number; produtosDistintos: number; pct: number };
+  const rankingNcm = useMemo(() => {
+    const vazio = { ncms: [] as NcmRanking[], faturamentoConsiderado: 0 };
+    if (!mainCnpj) return vazio;
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    if (saidas.length === 0) return vazio;
+
+    type Acum = { ncm: string; xProdAmostra: string; valor: number; produtos: Set<string> };
+    const mapa = new Map<string, Acum>();
+    saidas.forEach(xml => {
+      const ex = getNotaExtract(xml);
+      if (!ex) return;
+      ex.dets.forEach(det => {
+        const ncm = det.ncm || '(vazio)';
+        let a = mapa.get(ncm);
+        if (!a) { a = { ncm, xProdAmostra: det.xProd || '(sem descrição)', valor: 0, produtos: new Set() }; mapa.set(ncm, a); }
+        a.valor += det.vProd;
+        if (det.cProd) a.produtos.add(det.cProd);
+      });
+    });
+
+    const faturamentoConsiderado = Array.from(mapa.values()).reduce((s, a) => s + a.valor, 0);
+    const ncms: NcmRanking[] = Array.from(mapa.values())
+      .map(a => ({
+        ncm: a.ncm, xProdAmostra: a.xProdAmostra, valor: a.valor,
+        produtosDistintos: a.produtos.size,
+        pct: faturamentoConsiderado > 0 ? (a.valor / faturamentoConsiderado) * 100 : 0,
+      }))
+      .sort((a, b) => b.valor - a.valor);
+
+    return { ncms, faturamentoConsiderado };
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
+
+  const exportarRankingNcmExcel = () => {
+    const aoa: (string | number)[][] = [
+      ['#', 'NCM', 'Produto (amostra)', 'Produtos Distintos', 'Valor', '% do Total'],
+    ];
+    rankingNcm.ncms.forEach((n, i) => {
+      aoa.push([i + 1, n.ncm, n.xProdAmostra, n.produtosDistintos, n.valor, Math.round(n.pct * 10) / 10]);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 5 }, { wch: 14 }, { wch: 36 }, { wch: 16 }, { wch: 14 }, { wch: 10 }];
+    for (let linha = 0; linha < rankingNcm.ncms.length; linha++) {
+      const celValor = XLSX.utils.encode_cell({ r: linha + 1, c: 4 });
+      if (ws[celValor]) ws[celValor].z = '#,##0.00';
+      const celPct = XLSX.utils.encode_cell({ r: linha + 1, c: 5 });
+      if (ws[celPct]) ws[celPct].z = '#,##0.0';
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Top NCMs');
+    XLSX.writeFile(wb, nomeArquivoExport('ranking_ncm', 'xlsx'), { compression: true });
+  };
+
+  // Sazonalidade: em que dia da semana e em que horário o faturamento (e o
+  // volume de notas) se concentra — direto pra decisão de escala/produção,
+  // sem precisar abrir nota por nota. Hora vem direto da string do dhEmi
+  // (posições 11-12, "HH"), sem passar por Date — já é o horário local do
+  // emitente, não precisa (e não deve) converter fuso.
+  const sazonalidade = useMemo(() => {
+    const vazio = {
+      porDiaSemana: [] as { dia: string; faturamento: number; quantidadeNotas: number }[],
+      porHora: [] as { hora: number; faturamento: number; quantidadeNotas: number }[],
+    };
+    if (!mainCnpj) return vazio;
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    if (saidas.length === 0) return vazio;
+
+    const acumDia = Array.from({ length: 7 }, () => ({ faturamento: 0, quantidadeNotas: 0 }));
+    const acumHora = Array.from({ length: 24 }, () => ({ faturamento: 0, quantidadeNotas: 0 }));
+
+    saidas.forEach(xml => {
+      const dataStr = xml.data || '';
+      if (dataStr.length < 10) return;
+      const valor = parseFloat(xml.valor || '0') || 0;
+
+      const dia = diaDaSemana(dataStr.slice(0, 10));
+      acumDia[dia].faturamento += valor;
+      acumDia[dia].quantidadeNotas++;
+
+      const hora = parseInt(dataStr.slice(11, 13), 10);
+      if (!isNaN(hora) && hora >= 0 && hora < 24) {
+        acumHora[hora].faturamento += valor;
+        acumHora[hora].quantidadeNotas++;
+      }
+    });
+
+    return {
+      porDiaSemana: acumDia.map((a, i) => ({ dia: DIAS_SEMANA[i], ...a })),
+      porHora: acumHora.map((a, i) => ({ hora: i, ...a })),
+    };
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
+
+  // Devoluções: produto a produto, quem mais volta — os totais (valor, %,
+  // quantidade de notas) já vêm prontos de mapaFiscal (mesma agregação,
+  // única fonte da verdade pro card resumo e pro comparativo); isso aqui é só
+  // o detalhamento por produto, que exige abrir item a item.
+  type ProdutoDevolvido = { cProd: string; xProd: string; valor: number; porUnidade: QuantidadePorUnidade[]; pct: number };
+  const devolucoesProdutos = useMemo(() => {
+    if (!mainCnpj) return [] as ProdutoDevolvido[];
+    const entradasProprias = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF === '0' && xml.rawXml &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    if (entradasProprias.length === 0) return [];
+
+    type Acum = { cProd: string; xProd: string; valor: number; porUnidade: Map<string, number> };
+    const mapa = new Map<string, Acum>();
+    let valorTotal = 0;
+
+    entradasProprias.forEach(xml => {
+      const ex = getNotaExtract(xml);
+      if (!ex) return;
+      ex.dets.forEach(det => {
+        if (!isCfopDevolucaoVenda(det.cfop) || !det.cProd) return;
+        valorTotal += det.vProd;
+        let p = mapa.get(det.cProd);
+        if (!p) { p = { cProd: det.cProd, xProd: det.xProd || '(sem descrição)', valor: 0, porUnidade: new Map() }; mapa.set(det.cProd, p); }
+        p.xProd = det.xProd || p.xProd;
+        p.valor += det.vProd;
+        const unidade = det.uCom || '(sem unidade)';
+        p.porUnidade.set(unidade, (p.porUnidade.get(unidade) || 0) + det.qCom);
+      });
+    });
+
+    return Array.from(mapa.values())
+      .map(p => ({
+        cProd: p.cProd, xProd: p.xProd, valor: p.valor,
+        porUnidade: Array.from(p.porUnidade.entries()).map(([unidade, quantidade]) => ({ unidade, quantidade })).sort((a, b) => b.quantidade - a.quantidade),
+        pct: valorTotal > 0 ? (p.valor / valorTotal) * 100 : 0,
+      }))
+      .sort((a, b) => b.valor - a.valor);
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
+
+  const exportarDevolucoesExcel = () => {
+    const aoa: (string | number)[][] = [
+      ['#', 'Produto', 'cProd', 'Quantidade Devolvida', 'Valor Devolvido', '% do Total Devolvido'],
+    ];
+    devolucoesProdutos.forEach((p, i) => {
+      aoa.push([i + 1, p.xProd, p.cProd, formatarQuantidadePorUnidade(p.porUnidade), p.valor, Math.round(p.pct * 10) / 10]);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 5 }, { wch: 36 }, { wch: 16 }, { wch: 18 }, { wch: 14 }, { wch: 12 }];
+    for (let linha = 0; linha < devolucoesProdutos.length; linha++) {
+      const celValor = XLSX.utils.encode_cell({ r: linha + 1, c: 4 });
+      if (ws[celValor]) ws[celValor].z = '#,##0.00';
+      const celPct = XLSX.utils.encode_cell({ r: linha + 1, c: 5 });
+      if (ws[celPct]) ws[celPct].z = '#,##0.0';
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Devolucoes');
+    XLSX.writeFile(wb, nomeArquivoExport('devolucoes', 'xlsx'), { compression: true });
+  };
+
+  // Relatório do Mapa Fiscal em janela própria pra imprimir/salvar como PDF —
+  // mesmo padrão do Laudo IBS/CBS (exportarLaudoIbsCbs): monta um HTML
+  // autocontido, abre em blob numa aba nova e dispara o print depois que a
+  // fonte carrega. Consolida TUDO que vive dentro do card Mapa Fiscal (resumo,
+  // comparativo mensal, séries por mês, ranking, NCMs, sazonalidade,
+  // devoluções) mais Mudanças de Cadastro — o card de auditoria de cadastro
+  // que fica logo abaixo, mas que o contador pediu junto no mesmo PDF.
+  const exportarRelatorioMapaFiscalPdf = () => {
+    if (!mapaFiscal) return;
+    const esc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const empresa = analysis?.[0]?.razaoSocial || notasSaida[0]?.razaoSocial || '';
+    const periodo = periodoParaNomeArquivo();
+    const hoje = new Date().toLocaleDateString('pt-BR');
+    const moeda = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const dataFmt = (d: string) => d.split('-').reverse().join('/');
+    const LIMITE_LISTA = 50;
+
+    const resumoItens: { label: string; valor: string }[] = [
+      { label: 'Faturamento', valor: moeda(mapaFiscal.faturamento) },
+      { label: 'Notas válidas', valor: String(mapaFiscal.quantidadeNotas) },
+      { label: 'Ticket médio', valor: moeda(mapaFiscal.ticketMedio) },
+      { label: 'Produtos distintos', valor: String(mapaFiscal.produtosDistintos) },
+    ];
+    if (mapaFiscal.pctComGrupoIbsCbs !== null) resumoItens.push({ label: 'Com grupo IBS/CBS', valor: `${formatarPct(mapaFiscal.pctComGrupoIbsCbs)}%` });
+    if (mapaFiscal.pctConformeCclasstrib !== null) resumoItens.push({ label: 'Conformidade cClassTrib', valor: `${formatarPct(mapaFiscal.pctConformeCclasstrib)}%` });
+    resumoItens.push(
+      { label: 'Cadastros divergentes', valor: String(mapaFiscal.cadastrosDivergentes) },
+      { label: 'Produtos suspeitos', valor: String(mapaFiscal.produtosSuspeitosTotal) },
+      { label: 'Devolvido', valor: `${formatarPct(mapaFiscal.pctDevolvido)}% (${moeda(mapaFiscal.valorDevolvido)})` },
+      { label: 'Não presencial', valor: `${formatarPct(mapaFiscal.pctNaoPresencial)}%` },
+    );
+    const htmlResumo = `
+      <div class="secao">
+        <h2>Resumo do período</h2>
+        <div class="grid-resumo">
+          ${resumoItens.map(r => `<div class="item-resumo"><div class="rotulo">${esc(r.label)}</div><div class="valor">${esc(r.valor)}</div></div>`).join('')}
+        </div>
+      </div>`;
+
+    const htmlComparativoMensal = mapaFiscalPorMes.length < 2 ? '' : (() => {
+      type Linha = { label: string; formato: 'moeda' | 'numero' | 'pct'; valor: (m: typeof mapaFiscalPorMes[number]) => number };
+      const linhas: Linha[] = [
+        { label: 'Faturamento', formato: 'moeda', valor: m => m.faturamento },
+        { label: 'Notas válidas', formato: 'numero', valor: m => m.quantidadeNotas },
+        { label: 'Ticket médio', formato: 'moeda', valor: m => m.ticketMedio },
+        { label: 'Produtos distintos', formato: 'numero', valor: m => m.produtosDistintos },
+        { label: 'Com grupo IBS/CBS', formato: 'pct', valor: m => m.pctComGrupoIbsCbs },
+        { label: 'Produção própria', formato: 'pct', valor: m => m.pctProducaoPropria },
+        { label: 'Revenda', formato: 'pct', valor: m => m.pctRevenda },
+        { label: 'Sujeito a ST', formato: 'pct', valor: m => m.pctST },
+        { label: 'Não presencial', formato: 'pct', valor: m => m.pctNaoPresencial },
+        { label: 'Devolvido', formato: 'pct', valor: m => m.pctDevolvido },
+      ];
+      const fmt = (v: number, formato: string) => formato === 'moeda' ? moeda(v) : formato === 'pct' ? `${formatarPct(v)}%` : String(v);
+      const linhasHtml = linhas.map(l => `
+        <tr>
+          <td>${esc(l.label)}</td>
+          ${mapaFiscalPorMes.map(m => `<td class="num">${esc(fmt(l.valor(m), l.formato))}</td>`).join('')}
+        </tr>`).join('');
+      return `
+        <div class="secao">
+          <h2>Comparativo mensal</h2>
+          <table>
+            <thead><tr><th>Indicador</th>${mapaFiscalPorMes.map(m => `<th class="num">${esc(m.mes)}</th>`).join('')}</tr></thead>
+            <tbody>${linhasHtml}</tbody>
+          </table>
+        </div>`;
+    })();
+
+    const htmlSeriesPorMes = (matrizSeriePorMes.series.length < 2 || matrizSeriePorMes.meses.length < 2) ? '' : (() => {
+      const linhasHtml = matrizSeriePorMes.series.map(serie => {
+        const porMes = matrizSeriePorMes.matriz.get(serie);
+        const totalSerie = porMes ? Array.from(porMes.values() as IterableIterator<number>).reduce((s: number, q: number) => s + q, 0) : 0;
+        const celulas = matrizSeriePorMes.meses.map(mes => {
+          const qtd = porMes?.get(mes) || 0;
+          const buraco = qtd === 0 && totalSerie > 0;
+          return `<td class="num${buraco ? ' erro-txt buraco' : ''}">${qtd > 0 ? qtd : '—'}</td>`;
+        }).join('');
+        return `<tr><td>${esc(serie)}</td>${celulas}</tr>`;
+      }).join('');
+      return `
+        <div class="secao">
+          <h2>Séries por mês</h2>
+          <div class="meta">Quantidade de notas válidas de cada série em cada mês. Célula em vermelho é uma série com movimento em outro mês do período, mas nenhuma nota neste mês.</div>
+          <table>
+            <thead><tr><th>Série</th>${matrizSeriePorMes.meses.map(mes => `<th class="num">${esc(mes)}</th>`).join('')}</tr></thead>
+            <tbody>${linhasHtml}</tbody>
+          </table>
+        </div>`;
+    })();
+
+    const htmlRanking = rankingProdutos.produtos.length === 0 ? '' : (() => {
+      const origemLabel: Record<string, string> = { propria: 'Produção própria', revenda: 'Revenda', misto: 'Misto', indefinida: 'Indefinida' };
+      const visiveis = rankingProdutos.produtos.slice(0, LIMITE_LISTA);
+      const linhasHtml = visiveis.map((p, i) => `
+        <tr>
+          <td class="num">${i + 1}</td>
+          <td>${esc(p.xProd)}</td>
+          <td class="mono">${esc(p.cProd)}</td>
+          <td>${esc(origemLabel[p.origem])}</td>
+          <td class="num">${esc(p.classeAbc)}</td>
+          <td class="num">${esc(formatarQuantidadePorUnidade(p.porUnidade))}</td>
+          <td class="num">${moeda(p.valor)}</td>
+          <td class="num">${formatarPct(p.pct)}%</td>
+        </tr>`).join('');
+      const qtdClasseA = rankingProdutos.produtos.filter(p => p.classeAbc === 'A').length;
+      return `
+        <div class="secao">
+          <h2>Ranking de produtos</h2>
+          <div class="meta">Curva ABC: ${qtdClasseA} produto(s) (Classe A) já somam 80% do faturamento do catálogo inteiro (${rankingProdutos.produtos.length} produto(s) distinto(s)).${rankingProdutos.produtos.length > LIMITE_LISTA ? ` Mostrando os ${LIMITE_LISTA} primeiros — lista completa no Excel.` : ''}</div>
+          <table>
+            <thead><tr><th>#</th><th>Produto</th><th>cProd</th><th>Origem</th><th class="num">ABC</th><th class="num">Quantidade</th><th class="num">Valor</th><th class="num">%</th></tr></thead>
+            <tbody>${linhasHtml}</tbody>
+          </table>
+        </div>`;
+    })();
+
+    const htmlNcm = rankingNcm.ncms.length === 0 ? '' : (() => {
+      const visiveis = rankingNcm.ncms.slice(0, LIMITE_LISTA);
+      const linhasHtml = visiveis.map((n, i) => `
+        <tr>
+          <td class="num">${i + 1}</td>
+          <td class="mono${n.ncm === '(vazio)' ? ' erro-txt' : ''}">${esc(n.ncm)}</td>
+          <td>${esc(n.xProdAmostra)}</td>
+          <td class="num">${n.produtosDistintos}</td>
+          <td class="num">${moeda(n.valor)}</td>
+          <td class="num">${formatarPct(n.pct)}%</td>
+        </tr>`).join('');
+      return `
+        <div class="secao">
+          <h2>Top NCMs</h2>
+          <div class="meta">${rankingNcm.ncms.length} NCM(s) distinto(s) no período.${rankingNcm.ncms.length > LIMITE_LISTA ? ` Mostrando os ${LIMITE_LISTA} primeiros — lista completa no Excel.` : ''}</div>
+          <table>
+            <thead><tr><th>#</th><th>NCM</th><th>Produto (amostra)</th><th class="num">Produtos</th><th class="num">Valor</th><th class="num">%</th></tr></thead>
+            <tbody>${linhasHtml}</tbody>
+          </table>
+        </div>`;
+    })();
+
+    const htmlSazonalidade = sazonalidade.porDiaSemana.every(d => d.quantidadeNotas === 0) ? '' : (() => {
+      const linhasDia = sazonalidade.porDiaSemana.map(d => `
+        <tr><td>${esc(d.dia)}</td><td class="num">${d.quantidadeNotas}</td><td class="num">${moeda(d.faturamento)}</td></tr>`).join('');
+      const horasComMovimento = sazonalidade.porHora.filter(h => h.quantidadeNotas > 0);
+      const linhasHora = horasComMovimento.map(h => `
+        <tr><td>${String(h.hora).padStart(2, '0')}h</td><td class="num">${h.quantidadeNotas}</td><td class="num">${moeda(h.faturamento)}</td></tr>`).join('');
+      return `
+        <div class="secao duas-colunas">
+          <div>
+            <h2>Sazonalidade — dia da semana</h2>
+            <table><thead><tr><th>Dia</th><th class="num">Notas</th><th class="num">Faturamento</th></tr></thead><tbody>${linhasDia}</tbody></table>
+          </div>
+          <div>
+            <h2>Sazonalidade — horário</h2>
+            <table><thead><tr><th>Hora</th><th class="num">Notas</th><th class="num">Faturamento</th></tr></thead><tbody>${linhasHora}</tbody></table>
+          </div>
+        </div>`;
+    })();
+
+    const htmlDevolucoes = mapaFiscal.quantidadeDevolucoes === 0 ? '' : (() => {
+      const visiveis = devolucoesProdutos.slice(0, LIMITE_LISTA);
+      const linhasHtml = visiveis.map((p, i) => `
+        <tr>
+          <td class="num">${i + 1}</td>
+          <td>${esc(p.xProd)}</td>
+          <td class="mono">${esc(p.cProd)}</td>
+          <td class="num">${esc(formatarQuantidadePorUnidade(p.porUnidade))}</td>
+          <td class="num">${moeda(p.valor)}</td>
+          <td class="num">${formatarPct(p.pct)}%</td>
+        </tr>`).join('');
+      return `
+        <div class="secao">
+          <h2>Devoluções</h2>
+          <div class="box alerta">🟡 ${formatarPct(mapaFiscal.pctDevolvido)}% do faturamento do período voltou como devolução de venda (${moeda(mapaFiscal.valorDevolvido)} em ${mapaFiscal.quantidadeDevolucoes} nota(s)).</div>
+          <table>
+            <thead><tr><th>#</th><th>Produto</th><th>cProd</th><th class="num">Qtd Devolvida</th><th class="num">Valor</th><th class="num">%</th></tr></thead>
+            <tbody>${linhasHtml}</tbody>
+          </table>
+        </div>`;
+    })();
+
+    const LIMITE_MUDANCAS = 100;
+    const htmlMudancas = auditoriaCadastroProdutos.mudancas.length === 0 ? '' : (() => {
+      const visiveis = auditoriaCadastroProdutos.mudancas.slice(0, LIMITE_MUDANCAS);
+      const linhasHtml = visiveis.map(m => {
+        const primeiro = m.valores[0];
+        const ultimo = m.valores[m.valores.length - 1];
+        return `
+          <tr>
+            <td class="mono">${esc(m.cProd)}</td>
+            <td>${esc(m.xProd)}</td>
+            <td>${esc(m.campo)}</td>
+            <td>${esc(primeiro.valor)} <span class="sub">(${dataFmt(primeiro.primeira)})</span></td>
+            <td>${esc(ultimo.valor)} <span class="sub">(${dataFmt(ultimo.ultima)})</span></td>
+          </tr>`;
+      }).join('');
+      return `
+        <div class="secao">
+          <h2>Mudanças de cadastro no período</h2>
+          <div class="meta">${auditoriaCadastroProdutos.mudancas.length} mudança(s) detectada(s) — o mesmo código de produto saiu com classificações diferentes em datas diferentes.${auditoriaCadastroProdutos.mudancas.length > LIMITE_MUDANCAS ? ` Mostrando as ${LIMITE_MUDANCAS} primeiras — lista completa (com o histórico intermediário) no Excel.` : ''}</div>
+          <table>
+            <thead><tr><th>cProd</th><th>Produto</th><th>Campo</th><th>Primeiro valor</th><th>Último valor</th></tr></thead>
+            <tbody>${linhasHtml}</tbody>
+          </table>
+        </div>`;
+    })();
+
+    const htmlNomeDuplicado = produtosSuspeitos.nomeDuplicado.length === 0 ? '' : (() => {
+      const visiveis = produtosSuspeitos.nomeDuplicado.slice(0, LIMITE_MUDANCAS);
+      const linhasHtml = visiveis.map(p => `
+        <tr>
+          <td>${esc(p.xProd)}</td>
+          <td class="mono">${p.cProds.map(c => esc(c.cProd)).join(', ')}</td>
+        </tr>`).join('');
+      return `
+        <div class="secao">
+          <h2>Nomes duplicados (mesmo nome, cProd diferente)</h2>
+          <div class="meta">${produtosSuspeitos.nomeDuplicado.length} nome(s) de produto associado(s) a mais de um código interno.${produtosSuspeitos.nomeDuplicado.length > LIMITE_MUDANCAS ? ` Mostrando os ${LIMITE_MUDANCAS} primeiros — lista completa (com amostra de nota) no Excel.` : ''}</div>
+          <table>
+            <thead><tr><th>Produto</th><th>cProd usados</th></tr></thead>
+            <tbody>${linhasHtml}</tbody>
+          </table>
+        </div>`;
+    })();
+
+    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/>
+<title>Mapa Fiscal ${esc(empresa)} ${esc(periodo)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'IBM Plex Sans', sans-serif; color: #17150F; background: #fff; font-size: 11px; padding: 32px 40px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .mono { font-family: ui-monospace, monospace; }
+  header { border-bottom: 2px solid #C9A227; padding-bottom: 14px; margin-bottom: 18px; }
+  h1 { font-family: 'Newsreader', serif; font-size: 22px; font-weight: 600; }
+  .empresa { font-size: 13px; font-weight: 700; margin-top: 8px; }
+  .head-meta { color: #78736A; margin-top: 3px; }
+  h2 { font-family: 'Newsreader', serif; font-size: 15px; font-weight: 600; border-left: 3px solid #C9A227; padding-left: 8px; margin: 0 0 4px; }
+  .secao { margin-top: 22px; page-break-inside: avoid; }
+  .secao.duas-colunas { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+  .meta { color: #78736A; margin-bottom: 6px; }
+  .grid-resumo { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 20px; margin-top: 6px; }
+  .item-resumo .rotulo { font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #A29C92; }
+  .item-resumo .valor { font-size: 14px; font-weight: 700; margin-top: 1px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #A29C92; border-bottom: 1px solid #E5E0D6; padding: 4px 8px 4px 0; }
+  th.num { text-align: right; }
+  td { border-bottom: 1px solid #EFEBE3; padding: 3.5px 8px 3.5px 0; vertical-align: top; }
+  .box { border-radius: 6px; padding: 8px 12px; margin: 6px 0; border: 1px solid; }
+  .box.ok { background: #f2f8f2; border-color: #cde3cd; color: #2c6e2c; }
+  .box.erro { background: #fdf2f2; border-color: #f0caca; color: #a33030; }
+  .box.alerta { background: #fdf8ec; border-color: #ecdcae; color: #8a6d1a; }
+  .erro-txt { color: #a33030; font-weight: 700; }
+  .buraco { background: #fdf2f2; }
+  .sub { opacity: 0.75; font-size: 10px; }
+  footer { margin-top: 28px; border-top: 1px solid #E5E0D6; padding-top: 10px; color: #78736A; font-size: 10px; line-height: 1.5; }
+  @media print { body { padding: 0; } .no-print { display: none; } }
+  @page { margin: 14mm; size: A4; }
+</style></head><body>
+<header>
+  <h1>Mapa Fiscal</h1>
+  <div class="empresa">${esc(empresa)}</div>
+  <div class="head-meta">CNPJ ${esc(mainCnpj || '')} · Período: ${esc(periodo)} · Gerado em ${hoje}</div>
+</header>
+
+${htmlResumo}
+${htmlComparativoMensal}
+${htmlSeriesPorMes}
+${htmlRanking}
+${htmlNcm}
+${htmlSazonalidade}
+${htmlDevolucoes}
+${htmlMudancas}
+${htmlNomeDuplicado}
+
+<footer>
+  <strong>Sobre este relatório.</strong> Faturamento, ticket médio e ranking consideram apenas notas de saída válidas (com protocolo de autorização, descontando cancelamento). Devolvido usa CFOP de devolução de venda (não finNFe) sobre notas de entrada emitidas pela própria empresa. Curva ABC (A até 80% do faturamento acumulado, B até 95%, C o resto) é calculada sobre o catálogo inteiro. Documento gerado pelo Sequência Fiscal.
+</footer>
+</body></html>`;
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, '_blank');
+    if (win) win.onload = () => setTimeout(() => win.print(), 400);
+  };
 
   // (3) Nota de homologação (tpAmb=2) misturada no lote de produção — não tem
   // validade fiscal nenhuma e infla o faturamento auditado silenciosamente.
@@ -5237,6 +6272,16 @@ ${secoesPorCodigo}
     setShowExportOptions(false);
     setShowPrintMenu(false);
     setShowExportXmlMenu(false);
+    setMapaFiscalDesbloqueado(false);
+    setShowMapaFiscal(false);
+    setShowComparativoMensal(false);
+    setShowComparativoSerie(false);
+    setShowMudancasCadastro(false);
+    setShowRankingProdutos(false);
+    setFiltroOrigemRanking('todos');
+    setShowRankingNcm(false);
+    setShowSazonalidade(false);
+    setShowDevolucoes(false);
   };
 
   const filteredAnalysis = useMemo(() => {
@@ -5815,7 +6860,12 @@ ${secoesPorCodigo}
         <div className="absolute inset-x-0 bottom-0 h-[3px] print:hidden" style={{background: 'linear-gradient(90deg, transparent, #C9A227 20%, #C9A227 80%, transparent)'}} />
         <div className="max-w-[1920px] mx-auto px-6 pt-8 pb-14 print:px-4 print:py-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div className="flex items-center gap-5 print:gap-4">
-            <img src="/logo-sf.png" alt="Contador de Padarias" className="h-16 print:h-14 object-contain" />
+            <img
+              src="/logo-sf.png"
+              alt="Contador de Padarias"
+              className="h-16 print:h-14 object-contain select-none"
+              onClick={() => setMapaFiscalDesbloqueado(v => !v)}
+            />
             <div className="hidden md:block w-px h-12 print:h-10 bg-white/15" />
             <div>
               <h1 className="font-serif text-3xl print:text-2xl font-semibold tracking-tight text-white mb-0.5 print:mb-0.5">Sequência Fiscal</h1>
@@ -6460,6 +7510,554 @@ ${secoesPorCodigo}
                   );
                 })()}
               </div>
+
+              {/* Mapa Fiscal: usado pouco, então fica pequeno e fechado por padrão —
+                  abaixo da fileira de métricas principal, não no topo da tela. */}
+              {mapaFiscal && mapaFiscalDesbloqueado && (
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700">
+                  <div className="flex items-center gap-3 px-6 py-3.5">
+                    <button
+                      onClick={() => setShowMapaFiscal(!showMapaFiscal)}
+                      className="flex-1 flex items-center justify-between gap-3 text-left"
+                    >
+                      <span className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
+                        Mapa Fiscal
+                      </span>
+                      <ChevronRight className={cn("w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0 transition-transform", showMapaFiscal && "rotate-90")} />
+                    </button>
+                    <button
+                      onClick={exportarRelatorioMapaFiscalPdf}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors shrink-0 no-print"
+                      title="Abre um relatório em uma janela pra imprimir/salvar como PDF — resumo, comparativo mensal, séries por mês, ranking, NCMs, sazonalidade, devoluções e mudanças de cadastro"
+                    >
+                      <Download className="w-3 h-3" />
+                      Exportar PDF
+                    </button>
+                  </div>
+
+                  {showMapaFiscal && (
+                    <div className="px-6 pb-6">
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-x-6 gap-y-5">
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Faturamento</div>
+                          <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">{formatarMoeda(mapaFiscal.faturamento)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Notas válidas</div>
+                          <div className="text-xl font-bold text-slate-800 dark:text-slate-100 mt-1">{mapaFiscal.quantidadeNotas}</div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Ticket médio</div>
+                          <div className="text-xl font-bold text-slate-800 dark:text-slate-100 mt-1">{formatarMoeda(mapaFiscal.ticketMedio)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Produtos distintos</div>
+                          <div className="text-xl font-bold text-slate-800 dark:text-slate-100 mt-1">{mapaFiscal.produtosDistintos}</div>
+                        </div>
+                        {mapaFiscal.pctComGrupoIbsCbs !== null && (
+                          <div>
+                            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Com grupo IBS/CBS</div>
+                            <div className={cn(
+                              "text-xl font-bold mt-1",
+                              mapaFiscal.pctComGrupoIbsCbs === 0 ? "text-rose-600 dark:text-rose-400" : mapaFiscal.pctComGrupoIbsCbs === 100 ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
+                            )}>{formatarPct(mapaFiscal.pctComGrupoIbsCbs)}%</div>
+                          </div>
+                        )}
+                        {mapaFiscal.pctConformeCclasstrib !== null && (
+                          <div>
+                            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Conformidade cClassTrib</div>
+                            <div className={cn(
+                              "text-xl font-bold mt-1",
+                              mapaFiscal.pctConformeCclasstrib === 100 ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
+                            )}>{formatarPct(mapaFiscal.pctConformeCclasstrib)}%</div>
+                          </div>
+                        )}
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Cadastros divergentes</div>
+                          <div className={cn("text-xl font-bold mt-1", mapaFiscal.cadastrosDivergentes > 0 ? "text-amber-600 dark:text-amber-400" : "text-slate-800 dark:text-slate-100")}>{mapaFiscal.cadastrosDivergentes}</div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Produtos suspeitos</div>
+                          <div className={cn("text-xl font-bold mt-1", mapaFiscal.produtosSuspeitosTotal > 0 ? "text-rose-600 dark:text-rose-400" : "text-slate-800 dark:text-slate-100")}>{mapaFiscal.produtosSuspeitosTotal}</div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Devolvido</div>
+                          <div className={cn("text-xl font-bold mt-1", mapaFiscal.pctDevolvido > 5 ? "text-rose-600 dark:text-rose-400" : mapaFiscal.pctDevolvido > 0 ? "text-amber-600 dark:text-amber-400" : "text-slate-800 dark:text-slate-100")} title={`${formatarMoeda(mapaFiscal.valorDevolvido)} em ${mapaFiscal.quantidadeDevolucoes} nota(s) de devolução`}>
+                            {formatarPct(mapaFiscal.pctDevolvido)}%
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Não presencial</div>
+                          <div className="text-xl font-bold mt-1 text-slate-800 dark:text-slate-100">{formatarPct(mapaFiscal.pctNaoPresencial)}%</div>
+                        </div>
+                      </div>
+
+                      {/* Comparativo Mensal: mês é uma sequência real, então cada célula pode
+                          dizer "subiu/desceu vs. o anterior" com segurança. */}
+                      {mapaFiscalPorMes.length >= 2 && (() => {
+                        type ItemComparativo = {
+                          chave: string; faturamento: number; quantidadeNotas: number; ticketMedio: number;
+                          produtosDistintos: number; pctComGrupoIbsCbs: number; pctProducaoPropria: number;
+                          pctRevenda: number; pctST: number; pctNaoPresencial: number; pctDevolvido: number;
+                        };
+                        type Linha = { label: string; formato: 'moeda' | 'numero' | 'pct'; valor: (m: ItemComparativo) => number };
+                        const linhas: Linha[] = [
+                          { label: 'Faturamento', formato: 'moeda', valor: m => m.faturamento },
+                          { label: 'Notas válidas', formato: 'numero', valor: m => m.quantidadeNotas },
+                          { label: 'Ticket médio', formato: 'moeda', valor: m => m.ticketMedio },
+                          { label: 'Produtos distintos', formato: 'numero', valor: m => m.produtosDistintos },
+                          { label: 'Com grupo IBS/CBS', formato: 'pct', valor: m => m.pctComGrupoIbsCbs },
+                          { label: 'Produção própria', formato: 'pct', valor: m => m.pctProducaoPropria },
+                          { label: 'Revenda', formato: 'pct', valor: m => m.pctRevenda },
+                          { label: 'Sujeito a ST', formato: 'pct', valor: m => m.pctST },
+                          { label: 'Não presencial', formato: 'pct', valor: m => m.pctNaoPresencial },
+                          { label: 'Devolvido', formato: 'pct', valor: m => m.pctDevolvido },
+                        ];
+                        const formatar = (v: number, formato: string) =>
+                          formato === 'moeda' ? formatarMoeda(v) : formato === 'pct' ? `${formatarPct(v)}%` : String(v);
+                        const dados: ItemComparativo[] = mapaFiscalPorMes.map(m => ({ chave: m.mes, ...m }));
+
+                        return (
+                          <div className="border-t border-slate-100 dark:border-slate-800 mt-6 pt-5">
+                            <button
+                              onClick={() => setShowComparativoMensal(!showComparativoMensal)}
+                              className="w-full flex items-center justify-between gap-3 text-left"
+                            >
+                              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                Comparativo Mensal ({mapaFiscalPorMes.length} meses)
+                              </span>
+                              <ChevronRight className={cn("w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0 transition-transform", showComparativoMensal && "rotate-90")} />
+                            </button>
+                            {showComparativoMensal && (
+                              <div className="mt-4">
+                                <div className="overflow-auto max-h-[420px] border border-slate-200 dark:border-slate-800 rounded-lg">
+                                  <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800/60">
+                                      <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                                        <th className="py-2 pr-3 pl-3 sticky left-0 bg-slate-50 dark:bg-slate-800/60">Indicador</th>
+                                        {dados.map(m => (
+                                          <th key={m.chave} className="py-2 pr-3 text-right whitespace-nowrap">{m.chave}</th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {linhas.map((l, i) => (
+                                        <tr key={i} className={cn("border-b border-slate-100 dark:border-slate-800 last:border-0", i % 2 === 1 && "bg-slate-50/70 dark:bg-slate-800/20")}>
+                                          <td className={cn("py-2 pr-3 pl-3 font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap sticky left-0", i % 2 === 1 ? "bg-slate-50 dark:bg-slate-900" : "bg-white dark:bg-slate-900")}>{l.label}</td>
+                                          {dados.map((m, j) => {
+                                            const atual = l.valor(m);
+                                            const anterior = j > 0 ? l.valor(dados[j - 1]) : null;
+                                            const variacao = anterior === null ? null
+                                              : anterior !== 0 ? ((atual - anterior) / anterior) * 100 : (atual !== 0 ? Infinity : 0);
+                                            const subiu = variacao !== null && variacao > 0.05;
+                                            const desceu = variacao !== null && variacao < -0.05;
+                                            return (
+                                              <td key={m.chave} className="py-2 pr-3 text-right tabular-nums whitespace-nowrap">
+                                                <span className="text-slate-600 dark:text-slate-400">{formatar(atual, l.formato)}</span>
+                                                {variacao !== null && Number.isFinite(variacao) && (
+                                                  <span className={cn(
+                                                    "ml-1.5 text-[10px] font-bold",
+                                                    subiu ? "text-emerald-600 dark:text-emerald-400" : desceu ? "text-rose-600 dark:text-rose-400" : "text-slate-300 dark:text-slate-600"
+                                                  )}>
+                                                    {variacao > 0 ? '+' : ''}{formatarPct(variacao)}%
+                                                  </span>
+                                                )}
+                                              </td>
+                                            );
+                                          })}
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                                <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-2">
+                                  A variação em cada célula é contra o mês anterior na mesma linha. Produção própria, revenda e ST são fatias independentes do faturamento — um item pode ser própria+ST ou revenda+ST ao mesmo tempo, então as três não precisam somar 100%. Devolvido usa o CFOP de devolução de venda (não finNFe), sobre notas de entrada emitidas pela própria empresa.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Séries por Mês: NÃO é um comparativo de métricas (isso é o card acima)
+                          — é só a contagem de notas de cada série em cada mês, lado a lado, pra
+                          o analista notar de cara se uma série que sempre aparecia sumiu (ou uma
+                          nova apareceu) no mês mais recente. Célula zerada só é marcada como
+                          "buraco" quando a série TEM movimento em algum outro mês do período —
+                          senão qualquer série nova apareceria marcada nos meses antes dela existir. */}
+                      {matrizSeriePorMes.series.length >= 2 && matrizSeriePorMes.meses.length >= 2 && (
+                        <div className="border-t border-slate-100 dark:border-slate-800 mt-6 pt-5">
+                          <button
+                            onClick={() => setShowComparativoSerie(!showComparativoSerie)}
+                            className="w-full flex items-center justify-between gap-3 text-left"
+                          >
+                            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                              Séries por Mês ({matrizSeriePorMes.series.length} séries)
+                            </span>
+                            <ChevronRight className={cn("w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0 transition-transform", showComparativoSerie && "rotate-90")} />
+                          </button>
+                          {showComparativoSerie && (
+                            <div className="mt-4">
+                              <div className="overflow-auto max-h-[420px] border border-slate-200 dark:border-slate-800 rounded-lg">
+                                <table className="w-full text-xs">
+                                  <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800/60">
+                                    <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                                      <th className="py-2 pr-3 pl-3 sticky left-0 bg-slate-50 dark:bg-slate-800/60">Série</th>
+                                      {matrizSeriePorMes.meses.map(mes => (
+                                        <th key={mes} className="py-2 pr-3 text-right whitespace-nowrap border-l border-slate-200 dark:border-slate-700">{mes}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {matrizSeriePorMes.series.map((serie, i) => {
+                                      const porMes = matrizSeriePorMes.matriz.get(serie);
+                                      const totalSerie = porMes
+                                        ? Array.from(porMes.values() as IterableIterator<number>).reduce((s: number, q: number) => s + q, 0)
+                                        : 0;
+                                      return (
+                                        <tr key={serie} className={cn("border-b border-slate-100 dark:border-slate-800 last:border-0", i % 2 === 1 && "bg-slate-50/70 dark:bg-slate-800/20")}>
+                                          <td className={cn("py-2 pr-3 pl-3 font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap sticky left-0", i % 2 === 1 ? "bg-slate-50 dark:bg-slate-900" : "bg-white dark:bg-slate-900")}>{serie}</td>
+                                          {matrizSeriePorMes.meses.map(mes => {
+                                            const qtd = porMes?.get(mes) || 0;
+                                            const buraco = qtd === 0 && totalSerie > 0;
+                                            return (
+                                              <td
+                                                key={mes}
+                                                className={cn(
+                                                  "py-2 pr-3 text-right tabular-nums border-l border-slate-100 dark:border-slate-800",
+                                                  buraco ? "bg-rose-50 dark:bg-rose-950" : ""
+                                                )}
+                                                title={buraco ? `Série sem nenhuma nota em ${mes}, apesar de ter movimento em outros meses do período` : undefined}
+                                              >
+                                                {qtd > 0 ? (
+                                                  <span className="text-slate-600 dark:text-slate-400">{qtd}</span>
+                                                ) : (
+                                                  <span className={cn("font-bold", buraco ? "text-rose-500 dark:text-rose-400" : "text-slate-300 dark:text-slate-600")}>—</span>
+                                                )}
+                                              </td>
+                                            );
+                                          })}
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-2">
+                                Quantidade de notas válidas de cada série em cada mês. Célula em vermelho com "—" é uma série que tem movimento em outro mês do período mas nenhuma nota neste mês — vale confirmar se ela devia ter aparecido.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Ranking de Produtos: quem mais vende + origem (própria/revenda/misto) —
+                          responde de cara "quais produtos compõem a produção própria". */}
+                      {rankingProdutos.produtos.length > 0 && (() => {
+                        const contagem = { propria: 0, revenda: 0, misto: 0, indefinida: 0 };
+                        rankingProdutos.produtos.forEach(p => { contagem[p.origem]++; });
+                        const filtrados = filtroOrigemRanking === 'todos'
+                          ? rankingProdutos.produtos
+                          : rankingProdutos.produtos.filter(p => p.origem === filtroOrigemRanking);
+                        const LIMITE = 20;
+                        const visiveis = filtrados.slice(0, LIMITE);
+                        const origemLabel = { propria: 'Produção própria', revenda: 'Revenda', misto: 'Misto', indefinida: 'Indefinida' };
+                        const origemCor = {
+                          propria: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400',
+                          revenda: 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-400',
+                          misto: 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-400',
+                          indefinida: 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
+                        };
+                        const classeAbcCor = {
+                          A: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400',
+                          B: 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-400',
+                          C: 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
+                        };
+                        const qtdClasseA = rankingProdutos.produtos.filter(p => p.classeAbc === 'A').length;
+                        return (
+                          <div className="border-t border-slate-100 dark:border-slate-800 mt-6 pt-5">
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => setShowRankingProdutos(!showRankingProdutos)}
+                                className="flex-1 flex items-center justify-between gap-3 text-left"
+                              >
+                                <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                  Ranking de Produtos ({rankingProdutos.produtos.length})
+                                </span>
+                                <ChevronRight className={cn("w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0 transition-transform", showRankingProdutos && "rotate-90")} />
+                              </button>
+                              <button
+                                onClick={exportarRankingProdutosExcel}
+                                className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline shrink-0 no-print"
+                                title="Exportar o ranking (respeitando o filtro de origem atual) em Excel"
+                              >
+                                Exportar Excel
+                              </button>
+                            </div>
+
+                            {showRankingProdutos && (
+                              <div className="mt-4">
+                                <div className="flex items-center gap-2 mb-3 flex-wrap text-xs">
+                                  {(['todos', 'propria', 'revenda', 'misto'] as const).map(f => {
+                                    if (f !== 'todos' && contagem[f] === 0) return null;
+                                    const label = f === 'todos' ? `Todos (${rankingProdutos.produtos.length})` : `${origemLabel[f]} (${contagem[f]})`;
+                                    return (
+                                      <button
+                                        key={f}
+                                        onClick={() => setFiltroOrigemRanking(f)}
+                                        className={cn(
+                                          "px-3 py-1.5 rounded-full font-semibold border transition-colors",
+                                          filtroOrigemRanking === f
+                                            ? "bg-slate-800 text-white border-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100"
+                                            : "bg-white text-slate-500 border-slate-200 hover:border-slate-300 dark:bg-slate-900 dark:text-slate-400 dark:border-slate-700"
+                                        )}
+                                      >
+                                        {label}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 mb-2">
+                                  Curva ABC: <strong>{qtdClasseA}</strong> produto(s) (Classe A) já somam 80% do faturamento do catálogo inteiro.
+                                </p>
+                                <div className="overflow-auto max-h-[420px] border border-slate-100 dark:border-slate-800 rounded-lg">
+                                  <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                                      <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                        <th className="py-1.5 pr-3 pl-3">#</th>
+                                        <th className="py-1.5 pr-3">Produto</th>
+                                        <th className="py-1.5 pr-3">cProd</th>
+                                        <th className="py-1.5 pr-3">Origem</th>
+                                        <th className="py-1.5 pr-3 text-center">Curva ABC</th>
+                                        <th className="py-1.5 pr-3 text-right">Qtd</th>
+                                        <th className="py-1.5 pr-3 text-right">Valor</th>
+                                        <th className="py-1.5 pr-3 text-right">%</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {visiveis.map((p, i) => (
+                                        <tr key={p.cProd} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                          <td className="py-1.5 pr-3 pl-3 text-slate-400 dark:text-slate-500 tabular-nums">{i + 1}</td>
+                                          <td className="py-1.5 pr-3 text-slate-700 dark:text-slate-300">{p.xProd}</td>
+                                          <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-500">{p.cProd}</td>
+                                          <td className="py-1.5 pr-3">
+                                            <span className={cn("text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded", origemCor[p.origem])}>
+                                              {origemLabel[p.origem]}
+                                            </span>
+                                          </td>
+                                          <td className="py-1.5 pr-3 text-center" title={`${formatarPct(p.pctAcumulado)}% acumulado até este produto, ordenado por valor`}>
+                                            <span className={cn("text-[9px] font-bold px-1.5 py-0.5 rounded", classeAbcCor[p.classeAbc])}>{p.classeAbc}</span>
+                                          </td>
+                                          <td className="py-1.5 pr-3 text-right tabular-nums text-slate-600 dark:text-slate-400">{formatarQuantidadePorUnidade(p.porUnidade)}</td>
+                                          <td className="py-1.5 pr-3 text-right tabular-nums font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(p.valor)}</td>
+                                          <td className="py-1.5 pr-3 text-right tabular-nums text-slate-500 dark:text-slate-400">{formatarPct(p.pct)}%</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                                {filtrados.length > LIMITE && (
+                                  <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-2">
+                                    Mostrando os {LIMITE} primeiros de {filtrados.length} produtos nesse filtro.
+                                  </p>
+                                )}
+                                <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+                                  Valor é a soma dos itens (vProd), não o total da nota — pode divergir um pouco do faturamento quando há desconto ou frete não rateado por item. Origem "Misto" é o mesmo produto vendido ora como própria, ora como revenda — já listado em Produtos Suspeitos. Curva ABC (A até 80% acumulado, B até 95%, C o resto) é sempre calculada sobre o catálogo inteiro, não sobre o filtro de origem atual.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Top NCMs: concentração de faturamento por categoria fiscal, não só
+                          por produto — ajuda a enxergar risco de ST/IBS-CBS por NCM. */}
+                      {rankingNcm.ncms.length > 0 && (() => {
+                        const LIMITE_NCM = 20;
+                        const visiveisNcm = rankingNcm.ncms.slice(0, LIMITE_NCM);
+                        return (
+                          <div className="border-t border-slate-100 dark:border-slate-800 mt-6 pt-5">
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => setShowRankingNcm(!showRankingNcm)}
+                                className="flex-1 flex items-center justify-between gap-3 text-left"
+                              >
+                                <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                  Top NCMs ({rankingNcm.ncms.length})
+                                </span>
+                                <ChevronRight className={cn("w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0 transition-transform", showRankingNcm && "rotate-90")} />
+                              </button>
+                              <button
+                                onClick={exportarRankingNcmExcel}
+                                className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline shrink-0 no-print"
+                                title="Exportar a lista completa de NCMs em Excel"
+                              >
+                                Exportar Excel
+                              </button>
+                            </div>
+                            {showRankingNcm && (
+                              <div className="mt-4">
+                                <div className="overflow-auto max-h-[420px] border border-slate-100 dark:border-slate-800 rounded-lg">
+                                  <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                                      <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                        <th className="py-1.5 pr-3 pl-3">#</th>
+                                        <th className="py-1.5 pr-3">NCM</th>
+                                        <th className="py-1.5 pr-3">Produto (amostra)</th>
+                                        <th className="py-1.5 pr-3 text-right">Produtos</th>
+                                        <th className="py-1.5 pr-3 text-right">Valor</th>
+                                        <th className="py-1.5 pr-3 text-right">%</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {visiveisNcm.map((n, i) => (
+                                        <tr key={n.ncm} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                          <td className="py-1.5 pr-3 pl-3 text-slate-400 dark:text-slate-500 tabular-nums">{i + 1}</td>
+                                          <td className={cn("py-1.5 pr-3 font-mono", n.ncm === '(vazio)' ? "text-rose-600 dark:text-rose-400 font-bold" : "text-slate-700 dark:text-slate-300")}>{n.ncm}</td>
+                                          <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.xProdAmostra}</td>
+                                          <td className="py-1.5 pr-3 text-right tabular-nums text-slate-500 dark:text-slate-400">{n.produtosDistintos}</td>
+                                          <td className="py-1.5 pr-3 text-right tabular-nums font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(n.valor)}</td>
+                                          <td className="py-1.5 pr-3 text-right tabular-nums text-slate-500 dark:text-slate-400">{formatarPct(n.pct)}%</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                                {rankingNcm.ncms.length > LIMITE_NCM && (
+                                  <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-2">
+                                    Mostrando os {LIMITE_NCM} primeiros de {rankingNcm.ncms.length} NCMs — exporte em Excel pra ver a lista completa.
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Sazonalidade: dia da semana e horário de pico — direto pra decisão
+                          de escala/produção, sem precisar abrir nota por nota. */}
+                      {sazonalidade.porDiaSemana.some(d => d.quantidadeNotas > 0) && (() => {
+                        const maxDia = Math.max(...sazonalidade.porDiaSemana.map(d => d.faturamento), 1);
+                        const horasComMovimento = sazonalidade.porHora.filter(h => h.quantidadeNotas > 0);
+                        const maxHora = Math.max(...horasComMovimento.map(h => h.faturamento), 1);
+                        return (
+                          <div className="border-t border-slate-100 dark:border-slate-800 mt-6 pt-5">
+                            <button
+                              onClick={() => setShowSazonalidade(!showSazonalidade)}
+                              className="w-full flex items-center justify-between gap-3 text-left"
+                            >
+                              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                Sazonalidade (dia da semana e horário)
+                              </span>
+                              <ChevronRight className={cn("w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0 transition-transform", showSazonalidade && "rotate-90")} />
+                            </button>
+                            {showSazonalidade && (
+                              <div className="mt-4 grid sm:grid-cols-2 gap-6">
+                                <div>
+                                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">Faturamento por dia da semana</div>
+                                  <div className="space-y-1.5">
+                                    {sazonalidade.porDiaSemana.map(d => (
+                                      <div key={d.dia} className="flex items-center gap-2 text-xs" title={`${d.quantidadeNotas} nota(s)`}>
+                                        <div className="w-9 shrink-0 text-slate-500 dark:text-slate-400">{d.dia.slice(0, 3)}</div>
+                                        <div className="flex-1 h-4 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden">
+                                          <div className="h-full bg-blue-400 dark:bg-blue-600" style={{ width: `${(d.faturamento / maxDia) * 100}%` }} />
+                                        </div>
+                                        <div className="w-28 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-400">{formatarMoeda(d.faturamento)}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">Faturamento por horário</div>
+                                  <div className="space-y-1 max-h-[280px] overflow-auto pr-1">
+                                    {horasComMovimento.map(h => (
+                                      <div key={h.hora} className="flex items-center gap-2 text-xs" title={`${h.quantidadeNotas} nota(s)`}>
+                                        <div className="w-8 shrink-0 text-slate-500 dark:text-slate-400 tabular-nums">{String(h.hora).padStart(2, '0')}h</div>
+                                        <div className="flex-1 h-3.5 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden">
+                                          <div className="h-full bg-emerald-400 dark:bg-emerald-600" style={{ width: `${(h.faturamento / maxHora) * 100}%` }} />
+                                        </div>
+                                        <div className="w-24 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-400">{formatarMoeda(h.faturamento)}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Devoluções: quanto do faturamento voltou como devolução de venda, e
+                          quais produtos mais retornam. Os totais (valor, %, qtde de notas) vêm
+                          de mapaFiscal — mesma agregação do card resumo e dos comparativos —
+                          isso aqui só detalha produto a produto. */}
+                      {mapaFiscal.quantidadeDevolucoes > 0 && (
+                        <div className="border-t border-slate-100 dark:border-slate-800 mt-6 pt-5">
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={() => setShowDevolucoes(!showDevolucoes)}
+                              className="flex-1 flex items-center justify-between gap-3 text-left"
+                            >
+                              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                Devoluções ({mapaFiscal.quantidadeDevolucoes} nota(s), {formatarMoeda(mapaFiscal.valorDevolvido)})
+                              </span>
+                              <ChevronRight className={cn("w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0 transition-transform", showDevolucoes && "rotate-90")} />
+                            </button>
+                            <button
+                              onClick={exportarDevolucoesExcel}
+                              className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline shrink-0 no-print"
+                              title="Exportar a lista completa de produtos devolvidos em Excel"
+                            >
+                              Exportar Excel
+                            </button>
+                          </div>
+                          {showDevolucoes && (
+                            <div className="mt-4">
+                              <div className="rounded-lg px-4 py-2.5 text-xs border bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 mb-3">
+                                🟡 {formatarPct(mapaFiscal.pctDevolvido)}% do faturamento do período voltou como devolução de venda ({formatarMoeda(mapaFiscal.valorDevolvido)} em {mapaFiscal.quantidadeDevolucoes} nota(s)).
+                              </div>
+                              <div className="overflow-auto max-h-[420px] border border-slate-100 dark:border-slate-800 rounded-lg">
+                                <table className="w-full text-xs">
+                                  <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                                    <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                      <th className="py-1.5 pr-3 pl-3">#</th>
+                                      <th className="py-1.5 pr-3">Produto</th>
+                                      <th className="py-1.5 pr-3">cProd</th>
+                                      <th className="py-1.5 pr-3 text-right">Qtd Devolvida</th>
+                                      <th className="py-1.5 pr-3 text-right">Valor</th>
+                                      <th className="py-1.5 pr-3 text-right">%</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {devolucoesProdutos.slice(0, 20).map((p, i) => (
+                                      <tr key={p.cProd} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                        <td className="py-1.5 pr-3 pl-3 text-slate-400 dark:text-slate-500 tabular-nums">{i + 1}</td>
+                                        <td className="py-1.5 pr-3 text-slate-700 dark:text-slate-300">{p.xProd}</td>
+                                        <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-500">{p.cProd}</td>
+                                        <td className="py-1.5 pr-3 text-right tabular-nums text-slate-600 dark:text-slate-400">{formatarQuantidadePorUnidade(p.porUnidade)}</td>
+                                        <td className="py-1.5 pr-3 text-right tabular-nums font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(p.valor)}</td>
+                                        <td className="py-1.5 pr-3 text-right tabular-nums text-slate-500 dark:text-slate-400">{formatarPct(p.pct)}%</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {devolucoesProdutos.length > 20 && (
+                                <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-2">
+                                  Mostrando os 20 primeiros de {devolucoesProdutos.length} produtos — exporte em Excel pra ver a lista completa.
+                                </p>
+                              )}
+                              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+                                Considera só devolução de venda (CFOP dedicado), não baixa de estoque ou outras entradas emitidas pela própria empresa sob CFOP de entrada.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Card: Notas de Serviço (NFS-e) — só aparece se alguma for encontrada */}
               {nfseList.length > 0 && (() => {
@@ -7931,52 +9529,196 @@ ${secoesPorCodigo}
                           </div>
                         )}
 
-                        {/* Linha do tempo de cadastro por cProd: mesmo código interno mudou de NCM/CEST/cClassTrib no período? */}
+                        {/* Linha do tempo de cadastro por cProd: mesmo código interno mudou de NCM/CEST/cClassTrib no período?
+                            Fechado por padrão — pode ter dezenas de linhas — mas com amostra de notas
+                            (nº/série/chave) em cada valor, pra ter prova rápida sem precisar caçar. */}
                         {auditoriaCadastroProdutos.totalProdutos > 0 && (
                           <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
-                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
-                              Mudanças de Cadastro no Período (por código de produto)
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => setShowMudancasCadastro(!showMudancasCadastro)}
+                                className="flex-1 flex items-center justify-between gap-3 text-left"
+                              >
+                                <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                  Mudanças de Cadastro no Período — {auditoriaCadastroProdutos.mudancas.length} mudança{auditoriaCadastroProdutos.mudancas.length !== 1 ? 's' : ''} • {produtosSuspeitos.nomeDuplicado.length} nome{produtosSuspeitos.nomeDuplicado.length !== 1 ? 's' : ''} duplicado{produtosSuspeitos.nomeDuplicado.length !== 1 ? 's' : ''}
+                                </span>
+                                <ChevronRight className={cn("w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0 transition-transform", showMudancasCadastro && "rotate-90")} />
+                              </button>
+                              {(auditoriaCadastroProdutos.mudancas.length > 0 || produtosSuspeitos.nomeDuplicado.length > 0) && (
+                                <button
+                                  onClick={exportarMudancasCadastroExcel}
+                                  className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline shrink-0 no-print"
+                                  title="Exportar todas as mudanças de cadastro em Excel"
+                                >
+                                  Exportar Excel
+                                </button>
+                              )}
                             </div>
-                            <div className="text-[11px] text-slate-400 dark:text-slate-500 mb-3">
-                              {auditoriaCadastroProdutos.totalProdutos} produto(s) distinto(s) acompanhados pelo código interno (cProd) — NCM, CEST e cClassTrib. CFOP e CST de ICMS ficam de fora porque variam legitimamente por tipo de operação.
-                            </div>
-                            {auditoriaCadastroProdutos.mudancas.length === 0 ? (
-                              <div className="rounded-lg px-4 py-3 text-xs bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                                ✓ Nenhum produto mudou de NCM, CEST ou cClassTrib dentro do período — cadastro estável.
-                              </div>
-                            ) : (
-                              <div className="overflow-x-auto">
-                                <div className="rounded-lg px-4 py-2.5 text-xs border bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 mb-2">
-                                  🟡 {auditoriaCadastroProdutos.mudancas.length} mudança(s) de cadastro detectada(s) no meio do período — o mesmo código de produto saiu com classificações diferentes em datas diferentes. Vale confirmar se foi correção intencional ou mexida acidental no cadastro.
+
+                            {showMudancasCadastro && (
+                              <div className="mt-3">
+                                <div className="text-[11px] text-slate-400 dark:text-slate-500 mb-3">
+                                  {auditoriaCadastroProdutos.totalProdutos} produto(s) distinto(s) acompanhados pelo código interno (cProd) — NCM, CEST, cClassTrib, nome, código de barras (EAN) e benefício fiscal. CFOP e CST de ICMS ficam de fora porque variam legitimamente por tipo de operação.
                                 </div>
-                                <table className="w-full text-xs">
-                                  <thead>
-                                    <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
-                                      <th className="py-1.5 pr-3">cProd</th>
-                                      <th className="py-1.5 pr-3">Produto</th>
-                                      <th className="py-1.5 pr-3">Campo</th>
-                                      <th className="py-1.5">Valores no período (primeira → última aparição)</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {auditoriaCadastroProdutos.mudancas.map((m, i) => (
-                                      <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
-                                        <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{m.cProd}</td>
-                                        <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{m.xProd}</td>
-                                        <td className="py-1.5 pr-3 font-semibold text-slate-700 dark:text-slate-300">{m.campo}</td>
-                                        <td className="py-1.5 text-slate-600 dark:text-slate-400">
-                                          {m.valores.map((v, j) => (
-                                            <span key={j}>
-                                              {j > 0 && <span className="text-slate-300 dark:text-slate-600"> → </span>}
-                                              <strong className="font-mono">{v.valor}</strong>
-                                              <span className="opacity-60"> ({v.primeira.split('-').reverse().join('/')} a {v.ultima.split('-').reverse().join('/')}, {v.itens} item(ns))</span>
-                                            </span>
-                                          ))}
-                                        </td>
+                                {auditoriaCadastroProdutos.mudancas.length === 0 && produtosSuspeitos.nomeDuplicado.length === 0 ? (
+                                  <div className="rounded-lg px-4 py-3 text-xs bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                    ✓ Nenhum produto mudou de cadastro nem teve nome duplicado em código diferente dentro do período — cadastro estável.
+                                  </div>
+                                ) : (
+                                  <div className="space-y-3">
+                                    {auditoriaCadastroProdutos.mudancas.length > 0 && (
+                                      <div>
+                                        <div className="rounded-lg px-4 py-2.5 text-xs border bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 mb-2">
+                                          🟡 {auditoriaCadastroProdutos.mudancas.length} mudança(s) de cadastro detectada(s) no meio do período — o mesmo código de produto saiu com classificações diferentes em datas diferentes. Vale confirmar se foi correção intencional ou mexida acidental no cadastro.
+                                        </div>
+                                        <div className="overflow-auto max-h-[420px] border border-slate-100 dark:border-slate-800 rounded-lg">
+                                        <table className="w-full text-xs">
+                                          <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                                            <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                              <th className="py-1.5 pr-3 pl-3">cProd</th>
+                                              <th className="py-1.5 pr-3">Produto</th>
+                                              <th className="py-1.5 pr-3">Campo</th>
+                                              <th className="py-1.5 pr-3">Valores no período (primeira → última aparição, amostra de notas)</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {auditoriaCadastroProdutos.mudancas.map((m, i) => (
+                                              <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                                <td className="py-1.5 pr-3 pl-3 font-mono text-slate-700 dark:text-slate-300 align-top">{m.cProd}</td>
+                                                <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400 align-top">{m.xProd}</td>
+                                                <td className="py-1.5 pr-3 font-semibold text-slate-700 dark:text-slate-300 align-top">{m.campo}</td>
+                                                <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">
+                                                  {m.valores.map((v, j) => (
+                                                    <div key={j} className={j > 0 ? "mt-1.5" : ""}>
+                                                      <strong className="font-mono">{v.valor}</strong>
+                                                      <span className="opacity-60"> ({v.primeira.split('-').reverse().join('/')} a {v.ultima.split('-').reverse().join('/')}, {v.itens} item(ns))</span>
+                                                      {v.amostra.length > 0 && (
+                                                        <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
+                                                          ex: {v.amostra.map((a, k) => (
+                                                            <span key={k} title={a.chave ? `Chave: ${a.chave}` : undefined}>
+                                                              {k > 0 && ', '}
+                                                              nº {a.numero || '?'}{a.serie ? `/${a.serie}` : ''} ({a.data.split('-').reverse().join('/')})
+                                                            </span>
+                                                          ))}
+                                                        </div>
+                                                      )}
+                                                    </div>
+                                                  ))}
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {produtosSuspeitos.nomeDuplicado.length > 0 && (
+                                      <div>
+                                        <div className="rounded-lg px-4 py-2.5 text-xs border bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 mb-2">
+                                          🟡 {produtosSuspeitos.nomeDuplicado.length} nome(s) de produto associado(s) a mais de um código interno (cProd) — pode ser cadastro duplicado (fragmenta estoque/relatório) ou um código reaproveitado pra outro produto.
+                                        </div>
+                                        <div className="overflow-auto max-h-[420px] border border-slate-100 dark:border-slate-800 rounded-lg">
+                                          <table className="w-full text-xs">
+                                            <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                                              <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                                <th className="py-1.5 pr-3 pl-3">Produto</th>
+                                                <th className="py-1.5 pr-3">cProd usados (amostra de nota)</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {produtosSuspeitos.nomeDuplicado.map((p, i) => (
+                                                <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                                  <td className="py-1.5 pr-3 pl-3 text-slate-600 dark:text-slate-400 align-top">{p.xProd}</td>
+                                                  <td className="py-1.5 pr-3 font-mono text-slate-600 dark:text-slate-400">
+                                                    {p.cProds.map((c, k) => (
+                                                      <div key={k} className={k > 0 ? "mt-1" : ""}>
+                                                        <span>{c.cProd}</span>
+                                                        <span
+                                                          className="font-sans text-[10px] text-slate-400 dark:text-slate-500 ml-1"
+                                                          title={c.amostra.chave ? `Chave: ${c.amostra.chave}` : undefined}
+                                                        >
+                                                          (nº {c.amostra.numero || '?'}{c.amostra.serie ? `/${c.amostra.serie}` : ''}, {c.amostra.data.split('-').reverse().join('/')})
+                                                        </span>
+                                                      </div>
+                                                    ))}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Produtos suspeitos: NCM zerado e mistura revenda/produção própria */}
+                        {(produtosSuspeitos.ncmZerado.length > 0 || produtosSuspeitos.cfopMisto.length > 0) && (
+                          <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">
+                              Produtos Suspeitos
+                            </div>
+
+                            {produtosSuspeitos.ncmZerado.length > 0 && (
+                              <div className="mb-3">
+                                <div className="rounded-lg px-4 py-2.5 text-xs border bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800 mb-2">
+                                  🔴 {produtosSuspeitos.ncmZerado.length} produto(s) com NCM zerado (00000000) — cadastro incompleto, não é uma classificação tributária válida.
+                                </div>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-xs">
+                                    <thead>
+                                      <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                        <th className="py-1.5 pr-3">cProd</th>
+                                        <th className="py-1.5 pr-3">Produto</th>
+                                        <th className="py-1.5">Ocorrências</th>
                                       </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
+                                    </thead>
+                                    <tbody>
+                                      {produtosSuspeitos.ncmZerado.map((p, i) => (
+                                        <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                          <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{p.cProd}</td>
+                                          <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{p.xProd}</td>
+                                          <td className="py-1.5 text-slate-600 dark:text-slate-400">{p.ocorrencias}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+
+                            {produtosSuspeitos.cfopMisto.length > 0 && (
+                              <div>
+                                <div className="rounded-lg px-4 py-2.5 text-xs border bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 mb-2">
+                                  🟡 {produtosSuspeitos.cfopMisto.length} produto(s) vendido(s) ora como produção própria, ora como revenda de mercadoria de terceiros — vale confirmar qual é a origem real.
+                                </div>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-xs">
+                                    <thead>
+                                      <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                        <th className="py-1.5 pr-3">cProd</th>
+                                        <th className="py-1.5 pr-3">Produto</th>
+                                        <th className="py-1.5 pr-3">CFOP produção própria</th>
+                                        <th className="py-1.5">CFOP revenda</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {produtosSuspeitos.cfopMisto.map((p, i) => (
+                                        <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                          <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{p.cProd}</td>
+                                          <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{p.xProd}</td>
+                                          <td className="py-1.5 pr-3 font-mono text-slate-600 dark:text-slate-400">{p.cfopsPropria.join(', ')}</td>
+                                          <td className="py-1.5 font-mono text-slate-600 dark:text-slate-400">{p.cfopsRevenda.join(', ')}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
                               </div>
                             )}
                           </div>
