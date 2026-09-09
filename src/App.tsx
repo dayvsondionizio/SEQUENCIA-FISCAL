@@ -2386,7 +2386,7 @@ export default function App() {
       exemplo: string; // "série/número" da primeira nota afetada
     };
     type CodigoUsado = { code: string; nome: string; cst: string; redIBS: number; redCBS: number; itens: number; notas: Set<string>; valor: number; vIBS: number; vCBS: number; naTabela: boolean; produtos: Map<string, ProdutoDoCodigo> };
-    const vazio = { totalItens: 0, totalNotas: 0, itensOk: 0, problemas: [] as Problema[], codigosUsados: [] as CodigoUsado[], totalIBS: 0, totalCBS: 0 };
+    const vazio = { totalItens: 0, totalNotas: 0, itensOk: 0, problemas: [] as Problema[], codigosUsados: [] as CodigoUsado[], totalIBS: 0, totalCBS: 0, ncmsDistintos: 0, cclassTribUnicoSuspeito: false };
     if (!mainCnpj) return vazio;
 
     const saidas = xmlList.filter(xml =>
@@ -2410,6 +2410,10 @@ export default function App() {
 
     const usados = new Map<string, CodigoUsado>();
     const notasComItemVerificado = new Set<string>();
+    // Diversidade de NCM no período — usado só pra julgar se "um cClassTrib
+    // só" é plausível (catálogo pouco variado) ou suspeito (catálogo variado
+    // mas o sistema nunca varia o código, sinal de valor fixo/padrão).
+    const ncmsDistintos = new Set<string>();
     let totalItens = 0;
     let itensComProblema = 0;
 
@@ -2435,6 +2439,7 @@ export default function App() {
         // julga se a classificação é adequada, só lista.
         const xProdItem = det.xProd || '(sem descrição)';
         const ncmItem = det.ncm;
+        if (ncmItem) ncmsDistintos.add(ncmItem);
         // CST e cClassTrib já vieram extraídos como filhos DIRETOS de <IBSCBS>
         // (nunca o CSTReg/cClassTribReg de gTribRegular).
         const cst = det.ibsCst;
@@ -2509,6 +2514,14 @@ export default function App() {
     const lista = Array.from(problemas.values())
       .sort((a, b) => (a.nivel === b.nivel ? b.itens - a.itens : a.nivel === 'erro' ? -1 : 1));
     const codigos = Array.from(usados.values()).sort((a, b) => b.itens - a.itens);
+    // Um único cClassTrib pro período inteiro só é normal quando o catálogo
+    // também é pouco variado (loja de nicho, poucos NCMs). Com catálogo
+    // variado (≥10 NCMs distintos) e ainda assim zero variação de código,
+    // é sinal de sistema jogando um valor fixo/padrão em vez de classificar
+    // produto a produto — mesma classificação pra tudo por acidente, não
+    // por análise. Limiar de 10 é arbitrário mas propositalmente baixo: o
+    // objetivo é avisar, não provar erro (isso cabe ao contador confirmar).
+    const cclassTribUnicoSuspeito = codigos.length === 1 && ncmsDistintos.size >= 10;
     return {
       totalItens,
       totalNotas: notasComItemVerificado.size,
@@ -2517,6 +2530,8 @@ export default function App() {
       codigosUsados: codigos,
       totalIBS: codigos.reduce((s, c) => s + c.vIBS, 0),
       totalCBS: codigos.reduce((s, c) => s + c.vCBS, 0),
+      ncmsDistintos: ncmsDistintos.size,
+      cclassTribUnicoSuspeito,
     };
   }, [xmlList, filterMes]);
 
@@ -2539,6 +2554,10 @@ export default function App() {
           ${p.nivel === 'erro' ? '🔴' : '🟡'} <strong class="mono">${esc(p.code)}</strong> — ${esc(p.motivo)}<br/>
           <span class="sub">${p.itens} item(ns) em ${p.notas.size} nota(s) · ex: nota ${esc(p.exemplo)}</span>
         </div>`).join('');
+
+    const secaoUnicoSuspeito = auditoriaClassTrib.cclassTribUnicoSuspeito
+      ? `<div class="box alerta">🟡 Só <strong class="mono">${esc(auditoriaClassTrib.codigosUsados[0]?.code || '')}</strong> foi usado no período inteiro, apesar de ${auditoriaClassTrib.ncmsDistintos} NCMs distintos no catálogo — vale confirmar se o sistema do cliente classifica produto a produto ou aplica um valor fixo/padrão pra tudo. Cada código pode estar estruturalmente correto e ainda assim ser resultado de um cadastro que nunca foi de fato analisado.</div>`
+      : '';
 
     const linhasResumo = auditoriaClassTrib.codigosUsados.map(c => `
       <tr>
@@ -2614,6 +2633,7 @@ export default function App() {
   <h2>Resultado da verificação estrutural</h2>
   <div class="meta">${auditoriaClassTrib.totalItens} item(ns) em ${auditoriaClassTrib.totalNotas} nota(s) verificados — formato, prefixo CST, existência na tabela oficial, vigência, permissão pro modelo do documento e redução de alíquota.</div>
   ${secoesProblemas}
+  ${secaoUnicoSuspeito}
 </div>
 
 <div class="secao">
@@ -9453,6 +9473,12 @@ ${htmlNomeDuplicado}
                               </div>
                             )}
 
+                            {auditoriaClassTrib.cclassTribUnicoSuspeito && (
+                              <div className="rounded-lg px-4 py-2.5 text-xs border bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 mb-3">
+                                🟡 Só <strong className="font-mono">{auditoriaClassTrib.codigosUsados[0]?.code}</strong> foi usado no período inteiro, apesar de {auditoriaClassTrib.ncmsDistintos} NCMs distintos no catálogo — vale confirmar se o sistema do cliente está classificando produto a produto ou aplicando um valor fixo/padrão pra tudo. Cada código individual pode estar estruturalmente correto (por isso não vira erro acima) e ainda assim ser resultado de um cadastro que nunca foi de fato analisado.
+                              </div>
+                            )}
+
                             {auditoriaClassTrib.codigosUsados.length > 0 && (
                               <div className="mt-3">
                                 <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Códigos em uso neste período</div>
@@ -11205,6 +11231,11 @@ ${htmlNomeDuplicado}
                             <li key={i}>{p.nivel === 'erro' ? '🔴' : '🟡'} <strong>{p.code}</strong> — {p.motivo} ({p.itens} item(ns) em {p.notas.size} nota(s), ex: nota {p.exemplo})</li>
                           ))}
                         </ul>
+                      )}
+                      {auditoriaClassTrib.cclassTribUnicoSuspeito && (
+                        <div className="text-xs text-amber-700 mb-2">
+                          🟡 Só <strong>{auditoriaClassTrib.codigosUsados[0]?.code}</strong> foi usado no período inteiro, apesar de {auditoriaClassTrib.ncmsDistintos} NCMs distintos — vale confirmar se o sistema do cliente classifica produto a produto ou aplica um valor fixo/padrão pra tudo.
+                        </div>
                       )}
                       <table>
                         <thead><tr><th>cClassTrib</th><th>Descrição oficial</th><th>Red. IBS</th><th>Red. CBS</th><th>Itens</th><th>Notas</th><th>Valor (vProd)</th><th>IBS+CBS destacado</th></tr></thead>
