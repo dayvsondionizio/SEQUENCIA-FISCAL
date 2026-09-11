@@ -1619,6 +1619,13 @@ export default function App() {
   const sanitizarNomeArquivo = (v: string) =>
     v.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 
+  // `fileName` de uma nota guarda o CAMINHO INTEIRO de dentro do zip que o
+  // cliente mandou (ex: "Arquivo XML de NFCE.../XML nfce aprovadas/NFCe-...xml")
+  // — útil pra saber a origem, péssimo como nome de arquivo pra baixar de volta:
+  // reusar isso direto recriava a mesma estrutura de pastas aninhadas dentro
+  // do zip exportado. Isso aqui pega só o nome do arquivo em si.
+  const nomeBaseArquivo = (caminho: string) => caminho.split(/[\\/]/).pop() || caminho;
+
   // "Todos os Meses" só faz sentido quando o período carregado realmente tem mais de
   // um mês. Com 2+ meses, usa a faixa "PrimeiroMês_ÚltimoMês_Ano" (ex: Maio_Junho_2026),
   // já ordenado cronologicamente (mesesDisponiveis vem ordenado por texto, não por data).
@@ -4363,14 +4370,14 @@ ${htmlNomeDuplicado}
 
     filteredXmls.forEach(xml => {
       if (!xml.rawXml) return;
-      const name = xml.fileName || `${xml.chave || xml.numero}.xml`;
+      const name = nomeBaseArquivo(xml.fileName || `${xml.chave || xml.numero}.xml`);
       const safeName = name.toLowerCase().endsWith('.xml') ? name : `${name}.xml`;
       allFiles.push({ name: safeName, content: xml.rawXml });
     });
 
     filteredInuts.forEach(inut => {
       if (!inut.rawXml) return;
-      const name = inut.fileName || `inutilizacao_${inut.serie}_${inut.nNFIni}_${inut.nNFFin}.xml`;
+      const name = nomeBaseArquivo(inut.fileName || `inutilizacao_${inut.serie}_${inut.nNFIni}_${inut.nNFFin}.xml`);
       const safeName = name.toLowerCase().endsWith('.xml') ? name : `${name}.xml`;
       allFiles.push({ name: `inutilizacoes/${safeName}`, content: inut.rawXml });
     });
@@ -6448,11 +6455,28 @@ ${htmlNomeDuplicado}
       alert('Nenhuma nota selecionada tem XML disponível para baixar.');
       return;
     }
+    const nomeXml = (nota: (typeof selecionadas)[number]) => {
+      const name = nomeBaseArquivo(nota.fileName || `${nota.chave}.xml`);
+      return name.toLowerCase().endsWith('.xml') ? name : `${name}.xml`;
+    };
+
+    // 1 nota selecionada: baixa o .xml direto, sem zipar — zip só faz sentido
+    // pra agrupar mais de um arquivo.
+    if (selecionadas.length === 1) {
+      const nota = selecionadas[0];
+      const blob = new Blob([nota.rawXml!], { type: 'text/xml;charset=utf-8' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = nomeXml(nota);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+
     const zip = new JSZip();
     selecionadas.forEach(nota => {
-      const name = nota.fileName || `${nota.chave}.xml`;
-      const safeName = name.toLowerCase().endsWith('.xml') ? name : `${name}.xml`;
-      zip.file(safeName, nota.rawXml!);
+      zip.file(nomeXml(nota), nota.rawXml!);
     });
     try {
       const content = await zip.generateAsync({ type: 'blob' });
@@ -8714,7 +8738,7 @@ ${htmlNomeDuplicado}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 text-xs font-bold disabled:opacity-40 hover:bg-slate-50 transition-all"
                     >
                       <Download className="w-3.5 h-3.5" />
-                      Baixar XMLs (.zip)
+                      {notasSelecionadas.size === 1 ? 'Baixar XML' : 'Baixar XMLs (.zip)'}
                     </button>
                     <button
                       onClick={() => setNotasSelecionadas(new Set())}
