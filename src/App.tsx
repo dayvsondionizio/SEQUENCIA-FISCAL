@@ -6332,6 +6332,41 @@ ${htmlNomeDuplicado}
     });
   }, [analysis, filterModelo]);
 
+  // Alerta de série sumida/nova: com "Todos os Meses" selecionado, cada série
+  // já mostra em que mês(es) teve nota (mesReferencia), mas nada aponta
+  // quando uma série ficou de fora de um mês em que as OUTRAS tiveram
+  // movimento — pode ser série nova, descontinuada, ou o mês genuinamente
+  // sem nenhuma nota dela. Compara o conjunto de meses de cada série contra
+  // a união de meses de TODAS as séries do período; só faz sentido com
+  // "Todos" selecionado (com um mês específico, toda série já é só daquele mês).
+  const mesesFaltantesPorSerie = useMemo(() => {
+    const resultado = new Map<number, string[]>();
+    if (filterMes !== 'Todos' || filteredAnalysis.length === 0) return resultado;
+
+    const ordenarMeses = (meses: string[]) => [...meses].sort((a, b) => {
+      const [nomeA, anoA] = a.split('/');
+      const [nomeB, anoB] = b.split('/');
+      const chaveA = `${anoA}${String(MESES.indexOf(nomeA)).padStart(2, '0')}`;
+      const chaveB = `${anoB}${String(MESES.indexOf(nomeB)).padStart(2, '0')}`;
+      return chaveA.localeCompare(chaveB);
+    });
+
+    const mesesPorSerie = filteredAnalysis.map(s =>
+      s.mesReferencia && s.mesReferencia !== 'Não identificado'
+        ? s.mesReferencia.split(',').map(m => m.trim())
+        : []
+    );
+    const mesesGlobais = ordenarMeses(Array.from(new Set(mesesPorSerie.flat())));
+    if (mesesGlobais.length < 2) return resultado;
+
+    filteredAnalysis.forEach((_serie, idx) => {
+      const proprios = new Set(mesesPorSerie[idx]);
+      const faltando = mesesGlobais.filter(m => !proprios.has(m));
+      if (faltando.length > 0) resultado.set(idx, faltando);
+    });
+    return resultado;
+  }, [filteredAnalysis, filterMes]);
+
   const copyToClipboard = (text: string, idx: number) => {
     navigator.clipboard.writeText(text);
     setCopiedIdx(idx);
@@ -10634,6 +10669,14 @@ ${htmlNomeDuplicado}
                           <span className="px-2 py-0.5 bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 text-[10px] font-semibold rounded uppercase tracking-wider border border-amber-200 dark:border-amber-800">
                             {serie.mesReferencia}
                           </span>
+                          {mesesFaltantesPorSerie.has(idx) && (
+                            <span
+                              className="px-2 py-0.5 bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 text-[10px] font-semibold rounded uppercase tracking-wider border border-rose-200 dark:border-rose-800"
+                              title="Essa série tem nota em outros meses do período, mas não nesse(s) — pode ser série nova, descontinuada, ou realmente sem nenhum movimento nesse mês."
+                            >
+                              ⚠ Sem nota em: {mesesFaltantesPorSerie.get(idx)!.join(', ')}
+                            </span>
+                          )}
                         </div>
                         <div className="text-slate-400 dark:text-slate-500 text-sm font-medium">
                           Mod {serie.modelo} • Série {serie.serie} • CNPJ {serie.cnpj} • IE {serie.ie}
