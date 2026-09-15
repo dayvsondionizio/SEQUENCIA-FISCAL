@@ -654,7 +654,11 @@ function isCfopVenda(cfop: string): boolean {
   const resto = parseInt(cfop, 10) % 1000;
   if (resto >= 151 && resto <= 156) return false;
   if (resto >= 201 && resto <= 212) return false;
-  if (resto >= 410 && resto <= 413) return false;
+  // 408/409 = transferência sujeita a ST (Transferência de produção/mercadoria
+  // de terceiros, em operação com produto sujeito ao regime de substituição
+  // tributária) — ficava faltando aqui, então uma transferência entre filiais
+  // sob ST (ex: CFOP 5409) passava como se fosse venda.
+  if (resto >= 408 && resto <= 413) return false;
   if (resto >= 901 && resto <= 949) return false;
   return true;
 }
@@ -3166,16 +3170,39 @@ ${secoesPorCodigo}
   const calcularRankingDeNotas = (notas: XmlData[]): { produtos: ProdutoRanking[]; faturamentoConsiderado: number } => {
     type Acum = { cProd: string; xProd: string; valor: number; porUnidade: Map<string, number>; origemPropria: number; origemRevenda: number };
     const mapa = new Map<string, Acum>();
+    const getOrCreate = (cProd: string, xProd: string) => {
+      let p = mapa.get(cProd);
+      if (!p) {
+        p = { cProd, xProd: xProd || '(sem descrição)', valor: 0, porUnidade: new Map(), origemPropria: 0, origemRevenda: 0 };
+        mapa.set(cProd, p);
+      }
+      return p;
+    };
     notas.forEach(xml => {
       const ex = getNotaExtract(xml);
       if (!ex) return;
+      if (xml.tpNF === '0') {
+        // Entrada própria: só interessa devolução de venda, pra descontar do
+        // produto que a originou — ranking fica líquido (venda − devolvido),
+        // não bruto. Outra entrada própria (baixa de estoque etc.) fica fora.
+        ex.dets.forEach(det => {
+          if (!det.cProd || !isCfopDevolucaoVenda(det.cfop)) return;
+          const p = getOrCreate(det.cProd, det.xProd);
+          p.xProd = det.xProd || p.xProd;
+          p.valor -= det.vProd;
+          const unidade = det.uCom || '(sem unidade)';
+          p.porUnidade.set(unidade, (p.porUnidade.get(unidade) || 0) - det.qCom);
+        });
+        return;
+      }
       ex.dets.forEach(det => {
         if (!det.cProd) return;
-        let p = mapa.get(det.cProd);
-        if (!p) {
-          p = { cProd: det.cProd, xProd: det.xProd || '(sem descrição)', valor: 0, porUnidade: new Map(), origemPropria: 0, origemRevenda: 0 };
-          mapa.set(det.cProd, p);
-        }
+        // CFOP que não é venda de verdade (transferência, remessa,
+        // bonificação/doação/amostra, consignação, devolução de compra) fica
+        // fora do ranking — conta no Total de Saídas geral (métrica
+        // diferente), mas não é venda pro produto.
+        if (!isCfopVenda(det.cfop)) return;
+        const p = getOrCreate(det.cProd, det.xProd);
         p.xProd = det.xProd || p.xProd;
         p.valor += det.vProd;
         const unidade = det.uCom || '(sem unidade)';
@@ -3218,7 +3245,9 @@ ${secoesPorCodigo}
   // "5 KG + 3 UN" nunca vira "8" — cada unidade fica separada; só junta as
   // parcelas num texto quando o produto genuinamente usa mais de uma.
   const formatarQuantidadePorUnidade = (porUnidade: QuantidadePorUnidade[]): string => {
-    const comValor = porUnidade.filter(u => u.quantidade > 0);
+    // != 0 (não > 0): produto com mais devolução do que venda no período fica
+    // com quantidade líquida negativa — mostra isso em vez de escondida como "—".
+    const comValor = porUnidade.filter(u => u.quantidade !== 0);
     if (comValor.length === 0) return '—';
     return comValor
       .map(u => `${u.quantidade.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${u.unidade}`)
@@ -3228,13 +3257,16 @@ ${secoesPorCodigo}
   const rankingProdutos = useMemo(() => {
     const vazio = { produtos: [] as ProdutoRanking[], faturamentoConsiderado: 0 };
     if (!mainCnpj) return vazio;
-    const saidas = xmlList.filter(xml =>
-      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
+    // Inclui entrada própria (tpNF=0) junto com a saída — calcularRankingDeNotas
+    // usa a entrada só pra achar devolução de venda e descontar do produto,
+    // deixando o ranking líquido em vez de bruto.
+    const notas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.rawXml &&
       !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
       (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
     );
-    if (saidas.length === 0) return vazio;
-    return calcularRankingDeNotas(saidas);
+    if (notas.length === 0) return vazio;
+    return calcularRankingDeNotas(notas);
   }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
 
   // Mesmo ranking, mas um por mês — só usado na exportação, pra quando
@@ -3245,7 +3277,7 @@ ${secoesPorCodigo}
     if (!mainCnpj) return new Map() as PorMes;
     const porMes = new Map<string, XmlData[]>();
     xmlList.forEach(xml => {
-      if (xml.tipo !== 'nfe' || xml.emitCnpj !== mainCnpj || xml.tpNF === '0' || !xml.rawXml) return;
+      if (xml.tipo !== 'nfe' || xml.emitCnpj !== mainCnpj || !xml.rawXml) return;
       if (!xml.protocolo) return;
       if (xml.chave && chavesCanceladas.has(xml.chave)) return;
       const mes = getMonthYear(xml.data);
@@ -3340,6 +3372,7 @@ ${secoesPorCodigo}
       const ex = getNotaExtract(xml);
       if (!ex) return;
       ex.dets.forEach(det => {
+        if (!isCfopVenda(det.cfop)) return;
         const ncm = det.ncm || '(vazio)';
         let a = mapa.get(ncm);
         if (!a) { a = { ncm, xProdAmostra: det.xProd || '(sem descrição)', valor: 0, produtos: new Set() }; mapa.set(ncm, a); }
@@ -7973,7 +8006,7 @@ ${htmlNomeDuplicado}
                                   </p>
                                 )}
                                 <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
-                                  Valor é a soma dos itens (vProd), não o total da nota — pode divergir um pouco do faturamento quando há desconto ou frete não rateado por item. Origem "Misto" é o mesmo produto vendido ora como própria, ora como revenda — já listado em Produtos Suspeitos. Curva ABC (A até 80% acumulado, B até 95%, C o resto) é sempre calculada sobre o catálogo inteiro, não sobre o filtro de origem atual.
+                                  Valor é a soma dos itens (vProd), não o total da nota — pode divergir um pouco do faturamento quando há desconto ou frete não rateado por item. Já é líquido de devolução de venda (desconta do produto que originou) e não inclui CFOP que não é venda de verdade (transferência, remessa, bonificação/amostra, consignação, devolução de compra) — por isso pode ser menor que o Total de Saídas Auditadas. Origem "Misto" é o mesmo produto vendido ora como própria, ora como revenda — já listado em Produtos Suspeitos. Curva ABC (A até 80% acumulado, B até 95%, C o resto) é sempre calculada sobre o catálogo inteiro, não sobre o filtro de origem atual.
                                 </p>
                               </div>
                             )}
@@ -8039,6 +8072,9 @@ ${htmlNomeDuplicado}
                                     Mostrando os {LIMITE_NCM} primeiros de {rankingNcm.ncms.length} NCMs — exporte em Excel pra ver a lista completa.
                                   </p>
                                 )}
+                                <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+                                  Não inclui CFOP que não é venda de verdade (transferência, remessa, bonificação/amostra, consignação, devolução de compra) — por isso pode ser menor que o Total de Saídas Auditadas.
+                                </p>
                               </div>
                             )}
                           </div>
