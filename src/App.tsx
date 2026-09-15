@@ -816,6 +816,17 @@ function spedPeriodKey(sped: SpedData): string {
   return sped.dtIni;
 }
 
+// DT_INI ilegível (vazio, truncado, arquivo corrompido) faz spedPeriodKey
+// cair no fallback e devolver "" ou lixo como chave — daí esse SPED vira uma
+// "competência" própria, nunca reconhecida como duplicata do SPED bom do
+// mesmo mês, e as notas dos dois somam (visto em produção: SPED mostrando
+// quase o dobro de saídas). Por isso todo SPED tem essa data validada ANTES
+// de entrar em mergeSpedBatch/upsertSpedManual — se não é uma data DDMMAAAA
+// de verdade, o SPED é descartado (com aviso), não silenciosamente aceito.
+function spedTemPeriodoValido(sped: SpedData): boolean {
+  return /^\d{8}$/.test(sped.dtIni);
+}
+
 type SpedEntry = { data: SpedData; original?: SpedData };
 type SpedEntries = Record<string, SpedEntry>;
 
@@ -6039,7 +6050,13 @@ ${htmlNomeDuplicado}
         setFornecedorEntradaInfo(null);
       }
 
-      if (foundSpeds.length > 0) setSpedEntries(prev => mergeSpedBatch(prev, foundSpeds));
+      if (foundSpeds.length > 0) {
+        const spedsValidos = foundSpeds.filter(spedTemPeriodoValido);
+        foundSpeds.filter(s => !spedTemPeriodoValido(s)).forEach(s => registrarExtractionError(
+          `${s.fileName} — SPED com data de início ilegível ("${s.dtIni || '(vazio)'}"); descartado pra não contar notas em dobro. Peça pro cliente reenviar esse arquivo.`
+        ));
+        if (spedsValidos.length > 0) setSpedEntries(prev => mergeSpedBatch(prev, spedsValidos));
+      }
       setAttachedSources(Array.from(sourceMap.values()));
       setProcessedFileNames(updatedProcessedNames);
       setXmlList(mergedXmls);
@@ -8493,11 +8510,13 @@ ${htmlNomeDuplicado}
                       if (!file) return;
                       const text = await file.text();
                       const sped = parseSped(text, file.name);
-                      if (sped) {
+                      if (sped && spedTemPeriodoValido(sped)) {
                         setSpedEntries(prev => upsertSpedManual(prev, sped));
                         setSpedCardFiltro('Todas');
                         setSpedSearch('');
                         setSpedCardOpen(true);
+                      } else if (sped) {
+                        alert(`Não foi possível ler a data de início desse SPED ("${file.name}") — o arquivo pode estar corrompido ou fora do padrão esperado. Peça pro cliente reenviar.`);
                       }
                       e.target.value = '';
                     }}
