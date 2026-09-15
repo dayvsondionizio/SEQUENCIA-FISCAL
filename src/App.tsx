@@ -8533,6 +8533,11 @@ ${htmlNomeDuplicado}
                   const n = parseFloat(v.replace(',', '.'));
                   return isNaN(n) ? v : n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
                 };
+                // Lote grande pode ter dezenas de milhares de linhas de SPED — desenhar
+                // tudo de uma vez trava a aba (visto em produção). A tela mostra só uma
+                // amostra; a lista completa sempre está disponível via "Exportar Excel",
+                // que não tem esse limite.
+                const LIMITE_SPED_LINHAS = 300;
                 return (
                   <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden no-print">
                     {/* Cabeçalho */}
@@ -8676,6 +8681,9 @@ ${htmlNomeDuplicado}
                         if (rows.length === 0) return (
                           <div className="px-6 py-10 text-center text-sm text-slate-400">Nenhum resultado para a busca.</div>
                         );
+                        // Lote pode ter dezenas de milhares de linhas — desenhar tudo de
+                        // uma vez trava a aba. Mostra só uma amostra; quem quiser a lista
+                        // inteira usa o botão "Exportar Excel" logo acima, sem esse limite.
                         return (
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 bg-white border-b border-slate-100 z-10">
@@ -8689,7 +8697,7 @@ ${htmlNomeDuplicado}
                               </tr>
                             </thead>
                             <tbody>
-                              {rows.map((x, i) => (
+                              {rows.slice(0, LIMITE_SPED_LINHAS).map((x, i) => (
                                 <tr key={i} className="border-b border-slate-50 hover:bg-red-50/30 bg-red-50/20 transition-colors">
                                   <td className="px-6 py-2 text-slate-500">{x.data ?? '—'}</td>
                                   <td className="px-3 py-2 text-slate-400">{x.modelo ?? '—'}</td>
@@ -8722,7 +8730,7 @@ ${htmlNomeDuplicado}
                             </tr>
                           </thead>
                           <tbody>
-                            {spedRowsFiltradas.map((c, i) => {
+                            {spedRowsFiltradas.slice(0, LIMITE_SPED_LINHAS).map((c, i) => {
                               const falta = c.chave ? spedCrossRef.saidaFaltantesSet.has(c.chave) : false;
                               const cancelada = c.codSit === '02' || c.codSit === '06';
                               const adicionado = spedCardFiltro === 'Adicionados';
@@ -8757,7 +8765,9 @@ ${htmlNomeDuplicado}
                       if (count === 0) return null;
                       return (
                         <div className="px-6 py-2.5 border-t border-slate-100 text-[11px] text-slate-400 text-right">
-                          {count} registro{count !== 1 ? 's' : ''}
+                          {count > LIMITE_SPED_LINHAS
+                            ? `Mostrando ${LIMITE_SPED_LINHAS} de ${count} registros — exporte em Excel pra ver a lista completa`
+                            : `${count} registro${count !== 1 ? 's' : ''}`}
                           {spedSearch ? ' (filtrados)' : ''}
                         </div>
                       );
