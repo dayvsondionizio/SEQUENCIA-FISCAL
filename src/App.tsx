@@ -1012,6 +1012,13 @@ function normalizarCprod(cProd: string): string {
   return cProd;
 }
 
+// Chave de agrupamento por nome — trim+maiúsculas, pra "Pao Frances" e "PAO
+// FRANCES " (espaço sobrando, ou caixa diferente entre sistemas) caírem na
+// mesma linha do ranking.
+function normalizarNomeProduto(xProd: string): string {
+  return xProd.trim().toUpperCase();
+}
+
 // Devolução de venda tem CFOP próprio (1201/1202/1410/1411/1918/1919 e os
 // equivalentes interestaduais 2201/2202/2410/2411/2918/2919) — NÃO dá pra
 // usar CFOP_DESCRICOES por sufixo aqui, porque o mesmo sufixo (ex: "201")
@@ -1573,6 +1580,11 @@ export default function App() {
   const [showComparativoSerie, setShowComparativoSerie] = useState(false);
   const [showRankingProdutos, setShowRankingProdutos] = useState(false);
   const [filtroOrigemRanking, setFiltroOrigemRanking] = useState<'todos' | 'propria' | 'revenda' | 'misto'>('todos');
+  // Agrupar por cProd (padrão, granular — mostra cadastro divergente como
+  // linhas separadas) ou por nome do produto (junta cProd diferente com o
+  // mesmo nome — útil quando o cliente recadastrou o produto no meio do
+  // período e o analista só quer o total por produto, não por código).
+  const [agruparRankingPorNome, setAgruparRankingPorNome] = useState(false);
   const [showRankingNcm, setShowRankingNcm] = useState(false);
   const [showSazonalidade, setShowSazonalidade] = useState(false);
   const [showDevolucoes, setShowDevolucoes] = useState(false);
@@ -3166,15 +3178,23 @@ ${secoesPorCodigo}
   // nada. Se o produto só usa uma unidade, é um número limpo; se usa mais de
   // uma, cada unidade fica separada (front decide como mostrar isso).
   type QuantidadePorUnidade = { unidade: string; quantidade: number };
-  type ProdutoRanking = { cProd: string; xProd: string; valor: number; porUnidade: QuantidadePorUnidade[]; origem: 'propria' | 'revenda' | 'misto' | 'indefinida'; pct: number; pctAcumulado: number; classeAbc: 'A' | 'B' | 'C' };
-  const calcularRankingDeNotas = (notas: XmlData[]): { produtos: ProdutoRanking[]; faturamentoConsiderado: number } => {
-    type Acum = { cProd: string; xProd: string; valor: number; porUnidade: Map<string, number>; origemPropria: number; origemRevenda: number };
+  type ProdutoRanking = { cProd: string; cProdsCount: number; xProd: string; valor: number; porUnidade: QuantidadePorUnidade[]; origem: 'propria' | 'revenda' | 'misto' | 'indefinida'; pct: number; pctAcumulado: number; classeAbc: 'A' | 'B' | 'C' };
+  // agruparPorNome=false (padrão): uma linha por cProd — mostra cadastro
+  // divergente (mesmo produto recadastrado com código novo) como linhas
+  // separadas, útil pra auditoria. agruparPorNome=true: uma linha por nome
+  // de produto, juntando todo cProd que caiu no mesmo nome — útil quando o
+  // analista só quer o total por produto e não se importa com o código.
+  const calcularRankingDeNotas = (notas: XmlData[], agruparPorNome: boolean): { produtos: ProdutoRanking[]; faturamentoConsiderado: number } => {
+    type Acum = { cProds: Set<string>; xProd: string; valor: number; porUnidade: Map<string, number>; origemPropria: number; origemRevenda: number };
     const mapa = new Map<string, Acum>();
     const getOrCreate = (cProd: string, xProd: string) => {
-      let p = mapa.get(cProd);
+      const key = agruparPorNome ? normalizarNomeProduto(xProd || cProd) : cProd;
+      let p = mapa.get(key);
       if (!p) {
-        p = { cProd, xProd: xProd || '(sem descrição)', valor: 0, porUnidade: new Map(), origemPropria: 0, origemRevenda: 0 };
-        mapa.set(cProd, p);
+        p = { cProds: new Set([cProd]), xProd: xProd || '(sem descrição)', valor: 0, porUnidade: new Map(), origemPropria: 0, origemRevenda: 0 };
+        mapa.set(key, p);
+      } else {
+        p.cProds.add(cProd);
       }
       return p;
     };
@@ -3216,17 +3236,20 @@ ${secoesPorCodigo}
     const faturamentoConsiderado = Array.from(mapa.values()).reduce((s, p) => s + p.valor, 0);
 
     const base = Array.from(mapa.values())
-      .map(p => ({
-        cProd: p.cProd, xProd: p.xProd, valor: p.valor,
-        porUnidade: Array.from(p.porUnidade.entries())
-          .map(([unidade, quantidade]) => ({ unidade, quantidade }))
-          .sort((a, b) => b.quantidade - a.quantidade),
-        origem: (p.origemPropria > 0 && p.origemRevenda > 0) ? 'misto' as const
-          : p.origemPropria > 0 ? 'propria' as const
-          : p.origemRevenda > 0 ? 'revenda' as const
-          : 'indefinida' as const,
-        pct: faturamentoConsiderado > 0 ? (p.valor / faturamentoConsiderado) * 100 : 0,
-      }))
+      .map(p => {
+        const cProdsArr = Array.from(p.cProds).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        return {
+          cProd: cProdsArr.join(' / '), cProdsCount: cProdsArr.length, xProd: p.xProd, valor: p.valor,
+          porUnidade: Array.from(p.porUnidade.entries())
+            .map(([unidade, quantidade]) => ({ unidade, quantidade }))
+            .sort((a, b) => b.quantidade - a.quantidade),
+          origem: (p.origemPropria > 0 && p.origemRevenda > 0) ? 'misto' as const
+            : p.origemPropria > 0 ? 'propria' as const
+            : p.origemRevenda > 0 ? 'revenda' as const
+            : 'indefinida' as const,
+          pct: faturamentoConsiderado > 0 ? (p.valor / faturamentoConsiderado) * 100 : 0,
+        };
+      })
       .sort((a, b) => b.valor - a.valor);
 
     // Curva ABC (Pareto clássico): A = até 80% do faturamento acumulado,
@@ -3266,8 +3289,8 @@ ${secoesPorCodigo}
       (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
     );
     if (notas.length === 0) return vazio;
-    return calcularRankingDeNotas(notas);
-  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
+    return calcularRankingDeNotas(notas, agruparRankingPorNome);
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas, agruparRankingPorNome]);
 
   // Mesmo ranking, mas um por mês — só usado na exportação, pra quando
   // "Todos" está selecionado com 2+ meses: sem isso, o Excel soma tudo junto
@@ -3286,9 +3309,9 @@ ${secoesPorCodigo}
       if (lista) lista.push(xml); else porMes.set(mes, [xml]);
     });
     const resultado = new Map<string, { produtos: ProdutoRanking[]; faturamentoConsiderado: number }>();
-    porMes.forEach((notas, mes) => resultado.set(mes, calcularRankingDeNotas(notas)));
+    porMes.forEach((notas, mes) => resultado.set(mes, calcularRankingDeNotas(notas, agruparRankingPorNome)));
     return resultado;
-  }, [xmlList, mainCnpj, chavesCanceladas]);
+  }, [xmlList, mainCnpj, chavesCanceladas, agruparRankingPorNome]);
 
   // Exporta o ranking respeitando o filtro de origem selecionado na tela (se
   // estiver em "Todos", exporta todos) — a tela só desenha os 20 primeiros,
@@ -7960,9 +7983,32 @@ ${htmlNomeDuplicado}
                                       </button>
                                     );
                                   })}
+                                  <div className="flex items-center rounded-full border border-slate-200 dark:border-slate-700 overflow-hidden ml-auto">
+                                    {([
+                                      { v: false, label: 'Por Código' },
+                                      { v: true, label: 'Por Nome' },
+                                    ] as const).map(opt => (
+                                      <button
+                                        key={String(opt.v)}
+                                        onClick={() => setAgruparRankingPorNome(opt.v)}
+                                        title={opt.v
+                                          ? 'Junta cProd diferente com o mesmo nome numa só linha — total por produto, ignora cadastro divergente'
+                                          : 'Uma linha por código interno (cProd) — mostra cadastro divergente (mesmo produto recadastrado) separado'}
+                                        className={cn(
+                                          "px-3 py-1.5 font-semibold transition-colors",
+                                          agruparRankingPorNome === opt.v
+                                            ? "bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900"
+                                            : "bg-white text-slate-500 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800"
+                                        )}
+                                      >
+                                        {opt.label}
+                                      </button>
+                                    ))}
+                                  </div>
                                 </div>
                                 <p className="text-[10px] text-slate-500 dark:text-slate-400 mb-2">
                                   Curva ABC: <strong>{qtdClasseA}</strong> produto(s) (Classe A) já somam 80% do faturamento do catálogo inteiro.
+                                  {agruparRankingPorNome && ' Agrupado por nome — cProd pode mostrar mais de um código (cadastro divergente juntado numa linha só).'}
                                 </p>
                                 <div className="overflow-auto max-h-[420px] border border-slate-100 dark:border-slate-800 rounded-lg">
                                   <table className="w-full text-xs">
@@ -7980,10 +8026,20 @@ ${htmlNomeDuplicado}
                                     </thead>
                                     <tbody>
                                       {visiveis.map((p, i) => (
-                                        <tr key={p.cProd} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                        <tr key={`${p.cProd}-${i}`} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
                                           <td className="py-1.5 pr-3 pl-3 text-slate-400 dark:text-slate-500 tabular-nums">{i + 1}</td>
                                           <td className="py-1.5 pr-3 text-slate-700 dark:text-slate-300">{p.xProd}</td>
-                                          <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-500">{p.cProd}</td>
+                                          <td className="py-1.5 pr-3 font-mono text-slate-500 dark:text-slate-500">
+                                            {p.cProd}
+                                            {p.cProdsCount > 1 && (
+                                              <span
+                                                className="ml-1.5 text-[9px] font-bold uppercase tracking-wider px-1 py-0.5 rounded bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-400"
+                                                title={`${p.cProdsCount} códigos internos diferentes juntados nessa linha (cadastro divergente)`}
+                                              >
+                                                {p.cProdsCount}x
+                                              </span>
+                                            )}
+                                          </td>
                                           <td className="py-1.5 pr-3">
                                             <span className={cn("text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded", origemCor[p.origem])}>
                                               {origemLabel[p.origem]}
