@@ -150,6 +150,11 @@ interface DetExtract {
   cProd: string; xProd: string; ncm: string; cest: string; cfop: string; vProd: number; qCom: number; uCom: string;
   cEan: string; cBenef: string;
   icmsTemCst: boolean; icmsTemCsosn: boolean;
+  icmsGrupo: string;       // tagName do grupo ICMS do item (ex: "ICMS00", "ICMSSN102")
+  icmsCodigo: string;      // valor do CST ou CSOSN (o que existir)
+  vBCIcms: number | null;  // vBC filho direto do grupo ICMS (não confundir com o vBC de IBSCBS)
+  pICMS: number | null;
+  vICMS: number | null;
   temIbsCbs: boolean;      // grupo <IBSCBS> presente no item
   ibsCst: string;          // CST filho direto de <IBSCBS>
   cClassTrib: string;      // idem
@@ -229,6 +234,11 @@ function extrairAuditoria(doc: Document): NotaExtract {
       cBenef: txt(filho(prod, 'cBenef')),
       icmsTemCst: !!icmsNode?.getElementsByTagName('CST')[0],
       icmsTemCsosn: !!icmsNode?.getElementsByTagName('CSOSN')[0],
+      icmsGrupo: icmsNode?.tagName || '',
+      icmsCodigo: txt(filho(icmsNode, 'CST')) || txt(filho(icmsNode, 'CSOSN')),
+      vBCIcms: icmsNode ? num(filho(icmsNode, 'vBC')) : null,
+      pICMS: icmsNode ? num(filho(icmsNode, 'pICMS')) : null,
+      vICMS: icmsNode ? num(filho(icmsNode, 'vICMS')) : null,
       temIbsCbs: !!ibscbs,
       ibsCst: txt(filho(ibscbs, 'CST')),
       cClassTrib: txt(filho(ibscbs, 'cClassTrib')),
@@ -980,6 +990,42 @@ function descricaoCfop(cfop: string): string {
   const suffix = cfop.slice(-3);
   return CFOP_DESCRICOES[suffix] || `CFOP ${cfop} - Não classificado`;
 }
+
+// Situação Tributária do ICMS — CST (Regime Normal, CRT 2/3; Ajuste SINIEF
+// 07/2005 Anexo Código de Situação Tributária) e CSOSN (Simples Nacional,
+// CRT 1/4; Ajuste SINIEF 11/2019 Anexo III-A). `esperaVicms` reflete o
+// próprio layout oficial da NF-e 4.00: 'nao' = o grupo XML daquele código
+// (ICMS40/ICMS60/ICMSSN102/...) NEM TEM campo <vICMS> — isenta, suspensa,
+// ST já recolhida antes, ou Simples sem destaque de imposto na nota; 'sim'
+// = o grupo tem <vICMS> e normalmente vem calculado (vBC × pICMS); 'opcional'
+// = o grupo permite <vICMS> mas pode legitimamente vir zerado ou ausente
+// (diferimento parcial, "outras" mais flexível).
+type CstIcmsInfo = { descricao: string; esperaVicms: 'sim' | 'nao' | 'opcional' };
+const CST_ICMS_DESCRICOES: Record<string, CstIcmsInfo> = {
+  // CST — Regime Normal
+  '00': { descricao: 'Tributada integralmente', esperaVicms: 'sim' },
+  '10': { descricao: 'Tributada com cobrança de ICMS por Substituição Tributária', esperaVicms: 'sim' },
+  '20': { descricao: 'Com redução de base de cálculo', esperaVicms: 'sim' },
+  '30': { descricao: 'Isenta ou não tributada, com cobrança de ICMS por Substituição Tributária', esperaVicms: 'nao' },
+  '40': { descricao: 'Isenta', esperaVicms: 'nao' },
+  '41': { descricao: 'Não tributada', esperaVicms: 'nao' },
+  '50': { descricao: 'Suspensão', esperaVicms: 'nao' },
+  '51': { descricao: 'Diferimento', esperaVicms: 'opcional' },
+  '60': { descricao: 'ICMS cobrado anteriormente por Substituição Tributária', esperaVicms: 'nao' },
+  '70': { descricao: 'Com redução de base de cálculo e cobrança de ICMS por Substituição Tributária', esperaVicms: 'sim' },
+  '90': { descricao: 'Outras', esperaVicms: 'opcional' },
+  // CSOSN — Simples Nacional
+  '101': { descricao: 'Tributada pelo Simples Nacional com permissão de crédito', esperaVicms: 'nao' },
+  '102': { descricao: 'Tributada pelo Simples Nacional sem permissão de crédito', esperaVicms: 'nao' },
+  '103': { descricao: 'Isenção do ICMS no Simples Nacional para faixa de receita bruta', esperaVicms: 'nao' },
+  '201': { descricao: 'Tributada pelo Simples Nacional com permissão de crédito e com cobrança de ICMS por ST', esperaVicms: 'nao' },
+  '202': { descricao: 'Tributada pelo Simples Nacional sem permissão de crédito e com cobrança de ICMS por ST', esperaVicms: 'nao' },
+  '203': { descricao: 'Isenção do ICMS no Simples Nacional para faixa de receita bruta e com cobrança de ICMS por ST', esperaVicms: 'nao' },
+  '300': { descricao: 'Imune', esperaVicms: 'nao' },
+  '400': { descricao: 'Não tributada pelo Simples Nacional', esperaVicms: 'nao' },
+  '500': { descricao: 'ICMS cobrado anteriormente por Substituição Tributária ou por antecipação', esperaVicms: 'nao' },
+  '900': { descricao: 'Outros', esperaVicms: 'opcional' },
+};
 
 // Usa o texto oficial do CFOP_DESCRICOES pra separar "produção do
 // estabelecimento" de "mercadoria adquirida ou recebida de terceiros" — não
@@ -2346,6 +2392,75 @@ export default function App() {
       temAlerta: mudouNoPeriodo || semCrt.length > 0,
     };
   }, [xmlList, filterMes]);
+
+  // Auditoria de CST/CSOSN do ICMS: reúne tudo que é referente a situação
+  // tributária do ICMS num só lugar — (1) distribuição de código em uso
+  // (quanto cada CST/CSOSN representa do faturamento), e (2) duas
+  // conferências objetivas, direto do próprio layout oficial da NF-e, sem
+  // interpretar produto/CFOP: item com código que pelo layout NEM TEM campo
+  // de ICMS (isento/suspenso/ST já recolhido antes) mas ainda assim traz
+  // ICMS destacado — sinal de erro de configuração no emissor; e, pra código
+  // que tem <vICMS>, se a conta vBC × pICMS bate com o valor declarado.
+  type CstUso = { codigo: string; descricao: string; conhecido: boolean; qtdItens: number; valor: number; pct: number; produtoAmostra: string };
+  type CstProblema = { tipo: 'destacado_indevido' | 'conta_nao_bate'; codigo: string; xml: XmlData; xProd: string; vICMS: number; vBC: number | null; pICMS: number | null; esperado?: number };
+  const auditoriaCst = useMemo(() => {
+    const vazio = { totalItens: 0, totalNotas: 0, usos: [] as CstUso[], problemas: [] as CstProblema[] };
+    if (!mainCnpj) return vazio;
+
+    const saidas = xmlList.filter(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
+      !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+    if (saidas.length === 0) return vazio;
+
+    type Acum = { qtdItens: number; valor: number; produtoAmostra: string };
+    const mapaUso = new Map<string, Acum>();
+    const problemas: CstProblema[] = [];
+    let totalItens = 0;
+    const notasComItem = new Set<string>();
+
+    saidas.forEach(xml => {
+      const ex = getNotaExtract(xml);
+      if (!ex) return;
+      let notaTemItem = false;
+      ex.dets.forEach(det => {
+        if (!det.icmsCodigo) return;
+        totalItens++;
+        notaTemItem = true;
+        let a = mapaUso.get(det.icmsCodigo);
+        if (!a) { a = { qtdItens: 0, valor: 0, produtoAmostra: det.xProd || '(sem descrição)' }; mapaUso.set(det.icmsCodigo, a); }
+        a.qtdItens++;
+        a.valor += det.vProd;
+
+        const info = CST_ICMS_DESCRICOES[det.icmsCodigo];
+        const vICMS = det.vICMS ?? 0;
+        if (info?.esperaVicms === 'nao' && vICMS > 0.01) {
+          problemas.push({ tipo: 'destacado_indevido', codigo: det.icmsCodigo, xml, xProd: det.xProd, vICMS, vBC: det.vBCIcms, pICMS: det.pICMS });
+        } else if ((info?.esperaVicms === 'sim' || info?.esperaVicms === 'opcional') && det.vBCIcms != null && det.pICMS != null && det.vBCIcms > 0 && det.pICMS > 0) {
+          const esperado = det.vBCIcms * (det.pICMS / 100);
+          if (Math.abs(esperado - vICMS) > 0.02) {
+            problemas.push({ tipo: 'conta_nao_bate', codigo: det.icmsCodigo, xml, xProd: det.xProd, vICMS, vBC: det.vBCIcms, pICMS: det.pICMS, esperado });
+          }
+        }
+      });
+      if (notaTemItem) notasComItem.add(xml.chave || xml.fileName);
+    });
+
+    const totalValor = Array.from(mapaUso.values()).reduce((s, a) => s + a.valor, 0);
+    const usos: CstUso[] = Array.from(mapaUso.entries())
+      .map(([codigo, a]) => ({
+        codigo,
+        descricao: CST_ICMS_DESCRICOES[codigo]?.descricao || '(código não encontrado na tabela oficial de CST/CSOSN)',
+        conhecido: !!CST_ICMS_DESCRICOES[codigo],
+        qtdItens: a.qtdItens, valor: a.valor,
+        pct: totalValor > 0 ? (a.valor / totalValor) * 100 : 0,
+        produtoAmostra: a.produtoAmostra,
+      }))
+      .sort((a, b) => b.valor - a.valor);
+
+    return { totalItens, totalNotas: notasComItem.size, usos, problemas };
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
 
   // Auditoria de IBS/CBS (Reforma Tributária — EC 132/2023 + LC 214/2025):
   // 2026 é o período de teste (0,1% IBS + 0,9% CBS, compensável), quando o
@@ -7007,6 +7122,75 @@ ${htmlNomeDuplicado}
                       </table>
                     </div>
                   </div>
+
+                  {auditoriaCst.totalItens > 0 && (
+                    <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+                      <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                        Situação Tributária do ICMS (CST/CSOSN) — {auditoriaCst.totalItens} item(ns) em {auditoriaCst.totalNotas} nota(s)
+                      </div>
+                      <div className="overflow-x-auto max-h-48 overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                            <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                              <th className="py-1.5 pr-3">Código</th>
+                              <th className="py-1.5 pr-3">Descrição oficial</th>
+                              <th className="py-1.5 pr-3 text-right">Itens</th>
+                              <th className="py-1.5 pr-3 text-right">Valor</th>
+                              <th className="py-1.5 pr-3 text-right">%</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {auditoriaCst.usos.map(u => (
+                              <tr key={u.codigo} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                <td className="py-1.5 pr-3 font-mono font-bold text-slate-700 dark:text-slate-300">{u.codigo}</td>
+                                <td className={cn("py-1.5 pr-3", u.conhecido ? "text-slate-600 dark:text-slate-400" : "text-rose-600 dark:text-rose-400 font-semibold")}>{u.descricao}</td>
+                                <td className="py-1.5 pr-3 text-right tabular-nums text-slate-600 dark:text-slate-400">{u.qtdItens}</td>
+                                <td className="py-1.5 pr-3 text-right tabular-nums font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(u.valor)}</td>
+                                <td className="py-1.5 pr-3 text-right tabular-nums text-slate-500 dark:text-slate-400">{formatarPct(u.pct)}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className={cn(
+                        "mt-2 rounded-lg px-3 py-2.5 text-[11px]",
+                        auditoriaCst.problemas.length === 0
+                          ? "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
+                          : "bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800"
+                      )}>
+                        {auditoriaCst.problemas.length === 0
+                          ? '✓ Nenhum item com ICMS destacado onde o código não permite, e a conta vBC × pICMS bate com o vICMS declarado em todos os itens conferíveis.'
+                          : `⚠ ${auditoriaCst.problemas.length} item(ns) com problema no ICMS declarado — veja abaixo.`}
+                      </div>
+
+                      {auditoriaCst.problemas.length > 0 && (
+                        <div className="overflow-x-auto max-h-40 overflow-y-auto mt-2">
+                          <table className="w-full text-xs">
+                            <tbody>
+                              {auditoriaCst.problemas.slice(0, 20).map((p, i) => (
+                                <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                  <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300 whitespace-nowrap">Série {p.xml.serie}, Nº {p.xml.numero}</td>
+                                  <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{p.xProd}</td>
+                                  <td className="py-1.5 text-rose-600 dark:text-rose-400">
+                                    {p.tipo === 'destacado_indevido'
+                                      ? <>CST/CSOSN {p.codigo} ({CST_ICMS_DESCRICOES[p.codigo]?.descricao}) não deveria ter ICMS destacado, mas o item traz vICMS = {formatarMoeda(p.vICMS)}</>
+                                      : <>CST/CSOSN {p.codigo}: vBC ({formatarMoeda(p.vBC || 0)}) × {p.pICMS}% = {formatarMoeda(p.esperado || 0)}, mas o item declara vICMS = {formatarMoeda(p.vICMS)}</>}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          {auditoriaCst.problemas.length > 20 && (
+                            <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1.5">Mostrando 20 de {auditoriaCst.problemas.length}.</p>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-2">
+                        Checagem estrutural direto do layout oficial da NF-e — não avalia se o código escolhido é o adequado pro produto/operação (isso exigiria interpretar a natureza da venda, o que é fase 2, não feita aqui).
+                      </p>
+                    </div>
+                  )}
 
                   {responsavelTecnico.email && (
                     <div className="pt-3 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-400 dark:text-slate-500">
