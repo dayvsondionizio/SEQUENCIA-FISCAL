@@ -4240,6 +4240,332 @@ ${htmlNomeDuplicado}
     };
   }, [xmlList, filterMes]);
 
+  // Relatório de Alertas (IBS/CBS + TEF): HTML autocontido, baixável (não é
+  // janela de impressão como o Laudo/Mapa Fiscal) — feito pra ser anexado e
+  // mandado pra analista/superior. Cada assunto vira um "tópico" (severidade
+  // crítico/atenção/ok, resumo de uma linha, e uma tabela quando fizer
+  // sentido); um Sumário Executivo no topo lista todo tópico com link âncora,
+  // pra nada ficar escondido atrás de um clique que ninguém dá. Tópico com
+  // tabela ganha botão "Baixar Excel" — via SheetJS carregado por CDN dentro
+  // do próprio HTML exportado, lendo os dados de um <script> com JSON embutido
+  // (o relatório roda sozinho, sem depender do app aberto).
+  const exportarRelatorioAlertasHtml = () => {
+    type Topico = {
+      id: string; area: 'ibscbs' | 'tef'; titulo: string;
+      nivel: 'critico' | 'atencao' | 'ok';
+      resumo: string;
+      corpo: string;
+      colunas?: string[];
+      linhas?: (string | number)[][];
+    };
+
+    const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const empresa = analysis?.[0]?.razaoSocial || notasSaida[0]?.razaoSocial || '';
+    const periodo = periodoParaNomeArquivo();
+    const hoje = new Date().toLocaleDateString('pt-BR');
+    const dataFmt = (d?: string) => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
+
+    const topicos: Topico[] = [];
+
+    // ─── ÁREA: IBS/CBS ───────────────────────────────────────────────────
+    if (auditoriaIbsCbs.totalNotas > 0) {
+      const nivelCobertura: Topico['nivel'] = auditoriaIbsCbs.pctComGrupo === 0 ? 'critico' : auditoriaIbsCbs.pctComGrupo === 100 ? 'ok' : 'atencao';
+      topicos.push({
+        id: 'ibscbs-cobertura', area: 'ibscbs', titulo: 'Cobertura do grupo IBS/CBS',
+        nivel: nivelCobertura,
+        resumo: `${auditoriaIbsCbs.notasComGrupo} de ${auditoriaIbsCbs.totalNotas} nota(s) (${formatarPct(auditoriaIbsCbs.pctComGrupo)}%) trazem o grupo IBS/CBS preenchido`,
+        corpo: nivelCobertura === 'critico'
+          ? 'Nenhuma nota desse período traz o grupo &lt;IBSCBS&gt; preenchido. 2026 é o período de teste da Reforma Tributária (0,1% IBS + 0,9% CBS, compensável) — o sistema de emissão do cliente ainda não parece adaptado. Vale confirmar com o suporte do sistema antes disso virar obrigatório de verdade.'
+          : nivelCobertura === 'ok'
+          ? '100% das notas desse período já trazem o grupo IBS/CBS — sistema do cliente parece adaptado à Reforma Tributária.'
+          : 'Só parte das notas traz o grupo IBS/CBS — pode ser uma atualização de sistema no meio do período (confira as datas na amostra abaixo) ou inconsistência a esclarecer com o suporte do sistema.',
+        colunas: auditoriaIbsCbs.amostraSemGrupo.length > 0 ? ['Série', 'Número', 'Data'] : undefined,
+        linhas: auditoriaIbsCbs.amostraSemGrupo.map(n => [n.serie, n.numero, dataFmt(n.data)]),
+      });
+
+      if (auditoriaClassTrib.totalItens > 0) {
+        const temErro = auditoriaClassTrib.problemas.some(p => p.nivel === 'erro');
+        const temAlerta = auditoriaClassTrib.problemas.some(p => p.nivel === 'alerta');
+        topicos.push({
+          id: 'ibscbs-classtrib', area: 'ibscbs', titulo: 'Validação cClassTrib × Tabela Oficial',
+          nivel: temErro ? 'critico' : temAlerta ? 'atencao' : 'ok',
+          resumo: auditoriaClassTrib.problemas.length === 0
+            ? `${auditoriaClassTrib.totalItens} item(ns) verificados, nenhuma inconsistência estrutural`
+            : `${auditoriaClassTrib.problemas.length} inconsistência(s) em ${auditoriaClassTrib.totalItens} item(ns) verificados`,
+          corpo: `Checagem estrutural (código × código) contra a tabela oficial ${esc(CCLASSTRIB_VERSAO)}: formato, prefixo CST↔cClassTrib, existência, vigência na data de emissão, permissão pro modelo do documento e redução de alíquota compatível. Não avalia se o código escolhido é o adequado pro produto — isso é decisão do contador.`,
+          colunas: auditoriaClassTrib.problemas.length > 0 ? ['Gravidade', 'Código', 'Motivo', 'Itens', 'Notas', 'Exemplo'] : undefined,
+          linhas: auditoriaClassTrib.problemas.map(p => [p.nivel === 'erro' ? 'Erro' : 'Alerta', p.code, p.motivo, p.itens, p.notas.size, p.exemplo]),
+        });
+      }
+
+      if (auditoriaClassTrib.codigosUsados.length > 0) {
+        topicos.push({
+          id: 'ibscbs-codigos', area: 'ibscbs', titulo: 'Códigos cClassTrib em uso',
+          nivel: auditoriaClassTrib.cclassTribUnicoSuspeito ? 'atencao' : 'ok',
+          resumo: auditoriaClassTrib.cclassTribUnicoSuspeito
+            ? `Só ${esc(auditoriaClassTrib.codigosUsados[0]?.code || '')} foi usado no período inteiro, apesar de ${auditoriaClassTrib.ncmsDistintos} NCMs distintos no catálogo`
+            : `${auditoriaClassTrib.codigosUsados.length} código(s) distinto(s) em uso`,
+          corpo: auditoriaClassTrib.cclassTribUnicoSuspeito
+            ? 'Vale confirmar se o sistema do cliente classifica produto a produto ou aplica um valor fixo/padrão pra tudo. Cada código pode estar estruturalmente correto e ainda assim ser resultado de um cadastro que nunca foi de fato analisado.'
+            : 'Distribuição de faturamento e valores de IBS/CBS destacados por código cClassTrib, conforme o próprio sistema do cliente calculou (nenhum cálculo é feito por este relatório).',
+          colunas: ['Código', 'Nome', 'CST', 'Na tabela oficial', 'Itens', 'Notas', 'Valor (R$)', 'IBS destacado (R$)', 'CBS destacado (R$)'],
+          linhas: auditoriaClassTrib.codigosUsados.map(c => [c.code, c.nome, c.cst, c.naTabela ? 'Sim' : 'Não', c.itens, c.notas.size, c.valor, c.vIBS, c.vCBS]),
+        });
+      }
+    }
+
+    // ─── ÁREA: TEF ───────────────────────────────────────────────────────
+    const temDadosTef = auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0
+      || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0;
+    if (temDadosTef) {
+      const pctIntegrado = auditoriaPagamento.totalCartao > 0 ? (auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100 : 0;
+      const riscoObrigatoriedade = !regimeTributario.isSimples && !regimeTributario.isMei && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
+      const problemasOutros = auditoriaPagamento.problemas.filter(p => !p.motivo.startsWith('Falso TEF'));
+
+      topicos.push({
+        id: 'tef-resumo', area: 'tef', titulo: 'Resumo de Integração ao TEF',
+        nivel: riscoObrigatoriedade || auditoriaPagamento.totalFalsoTef > 0 ? 'critico' : auditoriaPagamento.totalNaoIntegrado > 0 ? 'atencao' : 'ok',
+        resumo: `${formatarPct(pctIntegrado)}% integrado — ${auditoriaPagamento.totalIntegrado} integrado(s), ${auditoriaPagamento.totalNaoIntegrado} POS manual, ${auditoriaPagamento.totalFalsoTef} falso TEF, de ${auditoriaPagamento.totalCartao} venda(s) em cartão sujeita(s) a TEF`,
+        corpo: `${riscoObrigatoriedade ? 'Regime tributário não é Simples/MEI e há venda em cartão sem integração TEF — risco de obrigatoriedade não cumprida (verificar legislação estadual/municipal aplicável). ' : ''}${auditoriaPagamento.totalCartaoNaoAplicavel} venda(s) em cartão ficaram fora do escopo de TEF (não presencial ou interestadual — legítimo, não é problema). ${auditoriaPagamento.notasComPagamentoDividido} nota(s) têm pagamento dividido em mais de uma forma. ${auditoriaPagamento.cartaoIndPagSuspeito} pagamento(s) em cartão vieram marcados "a prazo" (indPag=1) — sempre suspeito, pois quem parcela no cartão é o cliente com a operadora, o lojista recebe à vista.`,
+        colunas: ['Indicador', 'Valor'],
+        linhas: [
+          ['Vendas em cartão sujeitas a TEF', auditoriaPagamento.totalCartao],
+          ['Integrado de verdade', auditoriaPagamento.totalIntegrado],
+          ['POS manual (não integrado)', auditoriaPagamento.totalNaoIntegrado],
+          ['Falso TEF', auditoriaPagamento.totalFalsoTef],
+          ['Fora do escopo de TEF', auditoriaPagamento.totalCartaoNaoAplicavel],
+          ['Notas com pagamento dividido', auditoriaPagamento.notasComPagamentoDividido],
+          ['Cartão com indPag=1 (a prazo, suspeito)', auditoriaPagamento.cartaoIndPagSuspeito],
+        ],
+      });
+
+      if (auditoriaPagamento.totalFalsoTef > 0) {
+        const linhasFalso = auditoriaPagamento.problemas.filter(p => p.motivo.startsWith('Falso TEF'));
+        topicos.push({
+          id: 'tef-falso', area: 'tef', titulo: 'Falso TEF',
+          nivel: 'critico',
+          resumo: `${auditoriaPagamento.totalFalsoTef} venda(s) declaram integração (tpIntegra=1) sem código de autorização`,
+          corpo: 'Alerta grave: uma integração de TEF de verdade sempre traz o código de autorização (cAut) devolvido pela adquirente. Uma venda que afirma tpIntegra=1 sem esse código é uma contradição que os próprios dados da nota revelam — indica PDV mal configurado ou uma integração que a nota declara mas não ocorreu de fato. Mais grave que POS manual comum (tpIntegra=2), que ao menos é honesto sobre não estar integrado.',
+          colunas: ['Série', 'Número', 'Data', 'Forma de Pagamento', 'CNPJ Adquirente', 'Bandeira'],
+          linhas: linhasFalso.map(p => [p.xml.serie, p.xml.numero, dataFmt(p.xml.data), p.tPagNome, p.cardCnpj || '—', p.cardTBand || '—']),
+        });
+      }
+
+      if (problemasOutros.length > 0) {
+        topicos.push({
+          id: 'tef-outros-problemas', area: 'tef', titulo: 'Outros Problemas de Pagamento',
+          nivel: 'atencao',
+          resumo: `${problemasOutros.length} ocorrência(s) — código de autorização genérico, CNPJ da adquirente igual ao emitente, "Sem Pagamento" indevido, troco sem dinheiro correspondente, ou bloco de cartão em forma não-cartão`,
+          corpo: 'Cada linha é uma inconsistência técnica encontrada na própria estrutura do XML — não interpretação, só o que os dados contradizem.',
+          colunas: ['Série', 'Número', 'Data', 'Forma de Pagamento', 'Motivo'],
+          linhas: problemasOutros.map(p => [p.xml.serie, p.xml.numero, dataFmt(p.xml.data), p.tPagNome, p.motivo]),
+        });
+      }
+
+      if (auditoriaPagamento.notasNaoIntegradas.length > 0) {
+        topicos.push({
+          id: 'tef-nao-integradas', area: 'tef', titulo: 'Notas com POS Manual (Não Integrado)',
+          nivel: 'atencao',
+          resumo: `${auditoriaPagamento.notasNaoIntegradas.length} nota(s) com pagamento em cartão passado manualmente, sem integração TEF`,
+          corpo: 'tpIntegra=2 (POS/Cartão de Terceiro não integrado) — o pagamento em cartão foi feito num equipamento separado do PDV, sem comunicação automática. Não é necessariamente irregular, mas é o oposto do fluxo que a legislação de TEF busca garantir; vale confirmar o motivo com o cliente.',
+          colunas: ['Série', 'Número', 'Data', 'Forma de Pagamento'],
+          linhas: auditoriaPagamento.notasNaoIntegradas.map(n => [n.xml.serie, n.xml.numero, dataFmt(n.xml.data), n.tPagNome]),
+        });
+      }
+
+      if (auditoriaPagamento.notasForaDoEscopo.length > 0) {
+        topicos.push({
+          id: 'tef-fora-escopo', area: 'tef', titulo: 'Notas Fora do Escopo de TEF',
+          nivel: 'ok',
+          resumo: `${auditoriaPagamento.notasForaDoEscopo.length} nota(s) com cartão fora do escopo (não presencial ou interestadual) — legítimo, listado só pra transparência`,
+          corpo: 'Venda não presencial (e-commerce/entrega) ou interestadual não é obrigada a TEF local. Essas notas não contam como "POS manual" nem entram na base de cálculo do % de integração.',
+          colunas: ['Série', 'Número', 'Data', 'Motivo'],
+          linhas: auditoriaPagamento.notasForaDoEscopo.map(n => [n.xml.serie, n.xml.numero, dataFmt(n.xml.data), n.motivo]),
+        });
+      }
+
+      if (auditoriaPagamento.breakdownPorTipoPagamento.length > 0) {
+        topicos.push({
+          id: 'tef-breakdown', area: 'tef', titulo: 'Faturamento por Forma de Pagamento',
+          nivel: 'ok',
+          resumo: `${auditoriaPagamento.breakdownPorTipoPagamento.length} forma(s) de pagamento distintas usadas no período`,
+          corpo: 'Quantidade e valor (líquido de troco) por forma de pagamento declarada nas notas — visão geral mesmo sem nenhuma venda em cartão a auditar.',
+          colunas: ['Forma de Pagamento', 'Quantidade', 'Valor (R$)'],
+          linhas: auditoriaPagamento.breakdownPorTipoPagamento.map(b => [b.tPagNome, b.qtd, b.valor]),
+        });
+      }
+    }
+
+    if (topicos.length === 0) return;
+
+    const nivelInfo: Record<Topico['nivel'], { label: string; cor: string; corFundo: string; corBorda: string; icone: string }> = {
+      critico: { label: 'Crítico', cor: '#7A1F1A', corFundo: '#FBEAE9', corBorda: '#B3261E', icone: '⛔' },
+      atencao: { label: 'Atenção', cor: '#7A5210', corFundo: '#FBF1DE', corBorda: '#B7791F', icone: '⚠' },
+      ok: { label: 'Regular', cor: '#1E5A3D', corFundo: '#E8F5EE', corBorda: '#2F6F4E', icone: '✓' },
+    };
+
+    const areaLabel: Record<'ibscbs' | 'tef', string> = { ibscbs: 'IBS/CBS — Reforma Tributária', tef: 'TEF — Auditoria de Pagamento' };
+    const topicosPorArea = { ibscbs: topicos.filter(t => t.area === 'ibscbs'), tef: topicos.filter(t => t.area === 'tef') };
+
+    const dadosParaExcel: Record<string, { colunas: string[]; linhas: (string | number)[][] }> = {};
+    topicos.forEach(t => { if (t.colunas && t.linhas) dadosParaExcel[t.id] = { colunas: t.colunas, linhas: t.linhas }; });
+
+    const linhaSumario = (t: Topico) => {
+      const ni = nivelInfo[t.nivel];
+      return `
+        <a href="#${t.id}" class="sumario-linha" style="border-left-color:${ni.corBorda}">
+          <span class="sumario-badge" style="color:${ni.cor};background:${ni.corFundo}">${ni.icone} ${ni.label}</span>
+          <span class="sumario-titulo">${esc(t.titulo)}</span>
+          <span class="sumario-resumo">${esc(t.resumo)}</span>
+        </a>`;
+    };
+
+    const tabelaHtml = (t: Topico) => {
+      if (!t.colunas || !t.linhas) return '';
+      const LIMITE = 300;
+      const linhasVisiveis = t.linhas.slice(0, LIMITE);
+      const colunas = t.colunas;
+      const ehMoeda = colunas.map(c => c.includes('R$'));
+      return `
+        <div class="tabela-wrap">
+          <table>
+            <thead><tr>${colunas.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+            <tbody>${linhasVisiveis.map(l => `<tr>${l.map((v, i) => {
+              const valorExibido = typeof v === 'number' && ehMoeda[i] ? formatarMoeda(v) : v;
+              return `<td class="${typeof v === 'number' ? 'num' : ''}">${esc(valorExibido)}</td>`;
+            }).join('')}</tr>`).join('')}</tbody>
+          </table>
+          ${t.linhas.length > LIMITE ? `<div class="tabela-nota">Mostrando ${LIMITE} de ${t.linhas.length} linha(s) — baixe em Excel pra ver todas.</div>` : ''}
+        </div>`;
+    };
+
+    const topicoHtml = (t: Topico) => {
+      const ni = nivelInfo[t.nivel];
+      return `
+        <details id="${t.id}" class="topico" style="border-left-color:${ni.corBorda}" ${t.nivel !== 'ok' ? 'open' : ''}>
+          <summary>
+            <span class="topico-badge" style="color:${ni.cor};background:${ni.corFundo}">${ni.icone} ${ni.label}</span>
+            <span class="topico-titulo">${esc(t.titulo)}</span>
+            <span class="topico-resumo">${esc(t.resumo)}</span>
+          </summary>
+          <div class="topico-corpo">
+            <p class="topico-texto">${t.corpo}</p>
+            ${tabelaHtml(t)}
+            ${t.colunas && t.linhas && t.linhas.length > 0 ? `<button class="btn-excel" onclick="baixarExcelTopico('${t.id}','${esc(sanitizarNomeArquivo(t.titulo))}')">⇩ Baixar Excel deste tópico</button>` : ''}
+          </div>
+        </details>`;
+    };
+
+    const areaHtml = (area: 'ibscbs' | 'tef') => {
+      const lista = topicosPorArea[area];
+      if (lista.length === 0) return '';
+      return `
+        <section class="area">
+          <h2>${areaLabel[area]}</h2>
+          ${lista.map(topicoHtml).join('')}
+        </section>`;
+    };
+
+    const totalCritico = topicos.filter(t => t.nivel === 'critico').length;
+    const totalAtencao = topicos.filter(t => t.nivel === 'atencao').length;
+
+    const html = `<!DOCTYPE html>
+<html lang="pt-BR"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relatório de Alertas — IBS/CBS e TEF — ${esc(empresa)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<style>
+  :root { --ink:#17150F; --gold:#C9A227; --parchment:#F7F4EC; --linha:#E4DFD0; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--parchment); color:var(--ink); font-family:'IBM Plex Sans',sans-serif; line-height:1.55; }
+  .capa { background:var(--ink); color:#F7F4EC; padding:48px 32px 40px; }
+  .capa-inner { max-width:920px; margin:0 auto; }
+  .capa .selo { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:var(--gold); margin-bottom:14px; }
+  .capa h1 { font-family:'Newsreader',serif; font-weight:700; font-size:2.1rem; margin:0 0 10px; }
+  .capa .meta { font-size:13.5px; color:rgba(247,244,236,0.75); display:flex; flex-wrap:wrap; gap:6px 22px; }
+  .capa .meta b { color:#F7F4EC; }
+  .wrap { max-width:920px; margin:0 auto; padding:34px 32px 70px; }
+  .sumario { background:#fff; border:1px solid var(--linha); border-radius:2px; padding:22px 24px 10px; margin-bottom:38px; }
+  .sumario h2 { font-family:'Newsreader',serif; font-size:1.2rem; margin:0 0 4px; }
+  .sumario .contagem { font-size:12.5px; color:#6B6350; margin-bottom:16px; }
+  .sumario .contagem strong.n-critico { color:#B3261E; } .sumario .contagem strong.n-atencao { color:#B7791F; }
+  .sumario-linha { display:flex; align-items:center; gap:12px; text-decoration:none; color:var(--ink); padding:9px 10px; border-left:3px solid; border-radius:2px; margin-bottom:8px; background:#FBFAF6; transition:background .15s; }
+  .sumario-linha:hover { background:#F1EDE0; }
+  .sumario-badge { font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:3px; white-space:nowrap; }
+  .sumario-titulo { font-weight:600; font-size:13.5px; white-space:nowrap; }
+  .sumario-resumo { font-size:12.5px; color:#6B6350; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .area { margin-bottom:36px; }
+  .area h2 { font-family:'Newsreader',serif; font-size:1.5rem; font-weight:600; border-bottom:2px solid var(--ink); padding-bottom:8px; margin:0 0 18px; }
+  .topico { background:#fff; border:1px solid var(--linha); border-left:4px solid; border-radius:2px; margin-bottom:14px; }
+  .topico summary { list-style:none; cursor:pointer; padding:14px 18px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .topico summary::-webkit-details-marker { display:none; }
+  .topico summary::before { content:'▸'; font-size:11px; color:#9C9583; transition:transform .15s; margin-right:2px; }
+  .topico[open] summary::before { transform:rotate(90deg); }
+  .topico-badge { font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600; padding:3px 9px; border-radius:3px; white-space:nowrap; }
+  .topico-titulo { font-family:'Newsreader',serif; font-weight:600; font-size:16px; }
+  .topico-resumo { font-size:12.5px; color:#6B6350; flex:1; }
+  .topico-corpo { padding:0 18px 18px; border-top:1px solid var(--linha); margin-top:0; }
+  .topico-texto { font-size:13.5px; color:#3A362B; margin:14px 0; max-width:70ch; }
+  .tabela-wrap { overflow-x:auto; max-height:420px; overflow-y:auto; border:1px solid var(--linha); border-radius:2px; margin-bottom:12px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  thead th { position:sticky; top:0; background:#FBFAF6; text-align:left; font-weight:600; color:#6B6350; text-transform:uppercase; font-size:10.5px; letter-spacing:0.04em; padding:8px 12px; border-bottom:1px solid var(--linha); white-space:nowrap; }
+  tbody td { padding:7px 12px; border-bottom:1px solid #F0EDE2; white-space:nowrap; }
+  tbody tr:nth-child(even) { background:#FBFAF6; }
+  td.num { text-align:right; font-family:'IBM Plex Mono',monospace; font-variant-numeric:tabular-nums; }
+  .btn-excel { font-family:'IBM Plex Sans',sans-serif; font-size:12.5px; font-weight:600; color:var(--ink); background:linear-gradient(180deg,#E7C453,var(--gold)); border:1px solid #A9821C; border-radius:3px; padding:8px 16px; cursor:pointer; }
+  .btn-excel:hover { filter:brightness(1.04); }
+  .tabela-nota { font-size:11px; color:#8A8370; padding:6px 12px; border-top:1px solid var(--linha); background:#FBFAF6; }
+  footer { max-width:920px; margin:0 auto; padding:0 32px 60px; font-size:11.5px; color:#8A8370; max-width:75ch; }
+  @media (max-width:640px) { .capa,.wrap,footer { padding-left:18px; padding-right:18px; } .sumario-linha { flex-wrap:wrap; } .sumario-resumo { white-space:normal; } }
+</style>
+</head><body>
+  <div class="capa"><div class="capa-inner">
+    <div class="selo">Sequência Fiscal · Relatório de Alertas</div>
+    <h1>IBS/CBS e TEF — ${esc(empresa)}</h1>
+    <div class="meta">
+      <span>Período: <b>${esc(periodo)}</b></span>
+      <span>Gerado em: <b>${hoje}</b></span>
+      <span>${totalCritico} tópico(s) <b style="color:#F2B8B5">crítico(s)</b>, ${totalAtencao} de <b style="color:#EAD08C">atenção</b></span>
+    </div>
+  </div></div>
+  <div class="wrap">
+    <div class="sumario">
+      <h2>Sumário Executivo</h2>
+      <div class="contagem">${topicos.length} tópico(s) no total — <strong class="n-critico">${totalCritico} crítico(s)</strong>, <strong class="n-atencao">${totalAtencao} de atenção</strong>, ${topicos.length - totalCritico - totalAtencao} regular(es). Clique em qualquer linha pra ir direto ao tópico.</div>
+      ${topicos.map(linhaSumario).join('')}
+    </div>
+    ${areaHtml('ibscbs')}
+    ${areaHtml('tef')}
+  </div>
+  <footer>
+    <strong>Metodologia e limites.</strong> Este relatório reúne checagens estruturais e determinísticas — comparações de código × código e conta × conta, direto do que os XMLs de NF-e/NFC-e declaram. Não é uma auditoria oficial da Receita Federal nem substitui análise de um contador. Gerado automaticamente pelo Sequência Fiscal a partir dos XMLs carregados na análise.
+  </footer>
+  <script>
+    var DADOS = ${JSON.stringify(dadosParaExcel)};
+    function baixarExcelTopico(id, nomeBase) {
+      var t = DADOS[id];
+      if (!t) return;
+      var aoa = [t.colunas].concat(t.linhas);
+      var ws = XLSX.utils.aoa_to_sheet(aoa);
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Dados');
+      XLSX.writeFile(wb, nomeBase + '.xlsx', { compression: true });
+    }
+  </script>
+</body></html>`;
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = nomeArquivoExport('relatorio_alertas_ibscbs_tef', 'html');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  };
+
   // All saída notes of the main company, plus inutilizações (XML-sourced or
   // manually confirmed), flagged with cancellation status — the searchable
   // pool for "pesquisar notas de saída".
@@ -9691,12 +10017,22 @@ ${htmlNomeDuplicado}
                           </div>
                         </div>
                       </div>
-                      <button
-                        onClick={() => setShowAuditoriaIbsCbs(false)}
-                        className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
-                      >
-                        Ocultar
-                      </button>
+                      <div className="flex items-center gap-4 no-print">
+                        <button
+                          onClick={exportarRelatorioAlertasHtml}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                          title="Baixa um HTML com tudo de IBS/CBS e TEF — tópicos expansíveis, prontos pra mandar pra analista/superior"
+                        >
+                          <Download className="w-3 h-3" />
+                          Exportar Relatório de Alertas
+                        </button>
+                        <button
+                          onClick={() => setShowAuditoriaIbsCbs(false)}
+                          className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline"
+                        >
+                          Ocultar
+                        </button>
+                      </div>
                     </div>
 
                     <div className="space-y-4">
@@ -10221,6 +10557,14 @@ ${htmlNomeDuplicado}
                         >
                           {copiedResumoTEF ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
                           {copiedResumoTEF ? 'Copiado!' : 'Copiar Resumo'}
+                        </button>
+                        <button
+                          onClick={exportarRelatorioAlertasHtml}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                          title="Baixa um HTML com tudo de IBS/CBS e TEF — tópicos expansíveis, prontos pra mandar pra analista/superior"
+                        >
+                          <Download className="w-3 h-3" />
+                          Exportar Relatório de Alertas
                         </button>
                         <button
                           onClick={() => setShowAuditoriaPagamento(false)}
