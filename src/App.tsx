@@ -1633,6 +1633,10 @@ export default function App() {
   const [agruparRankingPorNome, setAgruparRankingPorNome] = useState(false);
   const [showRankingNcm, setShowRankingNcm] = useState(false);
   const [showSazonalidade, setShowSazonalidade] = useState(false);
+  // Todos os modelos (padrão) ou só NFC-e — NF-e (mod 55) costuma ser
+  // atacado/B2B e não reflete o movimento real do caixa/PDV; pra decisão de
+  // escala de equipe às vezes só importa o varejo de balcão.
+  const [sazonalidadeSomenteNfce, setSazonalidadeSomenteNfce] = useState(false);
   const [showDevolucoes, setShowDevolucoes] = useState(false);
   const [showDaysDetail, setShowDaysDetail] = useState(false);
   const [notasPorDiaModoResumido, setNotasPorDiaModoResumido] = useState(false);
@@ -3565,7 +3569,8 @@ ${secoesPorCodigo}
     const saidas = xmlList.filter(xml =>
       xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' &&
       !!xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
-      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes) &&
+      (!sazonalidadeSomenteNfce || xml.modelo === '65')
     );
     if (saidas.length === 0) return vazio;
 
@@ -3608,7 +3613,7 @@ ${secoesPorCodigo}
       porDiaSemana: acumDia.map((a, i) => ({ dia: DIAS_SEMANA[i], ...a, pct: totalDia > 0 ? (a.faturamento / totalDia) * 100 : 0 })),
       porHora: acumHora.map((a, i) => ({ hora: i, ...a, pct: totalHora > 0 ? (a.faturamento / totalHora) * 100 : 0 })),
     };
-  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas, sazonalidadeSomenteNfce]);
 
   // Devoluções: produto a produto, quem mais volta — os totais (valor, %,
   // quantidade de notas) já vêm prontos de mapaFiscal (mesma agregação,
@@ -8683,7 +8688,30 @@ ${htmlNomeDuplicado}
                               <ChevronRight className={cn("w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0 transition-transform", showSazonalidade && "rotate-90")} />
                             </button>
                             {showSazonalidade && (
-                              <div className="mt-4 grid sm:grid-cols-2 gap-6">
+                              <div className="mt-4">
+                                <div className="flex items-center rounded-full border border-slate-200 dark:border-slate-700 overflow-hidden w-fit mb-4 no-print">
+                                  {([
+                                    { v: false, label: 'Todos os Modelos' },
+                                    { v: true, label: 'Somente NFC-e' },
+                                  ] as const).map(opt => (
+                                    <button
+                                      key={String(opt.v)}
+                                      onClick={() => setSazonalidadeSomenteNfce(opt.v)}
+                                      title={opt.v
+                                        ? 'Só NFC-e (modelo 65) — venda de balcão/PDV, sem NF-e de atacado/B2B que pode distorcer o pico de horário'
+                                        : 'NFC-e e NF-e juntas — visão completa do faturamento'}
+                                      className={cn(
+                                        "px-3 py-1.5 text-xs font-semibold transition-colors",
+                                        sazonalidadeSomenteNfce === opt.v
+                                          ? "bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900"
+                                          : "bg-white text-slate-500 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800"
+                                      )}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              <div className="grid sm:grid-cols-2 gap-6">
                                 <div>
                                   <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">Faturamento por dia da semana</div>
                                   <div className="space-y-1.5">
@@ -8715,10 +8743,11 @@ ${htmlNomeDuplicado}
                                   </div>
                                 </div>
                               </div>
+                              </div>
                             )}
                             {showSazonalidade && (
                               <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-3">
-                                Só venda de verdade (exclui transferência, baixa de estoque, devolução de compra e outras saídas que não são venda) — % é a fatia de cada dia/horário sobre o faturamento total desse gráfico.
+                                Só venda de verdade (exclui transferência, baixa de estoque, devolução de compra e outras saídas que não são venda) — % é a fatia de cada dia/horário sobre o faturamento total desse gráfico.{sazonalidadeSomenteNfce && ' Mostrando só NFC-e (modelo 65) — NF-e (modelo 55) fora.'}
                               </p>
                             )}
                           </div>
