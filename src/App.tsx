@@ -1637,6 +1637,10 @@ export default function App() {
   // atacado/B2B e não reflete o movimento real do caixa/PDV; pra decisão de
   // escala de equipe às vezes só importa o varejo de balcão.
   const [sazonalidadeSomenteNfce, setSazonalidadeSomenteNfce] = useState(false);
+  // Dia da semana selecionado pra ver o horário de pico SÓ daquele dia (ex:
+  // "nas sextas, em que horário concentra?") — null = agregado de todos os
+  // dias, como já era antes.
+  const [sazonalidadeDiaSelecionado, setSazonalidadeDiaSelecionado] = useState<number | null>(null);
   const [showDevolucoes, setShowDevolucoes] = useState(false);
   const [showDaysDetail, setShowDaysDetail] = useState(false);
   const [notasPorDiaModoResumido, setNotasPorDiaModoResumido] = useState(false);
@@ -3564,6 +3568,7 @@ ${secoesPorCodigo}
     const vazio = {
       porDiaSemana: [] as { dia: string; faturamento: number; quantidadeNotas: number; pct: number }[],
       porHora: [] as { hora: number; faturamento: number; quantidadeNotas: number; pct: number }[],
+      porDiaEHora: [] as { dia: string; horas: { hora: number; faturamento: number; quantidadeNotas: number; pct: number }[] }[],
     };
     if (!mainCnpj) return vazio;
     const saidas = xmlList.filter(xml =>
@@ -3576,6 +3581,9 @@ ${secoesPorCodigo}
 
     const acumDia = Array.from({ length: 7 }, () => ({ faturamento: 0, quantidadeNotas: 0 }));
     const acumHora = Array.from({ length: 24 }, () => ({ faturamento: 0, quantidadeNotas: 0 }));
+    // Cruzamento dia × horário — pra responder "nas sextas, em que horário
+    // concentra?" em vez de só ver a média de todos os dias juntos.
+    const acumDiaHora = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ faturamento: 0, quantidadeNotas: 0 })));
 
     saidas.forEach(xml => {
       const dataStr = xml.data || '';
@@ -3603,6 +3611,8 @@ ${secoesPorCodigo}
       if (!isNaN(hora) && hora >= 0 && hora < 24) {
         acumHora[hora].faturamento += valorVenda;
         acumHora[hora].quantidadeNotas++;
+        acumDiaHora[dia][hora].faturamento += valorVenda;
+        acumDiaHora[dia][hora].quantidadeNotas++;
       }
     });
 
@@ -3612,6 +3622,13 @@ ${secoesPorCodigo}
     return {
       porDiaSemana: acumDia.map((a, i) => ({ dia: DIAS_SEMANA[i], ...a, pct: totalDia > 0 ? (a.faturamento / totalDia) * 100 : 0 })),
       porHora: acumHora.map((a, i) => ({ hora: i, ...a, pct: totalHora > 0 ? (a.faturamento / totalHora) * 100 : 0 })),
+      porDiaEHora: acumDiaHora.map((horasDoDia, i) => {
+        const totalDoDia = horasDoDia.reduce((s, h) => s + h.faturamento, 0);
+        return {
+          dia: DIAS_SEMANA[i],
+          horas: horasDoDia.map((h, hi) => ({ hora: hi, ...h, pct: totalDoDia > 0 ? (h.faturamento / totalDoDia) * 100 : 0 })),
+        };
+      }),
     };
   }, [xmlList, filterMes, mainCnpj, chavesCanceladas, sazonalidadeSomenteNfce]);
 
@@ -8674,7 +8691,13 @@ ${htmlNomeDuplicado}
                           de escala/produção, sem precisar abrir nota por nota. */}
                       {sazonalidade.porDiaSemana.some(d => d.quantidadeNotas > 0) && (() => {
                         const maxDia = Math.max(...sazonalidade.porDiaSemana.map(d => d.faturamento), 1);
-                        const horasComMovimento = sazonalidade.porHora.filter(h => h.quantidadeNotas > 0);
+                        // Com um dia selecionado, o painel de horário mostra só o cruzamento
+                        // daquele dia (ex: "nas sextas, que horário concentra?") em vez do
+                        // agregado de todos os dias juntos.
+                        const horasBase = sazonalidadeDiaSelecionado !== null
+                          ? sazonalidade.porDiaEHora[sazonalidadeDiaSelecionado].horas
+                          : sazonalidade.porHora;
+                        const horasComMovimento = horasBase.filter(h => h.quantidadeNotas > 0);
                         const maxHora = Math.max(...horasComMovimento.map(h => h.faturamento), 1);
                         return (
                           <div className="border-t border-slate-100 dark:border-slate-800 mt-6 pt-5">
@@ -8713,22 +8736,46 @@ ${htmlNomeDuplicado}
                                 </div>
                               <div className="grid sm:grid-cols-2 gap-6">
                                 <div>
-                                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">Faturamento por dia da semana</div>
+                                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">
+                                    Faturamento por dia da semana <span className="normal-case font-normal text-slate-400 dark:text-slate-500">(clique num dia pra ver o horário só dele)</span>
+                                  </div>
                                   <div className="space-y-1.5">
-                                    {sazonalidade.porDiaSemana.map(d => (
-                                      <div key={d.dia} className="flex items-center gap-2 text-xs" title={`${d.quantidadeNotas} nota(s)`}>
-                                        <div className="w-9 shrink-0 text-slate-500 dark:text-slate-400">{d.dia.slice(0, 3)}</div>
+                                    {sazonalidade.porDiaSemana.map((d, i) => (
+                                      <button
+                                        key={d.dia}
+                                        onClick={() => setSazonalidadeDiaSelecionado(sazonalidadeDiaSelecionado === i ? null : i)}
+                                        disabled={d.quantidadeNotas === 0}
+                                        title={`${d.quantidadeNotas} nota(s)${d.quantidadeNotas > 0 ? ' — clique pra ver o horário só desse dia' : ''}`}
+                                        className={cn(
+                                          "w-full flex items-center gap-2 text-xs rounded px-1 py-0.5 -mx-1 transition-colors",
+                                          d.quantidadeNotas === 0 ? "cursor-default" : "cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800",
+                                          sazonalidadeDiaSelecionado === i && "bg-blue-50 dark:bg-blue-950/40"
+                                        )}
+                                      >
+                                        <div className={cn("w-9 shrink-0 text-left", sazonalidadeDiaSelecionado === i ? "text-blue-600 dark:text-blue-400 font-bold" : "text-slate-500 dark:text-slate-400")}>{d.dia.slice(0, 3)}</div>
                                         <div className="flex-1 h-4 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden">
-                                          <div className="h-full bg-blue-400 dark:bg-blue-600" style={{ width: `${(d.faturamento / maxDia) * 100}%` }} />
+                                          <div className={cn("h-full", sazonalidadeDiaSelecionado === i ? "bg-blue-600 dark:bg-blue-400" : "bg-blue-400 dark:bg-blue-600")} style={{ width: `${(d.faturamento / maxDia) * 100}%` }} />
                                         </div>
                                         <div className="w-28 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-400">{formatarMoeda(d.faturamento)}</div>
                                         <div className="w-12 shrink-0 text-right tabular-nums text-slate-400 dark:text-slate-500">{formatarPct(d.pct)}%</div>
-                                      </div>
+                                      </button>
                                     ))}
                                   </div>
                                 </div>
                                 <div>
-                                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">Faturamento por horário</div>
+                                  <div className="flex items-center justify-between gap-2 mb-2">
+                                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                                      Faturamento por horário{sazonalidadeDiaSelecionado !== null && <> — {sazonalidade.porDiaSemana[sazonalidadeDiaSelecionado].dia}</>}
+                                    </div>
+                                    {sazonalidadeDiaSelecionado !== null && (
+                                      <button
+                                        onClick={() => setSazonalidadeDiaSelecionado(null)}
+                                        className="text-[10px] font-semibold text-blue-600 dark:text-blue-400 hover:underline shrink-0"
+                                      >
+                                        Ver todos os dias
+                                      </button>
+                                    )}
+                                  </div>
                                   <div className="space-y-1 max-h-[280px] overflow-auto pr-1">
                                     {horasComMovimento.map(h => (
                                       <div key={h.hora} className="flex items-center gap-2 text-xs" title={`${h.quantidadeNotas} nota(s)`}>
