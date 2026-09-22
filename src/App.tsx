@@ -3558,8 +3558,8 @@ ${secoesPorCodigo}
   // emitente, não precisa (e não deve) converter fuso.
   const sazonalidade = useMemo(() => {
     const vazio = {
-      porDiaSemana: [] as { dia: string; faturamento: number; quantidadeNotas: number }[],
-      porHora: [] as { hora: number; faturamento: number; quantidadeNotas: number }[],
+      porDiaSemana: [] as { dia: string; faturamento: number; quantidadeNotas: number; pct: number }[],
+      porHora: [] as { hora: number; faturamento: number; quantidadeNotas: number; pct: number }[],
     };
     if (!mainCnpj) return vazio;
     const saidas = xmlList.filter(xml =>
@@ -3575,22 +3575,38 @@ ${secoesPorCodigo}
     saidas.forEach(xml => {
       const dataStr = xml.data || '';
       if (dataStr.length < 10) return;
-      const valor = parseFloat(xml.valor || '0') || 0;
+      const valorNota = parseFloat(xml.valor || '0') || 0;
+
+      // Mesmo rateio proporcional por CFOP do "Totais por Natureza da Operação"
+      // (xml.cfopValores) — só que aqui só soma a fatia que É venda de verdade
+      // (isCfopVenda), pra transferência/baixa de estoque/devolução de compra
+      // não inflar o pico de horário/dia como se fosse venda. Sem CFOP
+      // identificável (raro), assume venda — mesmo critério do isSaidaVenda
+      // em auditoriaPagamento.
+      const itens: Record<string, number> = xml.cfopValores || {};
+      const totalItens = Object.values(itens).reduce((s, v) => s + v, 0);
+      const valorVenda = totalItens > 0
+        ? valorNota * (Object.entries(itens).reduce((s, [cfop, v]) => s + (isCfopVenda(cfop) ? v : 0), 0) / totalItens)
+        : valorNota;
+      if (valorVenda <= 0.005) return;
 
       const dia = diaDaSemana(dataStr.slice(0, 10));
-      acumDia[dia].faturamento += valor;
+      acumDia[dia].faturamento += valorVenda;
       acumDia[dia].quantidadeNotas++;
 
       const hora = parseInt(dataStr.slice(11, 13), 10);
       if (!isNaN(hora) && hora >= 0 && hora < 24) {
-        acumHora[hora].faturamento += valor;
+        acumHora[hora].faturamento += valorVenda;
         acumHora[hora].quantidadeNotas++;
       }
     });
 
+    const totalDia = acumDia.reduce((s, a) => s + a.faturamento, 0);
+    const totalHora = acumHora.reduce((s, a) => s + a.faturamento, 0);
+
     return {
-      porDiaSemana: acumDia.map((a, i) => ({ dia: DIAS_SEMANA[i], ...a })),
-      porHora: acumHora.map((a, i) => ({ hora: i, ...a })),
+      porDiaSemana: acumDia.map((a, i) => ({ dia: DIAS_SEMANA[i], ...a, pct: totalDia > 0 ? (a.faturamento / totalDia) * 100 : 0 })),
+      porHora: acumHora.map((a, i) => ({ hora: i, ...a, pct: totalHora > 0 ? (a.faturamento / totalHora) * 100 : 0 })),
     };
   }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
 
@@ -3797,19 +3813,21 @@ ${secoesPorCodigo}
 
     const htmlSazonalidade = sazonalidade.porDiaSemana.every(d => d.quantidadeNotas === 0) ? '' : (() => {
       const linhasDia = sazonalidade.porDiaSemana.map(d => `
-        <tr><td>${esc(d.dia)}</td><td class="num">${d.quantidadeNotas}</td><td class="num">${moeda(d.faturamento)}</td></tr>`).join('');
+        <tr><td>${esc(d.dia)}</td><td class="num">${d.quantidadeNotas}</td><td class="num">${moeda(d.faturamento)}</td><td class="num">${formatarPct(d.pct)}%</td></tr>`).join('');
       const horasComMovimento = sazonalidade.porHora.filter(h => h.quantidadeNotas > 0);
       const linhasHora = horasComMovimento.map(h => `
-        <tr><td>${String(h.hora).padStart(2, '0')}h</td><td class="num">${h.quantidadeNotas}</td><td class="num">${moeda(h.faturamento)}</td></tr>`).join('');
+        <tr><td>${String(h.hora).padStart(2, '0')}h</td><td class="num">${h.quantidadeNotas}</td><td class="num">${moeda(h.faturamento)}</td><td class="num">${formatarPct(h.pct)}%</td></tr>`).join('');
       return `
         <div class="secao duas-colunas">
           <div>
             <h2>Sazonalidade — dia da semana</h2>
-            <table><thead><tr><th>Dia</th><th class="num">Notas</th><th class="num">Faturamento</th></tr></thead><tbody>${linhasDia}</tbody></table>
+            <div class="meta">Só venda de verdade (exclui transferência, baixa de estoque, devolução de compra e outras saídas que não são venda).</div>
+            <table><thead><tr><th>Dia</th><th class="num">Notas</th><th class="num">Faturamento</th><th class="num">%</th></tr></thead><tbody>${linhasDia}</tbody></table>
           </div>
           <div>
             <h2>Sazonalidade — horário</h2>
-            <table><thead><tr><th>Hora</th><th class="num">Notas</th><th class="num">Faturamento</th></tr></thead><tbody>${linhasHora}</tbody></table>
+            <div class="meta">Só venda de verdade (exclui transferência, baixa de estoque, devolução de compra e outras saídas que não são venda).</div>
+            <table><thead><tr><th>Hora</th><th class="num">Notas</th><th class="num">Faturamento</th><th class="num">%</th></tr></thead><tbody>${linhasHora}</tbody></table>
           </div>
         </div>`;
     })();
@@ -8676,6 +8694,7 @@ ${htmlNomeDuplicado}
                                           <div className="h-full bg-blue-400 dark:bg-blue-600" style={{ width: `${(d.faturamento / maxDia) * 100}%` }} />
                                         </div>
                                         <div className="w-28 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-400">{formatarMoeda(d.faturamento)}</div>
+                                        <div className="w-12 shrink-0 text-right tabular-nums text-slate-400 dark:text-slate-500">{formatarPct(d.pct)}%</div>
                                       </div>
                                     ))}
                                   </div>
@@ -8690,11 +8709,17 @@ ${htmlNomeDuplicado}
                                           <div className="h-full bg-emerald-400 dark:bg-emerald-600" style={{ width: `${(h.faturamento / maxHora) * 100}%` }} />
                                         </div>
                                         <div className="w-24 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-400">{formatarMoeda(h.faturamento)}</div>
+                                        <div className="w-12 shrink-0 text-right tabular-nums text-slate-400 dark:text-slate-500">{formatarPct(h.pct)}%</div>
                                       </div>
                                     ))}
                                   </div>
                                 </div>
                               </div>
+                            )}
+                            {showSazonalidade && (
+                              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-3">
+                                Só venda de verdade (exclui transferência, baixa de estoque, devolução de compra e outras saídas que não são venda) — % é a fatia de cada dia/horário sobre o faturamento total desse gráfico.
+                              </p>
                             )}
                           </div>
                         );
