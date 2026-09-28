@@ -6821,72 +6821,17 @@ ${htmlNomeDuplicado}
   }, [analystName, analysis]);
 
   const reset = () => {
-    setXmlList([]);
-    setInutilizacoes([]);
-    setOtherXmlsList([]);
-    setNfseList([]);
-    setExtractionErrors([]);
-    setStats({
-      totalFiles: 0,
-      totalXmls: 0,
-      validNf: 0,
-      inutilizations: 0,
-      cancellations: 0,
-      nonXmlCount: 0
-    });
-    setAnalysis(null);
-    setExpandedIdx(null);
-    setIsConfirmed(false);
-    setConsolidatedMessage('');
-    setAttachedSources([]);
-    setProcessedFileNames(new Set());
-    setEntradaCount(0);
-    setFornecedorEntradaInfo(null);
-    setSpedEntries({});
-    setSpedCardFiltro('Todas');
-    setSpedCardOpen(false);
-    setSpedSearch('');
-    setFilterMes('Todos');
-    setFilterModelo('Todos');
-    setShowDaysDetail(false);
-    setPortalConsultado(false);
-    setForcarPainelInutilizacao(false);
-    setNotaSearchQuery('');
-    setFilterNotaModelo('Todos');
-    setFilterNotaSituacao('Todas');
-    setNotasSelecionadas(new Set());
-    setShowSelecionadas(false);
-    setManualInutSerie('');
-    setManualInutIni('');
-    setManualInutFim('');
-    setManualInutData('');
-    // Cards de detalhe (IBS/CBS, TEF, Regime, etc.) não devem carregar o
-    // estado "aberto" da análise anterior pra próxima — senão o card já
-    // nasce expandido antes mesmo do usuário clicar nele.
-    setShowCfopBreakdown(false);
-    setShowCfopPorModelo(false);
-    setShowAnomalias(false);
-    setShowSemAutorizacao(false);
-    setShowMalformadas(false);
-    setShowAuditoriaPagamento(false);
-    setShowAuditoriaRegime(false);
-    setShowAuditoriaIbsCbs(false);
-    setShowNfse(false);
-    setShowForaDoEscopoDetalhe(false);
-    setShowForaDoPrazo(false);
-    setShowExportOptions(false);
-    setShowPrintMenu(false);
-    setShowExportXmlMenu(false);
-    setMapaFiscalDesbloqueado(false);
-    setShowMapaFiscal(false);
-    setShowComparativoMensal(false);
-    setShowComparativoSerie(false);
-    setShowMudancasCadastro(false);
-    setShowRankingProdutos(false);
-    setFiltroOrigemRanking('todos');
-    setShowRankingNcm(false);
-    setShowSazonalidade(false);
-    setShowDevolucoes(false);
+    // node-unrar-js (WASM) e o libarchive.js carregado via CDN mantêm um
+    // singleton por aba inteira — a memória linear do WASM só cresce, nunca
+    // encolhe, e o worker do libarchive.js também é reaproveitado. Resetar só
+    // o estado do React não zera esse lixo acumulado: numa segunda análise
+    // seguida sem dar F5, esses módulos reaproveitam a memória já inchada da
+    // análise anterior, e RARs grandes que extrairiam normal na primeira vez
+    // passam a falhar no meio ("Archive header or data are damaged" / "File
+    // read error"), perdendo notas fiscais silenciosamente. A única forma
+    // confiável de zerar isso de verdade é recarregar a página — que é
+    // exatamente o que resolvia quando o usuário dava F5 manualmente.
+    window.location.reload();
   };
 
   const filteredAnalysis = useMemo(() => {
