@@ -6130,19 +6130,24 @@ ${htmlNomeDuplicado}
     
     
     
-    // node-unrar-js usa um módulo WASM único por aba inteira (singleton) — ele
-    // NÃO suporta duas extrações de RAR acontecendo ao mesmo tempo (intercaladas
-    // via await, quando dois arquivos de topo são processados juntos via
-    // Promise.all mais abaixo). Confirmado com dados reais: rodar dois RARs
-    // concorrentemente corrompe a extração 100% das vezes (sempre o mesmo
-    // "Archive header or data are damaged"); em sequência nunca falha. Essa
-    // fila garante que só uma extração de RAR fica ativa no app inteiro a
-    // qualquer momento — as outras esperam a vez em vez de rodar junto.
-    let unrarFila: Promise<any> = Promise.resolve();
-    const comFilaDeUnrar = <T,>(fn: () => Promise<T>): Promise<T> => {
-      const minhaVez = unrarFila.then(fn, fn);
-      unrarFila = minhaVez.then(() => {}, () => {});
-      return minhaVez;
+    // Tanto o libarchive.js (window.Archive, um singleton global carregado uma
+    // vez) quanto o node-unrar-js (módulo WASM único por aba, também um
+    // singleton) NÃO suportam duas extrações de RAR acontecendo ao mesmo tempo
+    // (intercaladas via await, quando dois arquivos de topo são processados
+    // juntos via Promise.all mais abaixo). Confirmado com dados reais: rodar
+    // dois RARs concorrentemente corrompe a extração de forma determinística
+    // (sempre o mesmo "Archive header or data are damaged"); em sequência
+    // nunca falha. Essa fila garante que só UMA extração de RAR/desconhecido
+    // (libarchive OU node-unrar-js, o bloco inteiro) fica ativa no app inteiro
+    // a qualquer momento — as outras esperam a vez em vez de rodar junto.
+    let unrarFila: Promise<void> = Promise.resolve();
+    const adquirirFilaUnrar = async (): Promise<() => void> => {
+      let liberar!: () => void;
+      const minhaVez = new Promise<void>(resolve => { liberar = resolve; });
+      const esperar = unrarFila;
+      unrarFila = minhaVez;
+      await esperar;
+      return liberar;
     };
 
     const processArchiveRecursively = async (archiveData: ArrayBuffer | Uint8Array, results: any, containerName: string, archivePath: string = '', jaTemFilaUnrar: boolean = false) => {
@@ -6240,7 +6245,10 @@ ${htmlNomeDuplicado}
           return;
         } catch (e) {
           console.error('Erro ZIP:', e);
-          registrarExtractionError(`${currentPath} — falha ao ler ZIP: ${e instanceof Error ? e.message : String(e)}`);
+          registrarExtractionError(
+            `${currentPath} — falha ao ler ZIP: ${e instanceof Error ? e.message : String(e)}`,
+            { data: archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData), fileName: containerName }
+          );
           return;
         }
       }
@@ -6251,6 +6259,11 @@ ${htmlNomeDuplicado}
         // falharem, dá pra oferecer o download do arquivo original exatamente
         // como foi enviado, sem precisar re-extrair nada.
         const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
+        // Segura a fila pelo bloco INTEIRO (libarchive.js + node-unrar-js) — se
+        // já estamos numa chamada aninhada (jaTemFilaUnrar=true), a vez já foi
+        // adquirida por quem chamou, então não adquire de novo (deadlock).
+        const liberarFilaUnrar = jaTemFilaUnrar ? null : await adquirirFilaUnrar();
+        try {
         try {
           if (typeof (window as any).Archive === 'undefined') {
             const script = document.createElement('script');
@@ -6280,7 +6293,9 @@ ${htmlNomeDuplicado}
             if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
               const antesCount = results.localTotalCount;
               const nestedBytes = new Uint8Array(await fileData.arrayBuffer());
-              await processArchiveRecursively(nestedBytes, results, baseName, currentPath);
+              // true: já estamos dentro da vez desta extração na fila (ver
+              // adquirirFilaUnrar acima) — evita tentar adquirir de novo (deadlock).
+              await processArchiveRecursively(nestedBytes, results, baseName, currentPath, true);
               if (results.localTotalCount === antesCount) {
                 registrarExtractionError(
                   `${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`,
@@ -6330,6 +6345,8 @@ ${htmlNomeDuplicado}
             // Pre-scan: list entries without decompressing, so the user sees the
             // real nesting/volume before we commit to extracting it (and so very
             // large nested archives get a heads-up instead of a silent freeze).
+            // Protegido pela fila que já cobre o bloco inteiro (adquirida lá em
+            // cima) — não precisa (nem deve) entrar na fila de novo aqui.
             const listExtractor = await createExtractorFromData({ data: new Uint8Array(cleanBuffer), wasmBinary: currentWasm });
             const headers = [...listExtractor.getFileList().fileHeaders].filter(h => !h.flags.directory);
             const nestedArchives = headers.filter(h => /\.(zip|rar)$/i.test(h.name));
@@ -6433,16 +6450,9 @@ ${htmlNomeDuplicado}
                     file.extraction = undefined as any;
                   }
                 };
-                // node-unrar-js compartilha um único módulo WASM por aba — duas
-                // extrações de RAR ao mesmo tempo corrompem uma a outra (raiz do
-                // "Archive header or data are damaged" visto com dados reais).
-                // Se já estamos dentro da vez de outra extração (chamada aninhada),
-                // roda direto; senão, espera a vez na fila.
-                if (jaTemFilaUnrar) {
-                  await rodarTentativa();
-                } else {
-                  await comFilaDeUnrar(rodarTentativa);
-                }
+                // Protegido pela fila que já cobre o bloco inteiro (adquirida lá
+                // em cima) — não precisa (nem deve) entrar na fila de novo aqui.
+                await rodarTentativa();
                 // Essa tentativa terminou inteira sem erro — funde no acumulador
                 // de fora e para de tentar de novo.
                 results.localXmls.push(...attemptResults.localXmls);
@@ -6477,6 +6487,9 @@ ${htmlNomeDuplicado}
           );
         }
         setExtractionStatus(null);
+        } finally {
+          liberarFilaUnrar?.();
+        }
       }
     };
 
@@ -6565,22 +6578,34 @@ ${htmlNomeDuplicado}
                 await processArchiveRecursively(pending.data, res, pending.containerName, pending.archivePath);
                 if (res.localTotalCount === antesPending) {
                   const currentPath = pending.archivePath ? `${pending.archivePath}/${pending.containerName}` : pending.containerName;
-                  registrarExtractionError(`${currentPath} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
+                  registrarExtractionError(
+                    `${currentPath} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`,
+                    { data: pending.data instanceof Uint8Array ? pending.data : new Uint8Array(pending.data), fileName: pending.containerName }
+                  );
                 }
               }
               if (res.localTotalCount === antesCount) {
-                registrarExtractionError(`${file.name} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
+                registrarExtractionError(
+                  `${file.name} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`,
+                  { data: new Uint8Array(zipData), fileName: file.name }
+                );
               }
             } catch (err) {
               console.error('Erro no worker de ZIP:', err);
-              registrarExtractionError(`${file.name} — falha ao processar ZIP: ${err instanceof Error ? err.message : String(err)}`);
+              registrarExtractionError(
+                `${file.name} — falha ao processar ZIP: ${err instanceof Error ? err.message : String(err)}`,
+                { data: new Uint8Array(zipData), fileName: file.name }
+              );
             }
           } else if (nameLower.endsWith('.rar')) {
             const zipData = await file.arrayBuffer();
             const antesCount = res.localTotalCount;
             await processArchiveRecursively(zipData, res, file.name);
             if (res.localTotalCount === antesCount) {
-              registrarExtractionError(`${file.name} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
+              registrarExtractionError(
+                `${file.name} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`,
+                { data: new Uint8Array(zipData), fileName: file.name }
+              );
             }
           } else if (nameLower.endsWith('.txt')) {
             const text = await file.text();
@@ -6603,11 +6628,28 @@ ${htmlNomeDuplicado}
             }
             res.localNonXmlCount++;
           }
-          return res;
+          return { name: file.name, res };
         }));
 
-        results.forEach(res => {
-          if (!res) return;
+        // Se o analista baixou o arquivo original de um erro anterior, extraiu
+        // na mão e reanexou aqui com o MESMO nome, esse reanexo pode ter
+        // sucesso MESMO que o arquivo antigo quebrado (que continua na lista
+        // de anexados, já que ele não é removido automaticamente) ainda
+        // falhe de novo no MESMO lote — por isso essa decisão só é tomada
+        // DEPOIS que todo o lote termina, olhando o resultado final por nome
+        // (em vez de limpar/re-adicionar arquivo a arquivo, o que causaria
+        // uma corrida onde o resultado final dependeria só da ordem de
+        // conclusão de cada arquivo).
+        const nomesComSucessoNesteLote = new Set(
+          results.filter(r => r && r.res.localTotalCount > 0).map(r => r!.name)
+        );
+        if (nomesComSucessoNesteLote.size > 0) {
+          setExtractionErrors(prev => prev.filter(e => !e.downloadName || !nomesComSucessoNesteLote.has(e.downloadName)));
+        }
+
+        results.forEach(r => {
+          if (!r) return;
+          const res = r.res;
           finalXmls.push(...res.localXmls);
           finalInuts.push(...res.localInuts);
           finalOthers.push(...res.localOthers);
