@@ -6285,65 +6285,116 @@ ${htmlNomeDuplicado}
               setExtractionStatus(`Extraindo ${containerName} (${headers.length} arquivo(s), ${(totalUnpSize / 1024 / 1024).toFixed(0)}MB, ${nestedArchives.length} aninhado(s))...`);
             }
 
-            const extractor = await createExtractorFromData({ data: new Uint8Array(cleanBuffer), wasmBinary: currentWasm });
-            const extracted = extractor.extract();
-            for (const file of extracted.files) {
-              if (!file.extraction || file.extraction.length === 0) continue;
-              const name = file.fileHeader.name;
-              const baseName = name.split('/').pop() || name;
-              if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
-                // Give the JS engine a chance to actually reclaim the previous
-                // archive's WASM/buffer memory before diving into the next
-                // nested one — without this, deeply nested RARs can pile up
-                // enough live memory at once to crash the tab.
-                await new Promise(r => setTimeout(r, 0));
-                const antesCount = results.localTotalCount;
-                await processArchiveRecursively(file.extraction, results, baseName, currentPath);
-                if (results.localTotalCount === antesCount) {
-                  registrarExtractionError(`${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
-                }
-              } else if (isProvavelmenteNaoFiscal(baseName, file.fileHeader.unpSize)) {
-                results.localNonXmlCount++;
-              } else {
-                const xmlText = new TextDecoder().decode(file.extraction);
-                if (xmlText.trimStart().startsWith('|0000|')) {
-                  const sped = parseSped(xmlText, baseName);
-                  if (sped) results.localSpeds.push(sped);
-                  continue;
-                }
-                if (xmlText.trim().startsWith('<') || name.toLowerCase().endsWith('.xml')) {
-                  const data = parseXML(xmlText, name);
-                  if (data.tipo !== 'outro') {
-                    const displaySource = name.includes('/') ? `${containerName}/${name.split('/').slice(0,-1).join('/')}` : containerName;
-                    ensureSourceInMap(displaySource, true);
-
-                    results.localTotalCount++; data.sourceName = displaySource;
-                    if (data.isCancelamento) results.localCancellations++;
-                    if (data.tipo === 'inutilizacao') {
-                      results.localInuts.push(data); results.localInutsCount++;
-                    } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
-                      results.localXmls.push(data);
-                      if (data.tipo === 'nfe') results.localValidNfCount++;
-                    } else if (data.tipo === 'nfse' || data.tipo === 'nfse_evento') {
-                      results.localNfse.push(data);
-                    } else {
-                      results.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
-                    }
-                  } else { results.localNonXmlCount++; }
-                } else { results.localNonXmlCount++; }
-              }
-              // node-unrar-js (ExtractorData) guarda o conteúdo de CADA arquivo já
-              // extraído num mapa interno (`dataFiles`) que nunca é limpo sozinho —
-              // com um RAR de dezenas de milhares de XML, isso acumula tudo em
-              // memória até travar a aba, mesmo o generator entregando um arquivo
-              // por vez. Apaga a entrada assim que já processamos o conteúdo, pra
-              // esse arquivo virar lixo de verdade (GC libera de fato).
+            // RARs grandes/aninhados (ex: um RAR de NFC-e que aninha um ZIP com
+            // milhares de XML) ficam bem na borda do limite de memória do WASM —
+            // às vezes uma tentativa do zero passa, às vezes não, dependendo do
+            // que mais o navegador tem em uso naquele instante (é uma corrida de
+            // recursos, não um erro determinístico do arquivo em si). Por isso
+            // tenta de novo antes de desistir. Cada tentativa roda contra um
+            // acumulador PRÓPRIO (attemptResults) e só é fundida no `results` de
+            // fora se terminar inteira sem erro — assim uma tentativa que falha
+            // no meio não deixa nota duplicada nem nota "meio contada" pra trás.
+            const MAX_TENTATIVAS_RAR = 3;
+            let ultimoErroRar: unknown = null;
+            for (let tentativa = 1; tentativa <= MAX_TENTATIVAS_RAR; tentativa++) {
+              const attemptResults = {
+                localXmls: [] as XmlData[],
+                localInuts: [] as XmlData[],
+                localOthers: [] as XmlData[],
+                localNfse: [] as XmlData[],
+                localSpeds: [] as SpedData[],
+                localTotalCount: 0,
+                localCancellations: 0,
+                localValidNfCount: 0,
+                localInutsCount: 0,
+                localNonXmlCount: 0,
+              };
               try {
-                const ex = extractor as any;
-                delete ex.dataFiles?.[ex.getExtractedFileName?.(name)];
-              } catch {}
-              file.extraction = undefined as any;
+                const attemptBuffer = new ArrayBuffer(uint8.length + 1024*1024);
+                new Uint8Array(attemptBuffer).set(uint8);
+                const extractor = await createExtractorFromData({ data: new Uint8Array(attemptBuffer), wasmBinary: currentWasm });
+                const extracted = extractor.extract();
+                for (const file of extracted.files) {
+                  if (!file.extraction || file.extraction.length === 0) continue;
+                  const name = file.fileHeader.name;
+                  const baseName = name.split('/').pop() || name;
+                  if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
+                    // Give the JS engine a chance to actually reclaim the previous
+                    // archive's WASM/buffer memory before diving into the next
+                    // nested one — without this, deeply nested RARs can pile up
+                    // enough live memory at once to crash the tab.
+                    await new Promise(r => setTimeout(r, 0));
+                    const antesCount = attemptResults.localTotalCount;
+                    await processArchiveRecursively(file.extraction, attemptResults, baseName, currentPath);
+                    if (attemptResults.localTotalCount === antesCount) {
+                      registrarExtractionError(`${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
+                    }
+                  } else if (isProvavelmenteNaoFiscal(baseName, file.fileHeader.unpSize)) {
+                    attemptResults.localNonXmlCount++;
+                  } else {
+                    const xmlText = new TextDecoder().decode(file.extraction);
+                    if (xmlText.trimStart().startsWith('|0000|')) {
+                      const sped = parseSped(xmlText, baseName);
+                      if (sped) attemptResults.localSpeds.push(sped);
+                      continue;
+                    }
+                    if (xmlText.trim().startsWith('<') || name.toLowerCase().endsWith('.xml')) {
+                      const data = parseXML(xmlText, name);
+                      if (data.tipo !== 'outro') {
+                        const displaySource = name.includes('/') ? `${containerName}/${name.split('/').slice(0,-1).join('/')}` : containerName;
+                        ensureSourceInMap(displaySource, true);
+
+                        attemptResults.localTotalCount++; data.sourceName = displaySource;
+                        if (data.isCancelamento) attemptResults.localCancellations++;
+                        if (data.tipo === 'inutilizacao') {
+                          attemptResults.localInuts.push(data); attemptResults.localInutsCount++;
+                        } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
+                          attemptResults.localXmls.push(data);
+                          if (data.tipo === 'nfe') attemptResults.localValidNfCount++;
+                        } else if (data.tipo === 'nfse' || data.tipo === 'nfse_evento') {
+                          attemptResults.localNfse.push(data);
+                        } else {
+                          attemptResults.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
+                        }
+                      } else { attemptResults.localNonXmlCount++; }
+                    } else { attemptResults.localNonXmlCount++; }
+                  }
+                  // node-unrar-js (ExtractorData) guarda o conteúdo de CADA arquivo já
+                  // extraído num mapa interno (`dataFiles`) que nunca é limpo sozinho —
+                  // com um RAR de dezenas de milhares de XML, isso acumula tudo em
+                  // memória até travar a aba, mesmo o generator entregando um arquivo
+                  // por vez. Apaga a entrada assim que já processamos o conteúdo, pra
+                  // esse arquivo virar lixo de verdade (GC libera de fato).
+                  try {
+                    const ex = extractor as any;
+                    delete ex.dataFiles?.[ex.getExtractedFileName?.(name)];
+                  } catch {}
+                  file.extraction = undefined as any;
+                }
+                // Essa tentativa terminou inteira sem erro — funde no acumulador
+                // de fora e para de tentar de novo.
+                results.localXmls.push(...attemptResults.localXmls);
+                results.localInuts.push(...attemptResults.localInuts);
+                results.localOthers.push(...attemptResults.localOthers);
+                results.localNfse.push(...attemptResults.localNfse);
+                results.localSpeds.push(...attemptResults.localSpeds);
+                results.localTotalCount += attemptResults.localTotalCount;
+                results.localCancellations += attemptResults.localCancellations;
+                results.localValidNfCount += attemptResults.localValidNfCount;
+                results.localInutsCount += attemptResults.localInutsCount;
+                results.localNonXmlCount += attemptResults.localNonXmlCount;
+                ultimoErroRar = null;
+                break;
+              } catch (attemptErr) {
+                ultimoErroRar = attemptErr;
+                if (tentativa < MAX_TENTATIVAS_RAR) {
+                  console.warn(`Tentativa ${tentativa}/${MAX_TENTATIVAS_RAR} falhou extraindo ${containerName}, tentando de novo...`, attemptErr);
+                  setExtractionStatus(`${containerName} deu erro na tentativa ${tentativa}, tentando de novo (${tentativa + 1}/${MAX_TENTATIVAS_RAR})...`);
+                  await new Promise(r => setTimeout(r, 400 * tentativa));
+                }
+              }
             }
+            if (ultimoErroRar) throw ultimoErroRar;
           }
         } catch (rarErr) {
           console.error('Erro RAR final:', rarErr);
