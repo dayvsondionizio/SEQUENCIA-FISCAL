@@ -6130,7 +6130,22 @@ ${htmlNomeDuplicado}
     
     
     
-    const processArchiveRecursively = async (archiveData: ArrayBuffer | Uint8Array, results: any, containerName: string, archivePath: string = '') => {
+    // node-unrar-js usa um módulo WASM único por aba inteira (singleton) — ele
+    // NÃO suporta duas extrações de RAR acontecendo ao mesmo tempo (intercaladas
+    // via await, quando dois arquivos de topo são processados juntos via
+    // Promise.all mais abaixo). Confirmado com dados reais: rodar dois RARs
+    // concorrentemente corrompe a extração 100% das vezes (sempre o mesmo
+    // "Archive header or data are damaged"); em sequência nunca falha. Essa
+    // fila garante que só uma extração de RAR fica ativa no app inteiro a
+    // qualquer momento — as outras esperam a vez em vez de rodar junto.
+    let unrarFila: Promise<any> = Promise.resolve();
+    const comFilaDeUnrar = <T,>(fn: () => Promise<T>): Promise<T> => {
+      const minhaVez = unrarFila.then(fn, fn);
+      unrarFila = minhaVez.then(() => {}, () => {});
+      return minhaVez;
+    };
+
+    const processArchiveRecursively = async (archiveData: ArrayBuffer | Uint8Array, results: any, containerName: string, archivePath: string = '', jaTemFilaUnrar: boolean = false) => {
       const type = checkMagicBytes(archiveData);
       const currentPath = archivePath ? `${archivePath}/${containerName}` : containerName;
       
@@ -6215,7 +6230,10 @@ ${htmlNomeDuplicado}
               const antesCount = results.localTotalCount;
               await processArchiveRecursively(innerArchiveData, results, innerArchiveName, currentPath);
               if (results.localTotalCount === antesCount) {
-                registrarExtractionError(`${currentPath}/${innerArchiveName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
+                registrarExtractionError(
+                  `${currentPath}/${innerArchiveName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`,
+                  { data: innerArchiveData, fileName: innerArchiveName }
+                );
               }
             }
           }
@@ -6261,9 +6279,13 @@ ${htmlNomeDuplicado}
 
             if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
               const antesCount = results.localTotalCount;
-              await processArchiveRecursively(new Uint8Array(await fileData.arrayBuffer()), results, baseName, currentPath);
+              const nestedBytes = new Uint8Array(await fileData.arrayBuffer());
+              await processArchiveRecursively(nestedBytes, results, baseName, currentPath);
               if (results.localTotalCount === antesCount) {
-                registrarExtractionError(`${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
+                registrarExtractionError(
+                  `${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`,
+                  { data: nestedBytes, fileName: baseName }
+                );
               }
             } else {
               const xmlText = await fileData.text();
@@ -6341,66 +6363,85 @@ ${htmlNomeDuplicado}
                 localNonXmlCount: 0,
               };
               try {
-                const attemptBuffer = new ArrayBuffer(uint8.length + 1024*1024);
-                new Uint8Array(attemptBuffer).set(uint8);
-                const extractor = await createExtractorFromData({ data: new Uint8Array(attemptBuffer), wasmBinary: currentWasm });
-                const extracted = extractor.extract();
-                for (const file of extracted.files) {
-                  if (!file.extraction || file.extraction.length === 0) continue;
-                  const name = file.fileHeader.name;
-                  const baseName = name.split('/').pop() || name;
-                  if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
-                    // Give the JS engine a chance to actually reclaim the previous
-                    // archive's WASM/buffer memory before diving into the next
-                    // nested one — without this, deeply nested RARs can pile up
-                    // enough live memory at once to crash the tab.
-                    await new Promise(r => setTimeout(r, 0));
-                    const antesCount = attemptResults.localTotalCount;
-                    await processArchiveRecursively(file.extraction, attemptResults, baseName, currentPath);
-                    if (attemptResults.localTotalCount === antesCount) {
-                      registrarExtractionError(`${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`);
-                    }
-                  } else if (isProvavelmenteNaoFiscal(baseName, file.fileHeader.unpSize)) {
-                    attemptResults.localNonXmlCount++;
-                  } else {
-                    const xmlText = new TextDecoder().decode(file.extraction);
-                    if (xmlText.trimStart().startsWith('|0000|')) {
-                      const sped = parseSped(xmlText, baseName);
-                      if (sped) attemptResults.localSpeds.push(sped);
-                      continue;
-                    }
-                    if (xmlText.trim().startsWith('<') || name.toLowerCase().endsWith('.xml')) {
-                      const data = parseXML(xmlText, name);
-                      if (data.tipo !== 'outro') {
-                        const displaySource = name.includes('/') ? `${containerName}/${name.split('/').slice(0,-1).join('/')}` : containerName;
-                        ensureSourceInMap(displaySource, true);
+                const rodarTentativa = async () => {
+                  const attemptBuffer = new ArrayBuffer(uint8.length + 1024*1024);
+                  new Uint8Array(attemptBuffer).set(uint8);
+                  const extractor = await createExtractorFromData({ data: new Uint8Array(attemptBuffer), wasmBinary: currentWasm });
+                  const extracted = extractor.extract();
+                  for (const file of extracted.files) {
+                    if (!file.extraction || file.extraction.length === 0) continue;
+                    const name = file.fileHeader.name;
+                    const baseName = name.split('/').pop() || name;
+                    if (name.toLowerCase().endsWith('.zip') || name.toLowerCase().endsWith('.rar')) {
+                      // Give the JS engine a chance to actually reclaim the previous
+                      // archive's WASM/buffer memory before diving into the next
+                      // nested one — without this, deeply nested RARs can pile up
+                      // enough live memory at once to crash the tab.
+                      await new Promise(r => setTimeout(r, 0));
+                      const antesCount = attemptResults.localTotalCount;
+                      // jaTemFilaUnrar=true: já estamos dentro da vez desta extração
+                      // na fila (ver comFilaDeUnrar acima) — uma nova extração de RAR
+                      // aninhada aqui dentro NÃO deve entrar na fila de novo (senão
+                      // ficaria esperando a própria vez terminar, um deadlock).
+                      await processArchiveRecursively(file.extraction, attemptResults, baseName, currentPath, true);
+                      if (attemptResults.localTotalCount === antesCount) {
+                        registrarExtractionError(
+                          `${currentPath}/${baseName} — não gerou nenhuma nota fiscal (pode ter falhado ao extrair ou realmente estar vazio; confira manualmente)`,
+                          { data: file.extraction as Uint8Array, fileName: baseName }
+                        );
+                      }
+                    } else if (isProvavelmenteNaoFiscal(baseName, file.fileHeader.unpSize)) {
+                      attemptResults.localNonXmlCount++;
+                    } else {
+                      const xmlText = new TextDecoder().decode(file.extraction);
+                      if (xmlText.trimStart().startsWith('|0000|')) {
+                        const sped = parseSped(xmlText, baseName);
+                        if (sped) attemptResults.localSpeds.push(sped);
+                        continue;
+                      }
+                      if (xmlText.trim().startsWith('<') || name.toLowerCase().endsWith('.xml')) {
+                        const data = parseXML(xmlText, name);
+                        if (data.tipo !== 'outro') {
+                          const displaySource = name.includes('/') ? `${containerName}/${name.split('/').slice(0,-1).join('/')}` : containerName;
+                          ensureSourceInMap(displaySource, true);
 
-                        attemptResults.localTotalCount++; data.sourceName = displaySource;
-                        if (data.isCancelamento) attemptResults.localCancellations++;
-                        if (data.tipo === 'inutilizacao') {
-                          attemptResults.localInuts.push(data); attemptResults.localInutsCount++;
-                        } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
-                          attemptResults.localXmls.push(data);
-                          if (data.tipo === 'nfe') attemptResults.localValidNfCount++;
-                        } else if (data.tipo === 'nfse' || data.tipo === 'nfse_evento') {
-                          attemptResults.localNfse.push(data);
-                        } else {
-                          attemptResults.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
-                        }
+                          attemptResults.localTotalCount++; data.sourceName = displaySource;
+                          if (data.isCancelamento) attemptResults.localCancellations++;
+                          if (data.tipo === 'inutilizacao') {
+                            attemptResults.localInuts.push(data); attemptResults.localInutsCount++;
+                          } else if (data.tipo === 'nfe' || data.tipo === 'evento') {
+                            attemptResults.localXmls.push(data);
+                            if (data.tipo === 'nfe') attemptResults.localValidNfCount++;
+                          } else if (data.tipo === 'nfse' || data.tipo === 'nfse_evento') {
+                            attemptResults.localNfse.push(data);
+                          } else {
+                            attemptResults.localOthers.push({ fileName: name, subTipo: data.subTipo, tipo: data.tipo } as any);
+                          }
+                        } else { attemptResults.localNonXmlCount++; }
                       } else { attemptResults.localNonXmlCount++; }
-                    } else { attemptResults.localNonXmlCount++; }
+                    }
+                    // node-unrar-js (ExtractorData) guarda o conteúdo de CADA arquivo já
+                    // extraído num mapa interno (`dataFiles`) que nunca é limpo sozinho —
+                    // com um RAR de dezenas de milhares de XML, isso acumula tudo em
+                    // memória até travar a aba, mesmo o generator entregando um arquivo
+                    // por vez. Apaga a entrada assim que já processamos o conteúdo, pra
+                    // esse arquivo virar lixo de verdade (GC libera de fato).
+                    try {
+                      const ex = extractor as any;
+                      delete ex.dataFiles?.[ex.getExtractedFileName?.(name)];
+                    } catch {}
+                    file.extraction = undefined as any;
                   }
-                  // node-unrar-js (ExtractorData) guarda o conteúdo de CADA arquivo já
-                  // extraído num mapa interno (`dataFiles`) que nunca é limpo sozinho —
-                  // com um RAR de dezenas de milhares de XML, isso acumula tudo em
-                  // memória até travar a aba, mesmo o generator entregando um arquivo
-                  // por vez. Apaga a entrada assim que já processamos o conteúdo, pra
-                  // esse arquivo virar lixo de verdade (GC libera de fato).
-                  try {
-                    const ex = extractor as any;
-                    delete ex.dataFiles?.[ex.getExtractedFileName?.(name)];
-                  } catch {}
-                  file.extraction = undefined as any;
+                };
+                // node-unrar-js compartilha um único módulo WASM por aba — duas
+                // extrações de RAR ao mesmo tempo corrompem uma a outra (raiz do
+                // "Archive header or data are damaged" visto com dados reais).
+                // Se já estamos dentro da vez de outra extração (chamada aninhada),
+                // roda direto; senão, espera a vez na fila.
+                if (jaTemFilaUnrar) {
+                  await rodarTentativa();
+                } else {
+                  await comFilaDeUnrar(rodarTentativa);
                 }
                 // Essa tentativa terminou inteira sem erro — funde no acumulador
                 // de fora e para de tentar de novo.
