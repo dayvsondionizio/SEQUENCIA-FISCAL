@@ -6135,12 +6135,24 @@ ${htmlNomeDuplicado}
       if (type === 'zip') {
         try {
           const zip = await JSZip.loadAsync(archiveData);
+          let entradasProcessadas = 0;
           for (const name of Object.keys(zip.files)) {
             const entry = zip.files[name];
             if (entry.dir) continue;
             const uniqueName = `${currentPath}::${name}`;
             const baseName = name.split('/').pop() || name;
-            
+
+            // Um ZIP aninhado com milhares de XML processa tudo em sequência
+            // rápida demais pro coletor de lixo do navegador conseguir agir —
+            // o lixo de arquivos já descartados fica acumulado esperando ser
+            // varrido, em vez de ser liberado de verdade a tempo. Uma pausa
+            // periódica (a cada 500 arquivos) dá esse respiro de verdade pro
+            // navegador, sem precisar quebrar o ZIP em pedaços menores.
+            entradasProcessadas++;
+            if (entradasProcessadas % 500 === 0) {
+              await new Promise(r => setTimeout(r, 0));
+            }
+
             if (!name.toLowerCase().endsWith('.zip') && !name.toLowerCase().endsWith('.rar')) {
               if (updatedProcessedNames.has(uniqueName)) continue;
               if (isProvavelmenteNaoFiscal(baseName, (entry as any)._data?.uncompressedSize)) { results.localNonXmlCount++; continue; }
