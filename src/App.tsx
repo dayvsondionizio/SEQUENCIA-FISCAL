@@ -6316,7 +6316,7 @@ ${htmlNomeDuplicado}
                   if (data.tipo !== 'outro') {
                     const displaySource = name.includes('/') ? `${containerName}/${name.split('/').slice(0,-1).join('/')}` : containerName;
                     ensureSourceInMap(displaySource, true);
-                    
+
                     results.localTotalCount++; data.sourceName = displaySource;
                     if (data.isCancelamento) results.localCancellations++;
                     if (data.tipo === 'inutilizacao') {
@@ -6332,6 +6332,17 @@ ${htmlNomeDuplicado}
                   } else { results.localNonXmlCount++; }
                 } else { results.localNonXmlCount++; }
               }
+              // node-unrar-js (ExtractorData) guarda o conteúdo de CADA arquivo já
+              // extraído num mapa interno (`dataFiles`) que nunca é limpo sozinho —
+              // com um RAR de dezenas de milhares de XML, isso acumula tudo em
+              // memória até travar a aba, mesmo o generator entregando um arquivo
+              // por vez. Apaga a entrada assim que já processamos o conteúdo, pra
+              // esse arquivo virar lixo de verdade (GC libera de fato).
+              try {
+                const ex = extractor as any;
+                delete ex.dataFiles?.[ex.getExtractedFileName?.(name)];
+              } catch {}
+              file.extraction = undefined as any;
             }
           }
         } catch (rarErr) {
