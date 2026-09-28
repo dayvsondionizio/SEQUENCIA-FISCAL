@@ -146,6 +146,15 @@ interface ParcelaIbsExtract {
   aliqEfet: number | null; // pAliqEfet (só com gRed)
   v: number | null;        // valor destacado (vIBSUF/vIBSMun/vCBS)
 }
+interface ExtractionErrorEntry {
+  msg: string;
+  // Presentes só quando a falha foi uma extração de RAR que esgotou as
+  // retentativas — dá pro analista baixar o arquivo original exatamente como
+  // foi enviado, extrair ele mesmo com WinRAR/7-Zip (sem o limite de memória
+  // do WASM no navegador) e reanexar o conteúdo já descompactado.
+  downloadUrl?: string;
+  downloadName?: string;
+}
 interface DetExtract {
   cProd: string; xProd: string; ncm: string; cest: string; cfop: string; vProd: number; qCom: number; uCom: string;
   cEan: string; cBenef: string;
@@ -5993,7 +6002,7 @@ ${htmlNomeDuplicado}
 
   const [wasmBinary, setWasmBinary] = useState<ArrayBuffer | null>(null);
   const [extractionStatus, setExtractionStatus] = useState<string | null>(null);
-  const [extractionErrors, setExtractionErrors] = useState<string[]>([]);
+  const [extractionErrors, setExtractionErrors] = useState<ExtractionErrorEntry[]>([]);
 
   const loadWasm = async () => {
     if (wasmBinary) return wasmBinary;
@@ -6095,10 +6104,17 @@ ${htmlNomeDuplicado}
     // então ler o state extractionErrors mais adiante NESTA MESMA execução
     // pegaria o valor antigo (stale closure). Esse array local reflete tudo
     // que essa importação específica encontrou, na hora.
-    const extractionErrorsLocal: string[] = [];
-    const registrarExtractionError = (msg: string) => {
-      extractionErrorsLocal.push(msg);
-      setExtractionErrors(prev => [...prev, msg]);
+    const extractionErrorsLocal: ExtractionErrorEntry[] = [];
+    const registrarExtractionError = (msg: string, download?: { data: Uint8Array; fileName: string }) => {
+      let downloadUrl: string | undefined;
+      if (download) {
+        try {
+          downloadUrl = URL.createObjectURL(new Blob([download.data], { type: 'application/octet-stream' }));
+        } catch {}
+      }
+      const entry: ExtractionErrorEntry = { msg, downloadUrl, downloadName: download?.fileName };
+      extractionErrorsLocal.push(entry);
+      setExtractionErrors(prev => [...prev, entry]);
     };
 
         const checkMagicBytes = (buffer: ArrayBuffer | Uint8Array) => {
@@ -6212,6 +6228,11 @@ ${htmlNomeDuplicado}
       }
 
       if (type === 'rar' || type === 'unknown') {
+        // Declarado aqui fora (em vez de dentro de cada try) pra ficar
+        // acessível no catch final — se todas as tentativas de extração
+        // falharem, dá pra oferecer o download do arquivo original exatamente
+        // como foi enviado, sem precisar re-extrair nada.
+        const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
         try {
           if (typeof (window as any).Archive === 'undefined') {
             const script = document.createElement('script');
@@ -6220,7 +6241,6 @@ ${htmlNomeDuplicado}
             await new Promise(r => script.onload = r);
             (window as any).Archive.init({ workerUrl: 'https://unpkg.com/libarchive.js/dist/worker-bundle.js' });
           }
-          const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
           const archive = await Promise.race([
             (window as any).Archive.open(new Blob([uint8])),
             new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
@@ -6281,7 +6301,6 @@ ${htmlNomeDuplicado}
         } catch (libErr) { console.warn('LibArchive falhou, tentando node-unrar-js...', libErr); }
 
         try {
-          const uint8 = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
           const cleanBuffer = new ArrayBuffer(uint8.length + 1024*1024);
           new Uint8Array(cleanBuffer).set(uint8);
           let currentWasm = wasmBinary || await loadWasm();
@@ -6411,7 +6430,10 @@ ${htmlNomeDuplicado}
         } catch (rarErr) {
           console.error('Erro RAR final:', rarErr);
           const msg = rarErr instanceof Error ? rarErr.message : String(rarErr);
-          registrarExtractionError(`${currentPath} — parou no meio da extração (${msg}). Pode haver notas faltando desse arquivo — geralmente por RAR muito grande/aninhado consumindo toda a memória disponível.`);
+          registrarExtractionError(
+            `${currentPath} — parou no meio da extração (${msg}). Pode haver notas faltando desse arquivo — geralmente por RAR muito grande/aninhado consumindo toda a memória disponível.`,
+            { data: uint8, fileName: containerName }
+          );
         }
         setExtractionStatus(null);
       }
@@ -7774,12 +7796,23 @@ ${htmlNomeDuplicado}
                   {extractionErrors.length} arquivo(s) não puderam ser lidos completamente
                 </div>
                 <div className="text-xs text-rose-600 dark:text-rose-400 mt-0.5 mb-2">
-                  Pode haver notas fiscais faltando na análise abaixo por causa disso. Peça ao cliente para reenviar esses arquivos, de preferência divididos em partes menores (evite RAR com outros RARs aninhados dentro).
+                  Pode haver notas fiscais faltando na análise abaixo por causa disso. RAR muito grande/aninhado esbarra num limite de memória do navegador que não dá pra garantir 100% — a forma confiável de resolver é <strong>você mesmo extrair esse RAR no seu computador (WinRAR ou 7-Zip) e anexar os arquivos ZIP de dentro dele diretamente</strong>, sem o RAR. Assim a extração não depende mais desse limite.
                 </div>
                 <ul className="space-y-1">
                   {extractionErrors.map((err, i) => (
                     <li key={i} className="text-xs font-mono text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950 rounded-lg px-3 py-2 break-words">
-                      {err}
+                      <div>{err.msg}</div>
+                      {err.downloadUrl && (
+                        <a
+                          href={err.downloadUrl}
+                          download={err.downloadName || 'arquivo-original'}
+                          className="inline-flex items-center gap-1.5 mt-2 px-3 py-1.5 rounded-lg font-sans font-bold text-[11px] no-underline text-white"
+                          style={{background: '#17150F'}}
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          Baixar arquivo original ({err.downloadName})
+                        </a>
+                      )}
                     </li>
                   ))}
                 </ul>
