@@ -40,7 +40,8 @@ import {
   Ban,
   Clock,
   AlertTriangle,
-  Briefcase
+  Briefcase,
+  Users
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -1514,6 +1515,43 @@ export default function App() {
     }
   };
 
+  // Mesma BrasilAPI de cima, mas por cliente do Perfil de Clientes — dispara só
+  // quando o analista expande a linha daquele cliente específico (nunca em
+  // lote/automático pra não estourar limite da API com dezenas de clientes de
+  // uma vez), e guarda o resultado num cache pra não reconsultar ao
+  // expandir/recolher a mesma linha de novo.
+  const consultarCnpjCliente = async (cnpj: string) => {
+    setConsultaClientesCnpj(prev => ({ ...prev, [cnpj]: { status: 'loading' } }));
+    try {
+      const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { signal: AbortSignal.timeout(10000) });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      setConsultaClientesCnpj(prev => ({
+        ...prev,
+        [cnpj]: {
+          status: 'ok',
+          dados: {
+            situacao: data.descricao_situacao_cadastral || 'Desconhecida',
+            // null da API = "não informado pela Receita", diferente de "não
+            // optante" — mantido como null pra não afirmar algo que a fonte
+            // não confirmou.
+            opcaoSimples: data.opcao_pelo_simples === null || data.opcao_pelo_simples === undefined ? null : !!data.opcao_pelo_simples,
+            opcaoMei: data.opcao_pelo_mei === null || data.opcao_pelo_mei === undefined ? null : !!data.opcao_pelo_mei,
+            porte: data.porte || '',
+            cnaeDescricao: data.cnae_fiscal_descricao || '',
+            naturezaJuridica: data.natureza_juridica || '',
+            dataInicioAtividade: data.data_inicio_atividade || '',
+            municipio: data.municipio || '',
+            uf: data.uf || '',
+          },
+        },
+      }));
+    } catch (err) {
+      console.error('Erro ao consultar CNPJ de cliente (BrasilAPI):', err);
+      setConsultaClientesCnpj(prev => ({ ...prev, [cnpj]: { status: 'erro' } }));
+    }
+  };
+
   const [copiedResumoTEF, setCopiedResumoTEF] = useState(false);
 
   // Monta um resumo em texto do card de Auditoria de Pagamento (TEF) pra
@@ -1664,6 +1702,20 @@ export default function App() {
   const [showMudancasCadastro, setShowMudancasCadastro] = useState(false);
   const [showNfse, setShowNfse] = useState(false);
   const [nfseBusca, setNfseBusca] = useState('');
+  const [showPerfilClientes, setShowPerfilClientes] = useState(false);
+  const [perfilClientesBusca, setPerfilClientesBusca] = useState('');
+  // CNPJ do cliente com o detalhe (produtos + tendência mensal) expandido —
+  // null = nenhum, só a lista resumida.
+  const [perfilClienteExpandido, setPerfilClienteExpandido] = useState<string | null>(null);
+  // Cache de consulta CNPJ por cliente (Fase 2 do Perfil de Clientes) — chave é
+  // o CNPJ, guarda um resultado por cliente já consultado nesta sessão, pra
+  // não reconsultar toda vez que a linha é expandida/recolhida de novo.
+  interface PerfilClienteReceitaDados {
+    situacao: string; opcaoSimples: boolean | null; opcaoMei: boolean | null;
+    porte: string; cnaeDescricao: string; naturezaJuridica: string;
+    dataInicioAtividade: string; municipio: string; uf: string;
+  }
+  const [consultaClientesCnpj, setConsultaClientesCnpj] = useState<Record<string, { status: 'loading' | 'ok' | 'erro'; dados?: PerfilClienteReceitaDados }>>({});
   const [auditoriaRegimeBusca, setAuditoriaRegimeBusca] = useState('');
   const [auditoriaPagamentoBusca, setAuditoriaPagamentoBusca] = useState('');
   const [showForaDoEscopoDetalhe, setShowForaDoEscopoDetalhe] = useState(false);
@@ -3444,6 +3496,89 @@ ${secoesPorCodigo}
     porMes.forEach((notas, mes) => resultado.set(mes, calcularRankingDeNotas(notas, agruparRankingPorNome)));
     return resultado;
   }, [xmlList, mainCnpj, chavesCanceladas, agruparRankingPorNome]);
+
+  // Perfil de Clientes: quem compra da empresa via NF-e (mod 55) — NFC-e fica
+  // de fora de propósito, porque o destinatário quase nunca tem CNPJ (venda a
+  // consumidor final), então não há "cliente" pra perfilar, só volume agregado
+  // (isso já existe na Sazonalidade). Só considera saída (tpNF=1): entrada
+  // própria (devolução recebida) não representa uma compra do cliente, fica
+  // fora do perfil por simplicidade — é um fluxo de retorno, não de venda.
+  // Valor por cliente soma det.vProd dos itens com CFOP de venda (mesmo
+  // critério do Ranking de Produtos), não o vNF da nota — uma nota com item
+  // de frete/não-venda misturado não infla o total do cliente.
+  type ClientePerfilProduto = { xProd: string; valor: number };
+  type ClientePerfilMes = { mes: string; valor: number; quantidade: number };
+  type ClientePerfil = {
+    cnpj: string; nome: string; quantidadeNotas: number; totalComprado: number;
+    ticketMedio: number; primeiraCompra: string; ultimaCompra: string;
+    produtos: ClientePerfilProduto[]; porMes: ClientePerfilMes[];
+  };
+  const perfilClientes = useMemo(() => {
+    const vazio: { clientes: ClientePerfil[]; totalConsiderado: number } = { clientes: [], totalConsiderado: 0 };
+    if (!mainCnpj) return vazio;
+    type Acum = {
+      nome: string; quantidadeNotas: number; totalComprado: number;
+      primeiraCompra: string; ultimaCompra: string;
+      produtos: Map<string, { xProd: string; valor: number }>;
+      porMes: Map<string, { valor: number; quantidade: number }>;
+    };
+    const mapa = new Map<string, Acum>();
+    xmlList.forEach(xml => {
+      if (xml.tipo !== 'nfe' || xml.emitCnpj !== mainCnpj || xml.modelo !== '55' || xml.tpNF !== '1') return;
+      if (!xml.rawXml || !xml.protocolo || !xml.destCnpj) return;
+      if (xml.chave && chavesCanceladas.has(xml.chave)) return;
+      if (filterMes !== 'Todos' && getMonthYear(xml.data) !== filterMes) return;
+      const ex = getNotaExtract(xml);
+      if (!ex) return;
+      let valorNota = 0;
+      const produtosDaNota: { cProd: string; xProd: string; valor: number }[] = [];
+      ex.dets.forEach(det => {
+        if (!det.cProd || !isCfopVenda(det.cfop)) return;
+        valorNota += det.vProd;
+        produtosDaNota.push({ cProd: det.cProd, xProd: det.xProd, valor: det.vProd });
+      });
+      if (valorNota <= 0) return; // nota sem nenhum item de venda de verdade
+
+      let c = mapa.get(xml.destCnpj);
+      if (!c) {
+        c = { nome: xml.destNome || '(sem nome)', quantidadeNotas: 0, totalComprado: 0, primeiraCompra: xml.data || '', ultimaCompra: xml.data || '', produtos: new Map(), porMes: new Map() };
+        mapa.set(xml.destCnpj, c);
+      }
+      if (xml.destNome) c.nome = xml.destNome;
+      c.quantidadeNotas++;
+      c.totalComprado += valorNota;
+      if (xml.data && (!c.primeiraCompra || xml.data < c.primeiraCompra)) c.primeiraCompra = xml.data;
+      if (xml.data && (!c.ultimaCompra || xml.data > c.ultimaCompra)) c.ultimaCompra = xml.data;
+      produtosDaNota.forEach(p => {
+        const existente = c!.produtos.get(p.cProd);
+        if (existente) existente.valor += p.valor;
+        else c!.produtos.set(p.cProd, { xProd: p.xProd || '(sem descrição)', valor: p.valor });
+      });
+      const chavePeriodo = (xml.data || '').slice(0, 7); // "2026-07", sortável direto como string
+      if (chavePeriodo.length === 7) {
+        const m = c.porMes.get(chavePeriodo);
+        if (m) { m.valor += valorNota; m.quantidade++; }
+        else c.porMes.set(chavePeriodo, { valor: valorNota, quantidade: 1 });
+      }
+    });
+
+    const totalConsiderado = Array.from(mapa.values()).reduce((s, c) => s + c.totalComprado, 0);
+    const clientes: ClientePerfil[] = Array.from(mapa.entries())
+      .map(([cnpj, c]) => ({
+        cnpj, nome: c.nome, quantidadeNotas: c.quantidadeNotas, totalComprado: c.totalComprado,
+        ticketMedio: c.quantidadeNotas > 0 ? c.totalComprado / c.quantidadeNotas : 0,
+        primeiraCompra: c.primeiraCompra, ultimaCompra: c.ultimaCompra,
+        produtos: Array.from(c.produtos.values())
+          .sort((a, b) => b.valor - a.valor)
+          .slice(0, 5),
+        porMes: Array.from(c.porMes.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([chave, m]) => ({ mes: getMonthYear(chave), valor: m.valor, quantidade: m.quantidade })),
+      }))
+      .sort((a, b) => b.totalComprado - a.totalComprado);
+
+    return { clientes, totalConsiderado };
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
 
   // Exporta o ranking respeitando o filtro de origem selecionado na tela (se
   // estiver em "Todos", exporta todos) — a tela só desenha os 20 primeiros,
@@ -9007,6 +9142,161 @@ ${htmlNomeDuplicado}
                   )}
                 </div>
               )}
+
+              {/* Card: Perfil de Clientes (NF-e) — NFC-e fica de fora, ver nota no useMemo */}
+              {perfilClientes.clientes.length > 0 && (() => {
+                const q = perfilClientesBusca.trim().toLowerCase();
+                const filtrados = !q ? perfilClientes.clientes : perfilClientes.clientes.filter(c =>
+                  c.nome.toLowerCase().includes(q) || c.cnpj.includes(q)
+                );
+                const LIMITE = 30;
+                const visiveis = filtrados.slice(0, LIMITE);
+                const formatarCnpjCliente = (cnpj: string) =>
+                  cnpj.replace(/^([0-9A-Za-z]{2})([0-9A-Za-z]{3})([0-9A-Za-z]{3})([0-9A-Za-z]{4})(\d{2})$/, '$1.$2.$3/$4-$5') || cnpj;
+                const formatarDataCliente = (d: string) => d ? d.slice(0, 10).split('-').reverse().join('/') : '—';
+                return (
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-violet-400 rounded-xl p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <Users className="w-5 h-5 text-violet-500" />
+                        <div>
+                          <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Perfil de Clientes (NF-e)</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                            <strong className="text-slate-700 dark:text-slate-200">{perfilClientes.clientes.length} cliente(s)</strong> · {formatarMoeda(perfilClientes.totalConsiderado)} em vendas por NF-e — NFC-e não entra aqui (consumidor final quase nunca tem CNPJ)
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setShowPerfilClientes(!showPerfilClientes)}
+                        className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
+                      >
+                        {showPerfilClientes ? 'Ocultar' : 'Ver detalhes'}
+                      </button>
+                    </div>
+
+                    {showPerfilClientes && (
+                      <div className="space-y-3">
+                        <input
+                          type="text"
+                          value={perfilClientesBusca}
+                          onChange={e => setPerfilClientesBusca(e.target.value)}
+                          placeholder="Buscar por nome ou CNPJ..."
+                          className="w-full max-w-xs px-3 py-1.5 text-xs border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-300"
+                        />
+
+                        <div className="max-h-[420px] overflow-auto border border-slate-200 dark:border-slate-700 rounded-lg">
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
+                              <tr>
+                                <th className="text-left px-3 py-2 font-bold">Cliente</th>
+                                <th className="text-right px-3 py-2 font-bold">Notas</th>
+                                <th className="text-right px-3 py-2 font-bold">Total comprado</th>
+                                <th className="text-right px-3 py-2 font-bold">Ticket médio</th>
+                                <th className="text-right px-3 py-2 font-bold">Última compra</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {visiveis.map(c => (
+                                <React.Fragment key={c.cnpj}>
+                                  <tr
+                                    onClick={() => {
+                                      const abrindo = perfilClienteExpandido !== c.cnpj;
+                                      setPerfilClienteExpandido(abrindo ? c.cnpj : null);
+                                      if (abrindo && !consultaClientesCnpj[c.cnpj]) consultarCnpjCliente(c.cnpj);
+                                    }}
+                                    className="border-t border-slate-100 dark:border-slate-800 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800"
+                                  >
+                                    <td className="px-3 py-2">
+                                      <div className="font-semibold text-slate-700 dark:text-slate-200">{c.nome}</div>
+                                      <div className="text-[10px] text-slate-400 font-mono">{formatarCnpjCliente(c.cnpj)}</div>
+                                    </td>
+                                    <td className="text-right px-3 py-2 tabular-nums">{c.quantidadeNotas}</td>
+                                    <td className="text-right px-3 py-2 tabular-nums font-semibold">{formatarMoeda(c.totalComprado)}</td>
+                                    <td className="text-right px-3 py-2 tabular-nums">{formatarMoeda(c.ticketMedio)}</td>
+                                    <td className="text-right px-3 py-2 tabular-nums">{formatarDataCliente(c.ultimaCompra)}</td>
+                                  </tr>
+                                  {perfilClienteExpandido === c.cnpj && (
+                                    <tr className="border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+                                      <td colSpan={5} className="px-3 py-3">
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                          <div>
+                                            <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Produtos mais comprados</div>
+                                            <div className="space-y-1">
+                                              {c.produtos.map((p, i) => (
+                                                <div key={i} className="flex justify-between gap-2 text-slate-600 dark:text-slate-300">
+                                                  <span className="truncate">{p.xProd}</span>
+                                                  <span className="tabular-nums shrink-0">{formatarMoeda(p.valor)}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                                              Tendência mensal {c.primeiraCompra && <span className="font-normal normal-case text-slate-400">(desde {formatarDataCliente(c.primeiraCompra)})</span>}
+                                            </div>
+                                            <div className="space-y-1">
+                                              {c.porMes.map((m, i) => (
+                                                <div key={i} className="flex justify-between gap-2 text-slate-600 dark:text-slate-300">
+                                                  <span>{m.mes}</span>
+                                                  <span className="tabular-nums">{formatarMoeda(m.valor)} · {m.quantidade} nota{m.quantidade !== 1 ? 's' : ''}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Dados Receita Federal (BrasilAPI)</div>
+                                            {(() => {
+                                              const consulta = consultaClientesCnpj[c.cnpj];
+                                              if (!consulta || consulta.status === 'loading') {
+                                                return <div className="text-slate-400 flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /> Consultando...</div>;
+                                              }
+                                              if (consulta.status === 'erro' || !consulta.dados) {
+                                                return (
+                                                  <div className="text-rose-500">
+                                                    Não foi possível consultar.{' '}
+                                                    <button onClick={(e) => { e.stopPropagation(); consultarCnpjCliente(c.cnpj); }} className="underline hover:text-rose-600">Tentar de novo</button>
+                                                  </div>
+                                                );
+                                              }
+                                              const d = consulta.dados;
+                                              const ativa = d.situacao.toUpperCase() === 'ATIVA';
+                                              const optanteTexto = (v: boolean | null) => v === null ? 'não informado' : v ? 'sim' : 'não';
+                                              return (
+                                                <div className="space-y-1 text-slate-600 dark:text-slate-300">
+                                                  <div className="flex items-center gap-1.5">
+                                                    <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", ativa ? "bg-emerald-500" : "bg-rose-500")} />
+                                                    <span className={cn("font-semibold", ativa ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400")}>{d.situacao}</span>
+                                                  </div>
+                                                  {d.porte && <div>Porte: {d.porte}</div>}
+                                                  {d.naturezaJuridica && <div>Natureza jurídica: {d.naturezaJuridica}</div>}
+                                                  {d.cnaeDescricao && <div className="truncate" title={d.cnaeDescricao}>CNAE: {d.cnaeDescricao}</div>}
+                                                  <div>Simples Nacional: {optanteTexto(d.opcaoSimples)} · MEI: {optanteTexto(d.opcaoMei)}</div>
+                                                  {d.dataInicioAtividade && <div>Início de atividade: {formatarDataCliente(d.dataInicioAtividade)}</div>}
+                                                  {(d.municipio || d.uf) && <div>{d.municipio}{d.municipio && d.uf ? '/' : ''}{d.uf}</div>}
+                                                </div>
+                                              );
+                                            })()}
+                                          </div>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )}
+                                </React.Fragment>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        {filtrados.length > LIMITE && (
+                          <div className="text-[10px] text-slate-400">Mostrando os {LIMITE} primeiros de {filtrados.length} clientes — refine a busca pra achar um específico.</div>
+                        )}
+                        <div className="text-[10px] text-slate-400">
+                          Considera só saída por NF-e (mod 55) com item em CFOP de venda — devolução, transferência, remessa e bonificação ficam de fora do total. NFC-e (venda a consumidor) não aparece aqui porque o destinatário quase nunca tem CNPJ pra identificar.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Card: Notas de Serviço (NFS-e) — só aparece se alguma for encontrada */}
               {nfseList.length > 0 && (() => {
