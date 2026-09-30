@@ -41,7 +41,10 @@ import {
   Clock,
   AlertTriangle,
   Briefcase,
-  Users
+  Users,
+  Package,
+  TrendingUp,
+  Landmark
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -9188,6 +9191,7 @@ ${htmlNomeDuplicado}
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
                               <tr>
+                                <th className="w-6 px-1 py-2"></th>
                                 <th className="text-left px-3 py-2 font-bold">Cliente</th>
                                 <th className="text-right px-3 py-2 font-bold">Notas</th>
                                 <th className="text-right px-3 py-2 font-bold">Total comprado</th>
@@ -9206,6 +9210,9 @@ ${htmlNomeDuplicado}
                                     }}
                                     className="border-t border-slate-100 dark:border-slate-800 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800"
                                   >
+                                    <td className="px-1 py-2">
+                                      <ChevronRight className={cn("w-3.5 h-3.5 text-slate-400 transition-transform", perfilClienteExpandido === c.cnpj && "rotate-90")} />
+                                    </td>
                                     <td className="px-3 py-2">
                                       <div className="font-semibold text-slate-700 dark:text-slate-200">{c.nome}</div>
                                       <div className="text-[10px] text-slate-400 font-mono">{formatarCnpjCliente(c.cnpj)}</div>
@@ -9216,63 +9223,79 @@ ${htmlNomeDuplicado}
                                     <td className="text-right px-3 py-2 tabular-nums">{formatarDataCliente(c.ultimaCompra)}</td>
                                   </tr>
                                   {perfilClienteExpandido === c.cnpj && (
-                                    <tr className="border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
-                                      <td colSpan={5} className="px-3 py-3">
-                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                          <div>
-                                            <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Produtos mais comprados</div>
-                                            <div className="space-y-1">
+                                    <tr className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40">
+                                      <td colSpan={6} className="px-3 py-3">
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-3">
+                                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                                              <Package className="w-3 h-3" /> Produtos mais comprados
+                                            </div>
+                                            <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1.5">
                                               {c.produtos.map((p, i) => (
-                                                <div key={i} className="flex justify-between gap-2 text-slate-600 dark:text-slate-300">
-                                                  <span className="truncate">{p.xProd}</span>
-                                                  <span className="tabular-nums shrink-0">{formatarMoeda(p.valor)}</span>
-                                                </div>
+                                                <React.Fragment key={i}>
+                                                  <span className="truncate text-slate-600 dark:text-slate-300">{p.xProd}</span>
+                                                  <span className="tabular-nums font-semibold text-slate-700 dark:text-slate-200">{formatarMoeda(p.valor)}</span>
+                                                </React.Fragment>
                                               ))}
                                             </div>
                                           </div>
-                                          <div>
-                                            <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                                              Tendência mensal {c.primeiraCompra && <span className="font-normal normal-case text-slate-400">(desde {formatarDataCliente(c.primeiraCompra)})</span>}
+                                          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-3">
+                                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                                              <TrendingUp className="w-3 h-3" /> Tendência mensal
                                             </div>
-                                            <div className="space-y-1">
+                                            {c.primeiraCompra && (
+                                              <div className="text-[10px] text-slate-400 -mt-1 mb-1.5">desde {formatarDataCliente(c.primeiraCompra)}</div>
+                                            )}
+                                            <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1.5">
                                               {c.porMes.map((m, i) => (
-                                                <div key={i} className="flex justify-between gap-2 text-slate-600 dark:text-slate-300">
-                                                  <span>{m.mes}</span>
-                                                  <span className="tabular-nums">{formatarMoeda(m.valor)} · {m.quantidade} nota{m.quantidade !== 1 ? 's' : ''}</span>
-                                                </div>
+                                                <React.Fragment key={i}>
+                                                  <span className="text-slate-600 dark:text-slate-300">{m.mes}</span>
+                                                  <span className="tabular-nums text-right">
+                                                    <span className="font-semibold text-slate-700 dark:text-slate-200">{formatarMoeda(m.valor)}</span>
+                                                    <span className="text-slate-400"> · {m.quantidade} nota{m.quantidade !== 1 ? 's' : ''}</span>
+                                                  </span>
+                                                </React.Fragment>
                                               ))}
                                             </div>
                                           </div>
-                                          <div>
-                                            <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">Dados Receita Federal (BrasilAPI)</div>
+                                          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-3">
+                                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                                              <Landmark className="w-3 h-3" /> Receita Federal
+                                            </div>
                                             {(() => {
                                               const consulta = consultaClientesCnpj[c.cnpj];
                                               if (!consulta || consulta.status === 'loading') {
-                                                return <div className="text-slate-400 flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /> Consultando...</div>;
+                                                return <div className="text-slate-400 flex items-center gap-1.5 text-xs"><Loader2 className="w-3 h-3 animate-spin" /> Consultando...</div>;
                                               }
                                               if (consulta.status === 'erro' || !consulta.dados) {
                                                 return (
-                                                  <div className="text-rose-500">
+                                                  <div className="text-rose-500 text-xs">
                                                     Não foi possível consultar.{' '}
-                                                    <button onClick={(e) => { e.stopPropagation(); consultarCnpjCliente(c.cnpj); }} className="underline hover:text-rose-600">Tentar de novo</button>
+                                                    <button onClick={(e) => { e.stopPropagation(); consultarCnpjCliente(c.cnpj); }} className="underline hover:text-rose-600 font-semibold">Tentar de novo</button>
                                                   </div>
                                                 );
                                               }
                                               const d = consulta.dados;
                                               const ativa = d.situacao.toUpperCase() === 'ATIVA';
-                                              const optanteTexto = (v: boolean | null) => v === null ? 'não informado' : v ? 'sim' : 'não';
+                                              const optanteTexto = (v: boolean | null) => v === null ? '—' : v ? 'Sim' : 'Não';
                                               return (
-                                                <div className="space-y-1 text-slate-600 dark:text-slate-300">
-                                                  <div className="flex items-center gap-1.5">
-                                                    <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", ativa ? "bg-emerald-500" : "bg-rose-500")} />
-                                                    <span className={cn("font-semibold", ativa ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400")}>{d.situacao}</span>
+                                                <div className="space-y-2">
+                                                  <div className={cn(
+                                                    "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold",
+                                                    ativa ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400" : "bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-400"
+                                                  )}>
+                                                    <span className={cn("w-1.5 h-1.5 rounded-full", ativa ? "bg-emerald-500" : "bg-rose-500")} />
+                                                    {d.situacao}
                                                   </div>
-                                                  {d.porte && <div>Porte: {d.porte}</div>}
-                                                  {d.naturezaJuridica && <div>Natureza jurídica: {d.naturezaJuridica}</div>}
-                                                  {d.cnaeDescricao && <div className="truncate" title={d.cnaeDescricao}>CNAE: {d.cnaeDescricao}</div>}
-                                                  <div>Simples Nacional: {optanteTexto(d.opcaoSimples)} · MEI: {optanteTexto(d.opcaoMei)}</div>
-                                                  {d.dataInicioAtividade && <div>Início de atividade: {formatarDataCliente(d.dataInicioAtividade)}</div>}
-                                                  {(d.municipio || d.uf) && <div>{d.municipio}{d.municipio && d.uf ? '/' : ''}{d.uf}</div>}
+                                                  <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-slate-600 dark:text-slate-300">
+                                                    {d.porte && <><span className="text-slate-400">Porte</span><span className="text-right font-medium">{d.porte}</span></>}
+                                                    <span className="text-slate-400">Simples Nacional</span><span className="text-right font-medium">{optanteTexto(d.opcaoSimples)}</span>
+                                                    <span className="text-slate-400">MEI</span><span className="text-right font-medium">{optanteTexto(d.opcaoMei)}</span>
+                                                    {d.dataInicioAtividade && <><span className="text-slate-400">Desde</span><span className="text-right font-medium">{formatarDataCliente(d.dataInicioAtividade)}</span></>}
+                                                    {(d.municipio || d.uf) && <><span className="text-slate-400">Local</span><span className="text-right font-medium">{d.municipio}{d.municipio && d.uf ? '/' : ''}{d.uf}</span></>}
+                                                  </div>
+                                                  {d.naturezaJuridica && <div className="text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-100 dark:border-slate-800">{d.naturezaJuridica}</div>}
+                                                  {d.cnaeDescricao && <div className="text-slate-500 dark:text-slate-400 truncate" title={d.cnaeDescricao}>{d.cnaeDescricao}</div>}
                                                 </div>
                                               );
                                             })()}
