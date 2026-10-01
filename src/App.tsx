@@ -3597,7 +3597,13 @@ ${secoesPorCodigo}
   // (emit/CRT), sem precisar de nenhuma consulta externa; a consulta à
   // Receita (BrasilAPI) continua disponível como complemento, igual no
   // Perfil de Clientes.
-  type FornecedorPerfil = ClientePerfil & { crtDeclarado: string; crtDeclaradoLabel: string };
+  // totalIcmsDestacado/totalIbsDestacado: soma do vICMS/vIBS declarado item a
+  // item nas notas de entrada — é a base do crédito que a empresa pode
+  // aproveitar (ICMS hoje; IBS/CBS quando o fornecedor já adaptar o sistema
+  // na fase de teste da Reforma). Não é o crédito EFETIVO (isso depende do
+  // regime da própria empresa auditada — Simples normalmente não aproveita
+  // crédito de ICMS, por exemplo), só o que está destacado na nota.
+  type FornecedorPerfil = ClientePerfil & { crtDeclarado: string; crtDeclaradoLabel: string; totalIcmsDestacado: number; totalIbsDestacado: number };
   const perfilFornecedores = useMemo(() => {
     const vazio: { fornecedores: FornecedorPerfil[]; totalConsiderado: number } = { fornecedores: [], totalConsiderado: 0 };
     if (!mainCnpj) return vazio;
@@ -3607,6 +3613,7 @@ ${secoesPorCodigo}
       produtos: Map<string, { xProd: string; valor: number }>;
       porMes: Map<string, { valor: number; quantidade: number }>;
       crtDeclarado: string; crtData: string; // crt da nota mais recente vista até agora
+      totalIcmsDestacado: number; totalIbsDestacado: number;
     };
     const mapa = new Map<string, AcumFornecedor>();
     xmlList.forEach(xml => {
@@ -3617,22 +3624,28 @@ ${secoesPorCodigo}
       const ex = getNotaExtract(xml);
       if (!ex) return;
       let valorNota = 0;
+      let icmsNota = 0;
+      let ibsNota = 0;
       const produtosDaNota: { cProd: string; xProd: string; valor: number }[] = [];
       ex.dets.forEach(det => {
         if (!det.cProd) return;
         valorNota += det.vProd;
+        icmsNota += det.vICMS || 0;
+        ibsNota += det.vIBS || 0;
         produtosDaNota.push({ cProd: det.cProd, xProd: det.xProd, valor: det.vProd });
       });
       if (valorNota <= 0) return;
 
       let f = mapa.get(xml.emitCnpj);
       if (!f) {
-        f = { nome: xml.emitNome || '(sem nome)', quantidadeNotas: 0, totalComprado: 0, primeiraCompra: xml.data || '', ultimaCompra: xml.data || '', produtos: new Map(), porMes: new Map(), crtDeclarado: '', crtData: '' };
+        f = { nome: xml.emitNome || '(sem nome)', quantidadeNotas: 0, totalComprado: 0, primeiraCompra: xml.data || '', ultimaCompra: xml.data || '', produtos: new Map(), porMes: new Map(), crtDeclarado: '', crtData: '', totalIcmsDestacado: 0, totalIbsDestacado: 0 };
         mapa.set(xml.emitCnpj, f);
       }
       if (xml.emitNome) f.nome = xml.emitNome;
       f.quantidadeNotas++;
       f.totalComprado += valorNota;
+      f.totalIcmsDestacado += icmsNota;
+      f.totalIbsDestacado += ibsNota;
       if (xml.data && (!f.primeiraCompra || xml.data < f.primeiraCompra)) f.primeiraCompra = xml.data;
       if (xml.data && (!f.ultimaCompra || xml.data > f.ultimaCompra)) f.ultimaCompra = xml.data;
       // Mantém o CRT da nota mais RECENTE — regime declarado hoje importa
@@ -3658,6 +3671,7 @@ ${secoesPorCodigo}
         ticketMedio: f.quantidadeNotas > 0 ? f.totalComprado / f.quantidadeNotas : 0,
         primeiraCompra: f.primeiraCompra, ultimaCompra: f.ultimaCompra,
         crtDeclarado: f.crtDeclarado, crtDeclaradoLabel: crtLabel[f.crtDeclarado] || (f.crtDeclarado ? `CRT ${f.crtDeclarado}` : '—'),
+        totalIcmsDestacado: f.totalIcmsDestacado, totalIbsDestacado: f.totalIbsDestacado,
         produtos: Array.from(f.produtos.values())
           .sort((a, b) => b.valor - a.valor)
           .slice(0, 5),
@@ -4570,9 +4584,9 @@ ${htmlNomeDuplicado}
         id: 'perfil-fornecedores-top', area: 'fornecedores', titulo: 'Principais Fornecedores (NF-e de Entrada)',
         nivel: 'info',
         resumo: `${perfilFornecedores.fornecedores.length} fornecedor(es) identificados via NF-e, ${formatarMoeda(perfilFornecedores.totalConsiderado)} em compras no período`,
-        corpo: `Agrega as compras recebidas (NF-e onde a empresa auditada é o destinatário) pelo CNPJ do emitente. "Regime" é o CRT declarado pelo próprio fornecedor na nota mais recente (1/2 = Simples Nacional, 3 = Regime Normal, 4 = MEI) — importa diretamente pro crédito de IBS/CBS aproveitável na Reforma Tributária.${perfilFornecedores.fornecedores.length > 30 ? ` Mostrando os 30 maiores de ${perfilFornecedores.fornecedores.length}.` : ''}`,
-        colunas: ['Fornecedor', 'CNPJ', 'Notas', 'Total Comprado (R$)', 'Regime Declarado', 'Última Compra'],
-        linhas: top.map(f => [f.nome, f.cnpj, f.quantidadeNotas, f.totalComprado, f.crtDeclaradoLabel, dataFmt(f.ultimaCompra)]),
+        corpo: `Agrega as compras recebidas (NF-e onde a empresa auditada é o destinatário) pelo CNPJ do emitente. "ICMS Destacado" soma o vICMS item a item — base do crédito a avaliar (não o crédito efetivo, que depende do regime da própria empresa auditada). "Regime" é o CRT declarado pelo próprio fornecedor na nota mais recente (1/2 = Simples Nacional, 3 = Regime Normal, 4 = MEI) — importa diretamente pro crédito de IBS/CBS aproveitável na Reforma Tributária.${perfilFornecedores.fornecedores.length > 30 ? ` Mostrando os 30 maiores de ${perfilFornecedores.fornecedores.length}.` : ''}`,
+        colunas: ['Fornecedor', 'CNPJ', 'Notas', 'Total Comprado (R$)', 'ICMS Destacado (R$)', 'Regime Declarado', 'Última Compra'],
+        linhas: top.map(f => [f.nome, f.cnpj, f.quantidadeNotas, f.totalComprado, f.totalIcmsDestacado, f.crtDeclaradoLabel, dataFmt(f.ultimaCompra)]),
       });
     }
 
@@ -9547,6 +9561,7 @@ ${htmlNomeDuplicado}
                                 <th className="text-left px-3 py-2 font-bold">Fornecedor</th>
                                 <th className="text-right px-3 py-2 font-bold">Notas</th>
                                 <th className="text-right px-3 py-2 font-bold">Total comprado</th>
+                                <th className="text-right px-3 py-2 font-bold">ICMS destacado</th>
                                 <th className="text-left px-3 py-2 font-bold">Regime declarado</th>
                                 <th className="text-right px-3 py-2 font-bold">Última compra</th>
                               </tr>
@@ -9571,6 +9586,7 @@ ${htmlNomeDuplicado}
                                     </td>
                                     <td className="text-right px-3 py-2 tabular-nums">{f.quantidadeNotas}</td>
                                     <td className="text-right px-3 py-2 tabular-nums font-semibold">{formatarMoeda(f.totalComprado)}</td>
+                                    <td className="text-right px-3 py-2 tabular-nums text-emerald-600 dark:text-emerald-400">{f.totalIcmsDestacado > 0 ? formatarMoeda(f.totalIcmsDestacado) : '—'}</td>
                                     <td className="px-3 py-2">
                                       <span className={cn(
                                         "inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold",
@@ -9586,7 +9602,17 @@ ${htmlNomeDuplicado}
                                   </tr>
                                   {perfilFornecedorExpandido === f.cnpj && (
                                     <tr className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40">
-                                      <td colSpan={6} className="px-3 py-3">
+                                      <td colSpan={7} className="px-3 py-3">
+                                        {(f.totalIcmsDestacado > 0 || f.totalIbsDestacado > 0) && (
+                                          <div className="flex items-center gap-1.5 bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 rounded-lg px-3 py-2 mb-3">
+                                            <Landmark className="w-3.5 h-3.5 shrink-0" />
+                                            <span>
+                                              <strong>{formatarMoeda(f.totalIcmsDestacado)}</strong> de ICMS destacado
+                                              {f.totalIbsDestacado > 0 && <> · <strong>{formatarMoeda(f.totalIbsDestacado)}</strong> de IBS/CBS destacado</>}
+                                              {' '}nas notas desse fornecedor — base do crédito a avaliar (depende do regime da própria empresa auditada).
+                                            </span>
+                                          </div>
+                                        )}
                                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-3">
                                             <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
@@ -9676,7 +9702,7 @@ ${htmlNomeDuplicado}
                           <div className="text-[10px] text-slate-400">Mostrando os {LIMITE} primeiros de {filtrados.length} fornecedores — refine a busca pra achar um específico.</div>
                         )}
                         <div className="text-[10px] text-slate-400">
-                          Considera toda NF-e onde a empresa auditada é o destinatário (nota de entrada/compra) — soma o valor de todos os itens recebidos, sem separar por CFOP. "Regime declarado" vem direto do CRT da nota mais recente de cada fornecedor (1/2 = Simples Nacional, 3 = Regime Normal, 4 = MEI); a consulta à Receita Federal abaixo é um complemento opcional, não substitui o que a própria nota já declara.
+                          Considera toda NF-e onde a empresa auditada é o destinatário (nota de entrada/compra) — soma o valor de todos os itens recebidos, sem separar por CFOP. "ICMS destacado" soma o vICMS item a item (base do crédito a avaliar, não o crédito efetivo). "Regime declarado" vem direto do CRT da nota mais recente de cada fornecedor (1/2 = Simples Nacional, 3 = Regime Normal, 4 = MEI); a consulta à Receita Federal abaixo é um complemento opcional, não substitui o que a própria nota já declara.
                         </div>
                       </div>
                     )}
