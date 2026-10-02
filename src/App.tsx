@@ -4602,45 +4602,91 @@ ${htmlNomeDuplicado}
       });
     }
 
-    // ─── ÁREA: REFORMA TRIBUTÁRIA (simulação + crédito de fornecedores) ─────
+    // ─── ÁREA: REFORMA TRIBUTÁRIA (referência de regimes + crédito + simulação) ──
     // Importante pra postura consultiva: isto é SÓ a parte tributária (receita,
     // alíquota atual, alíquota da Reforma, cenários de repasse de preço) — não
     // chega a "lucro líquido" porque custo e despesa geral não vêm do XML
     // fiscal, só da contabilidade do cliente. O rótulo "margem disponível"
     // (preço − tributo) é deliberado: é o que sobra pra cobrir custo+despesa+
     // lucro, e muda com o repasse de preço mesmo sem saber custo/despesa.
-    if (perfilFornecedores.fornecedores.length > 0) {
-      const totalCompras = perfilFornecedores.totalConsiderado;
-      const geraCreditoAmplo = (crt: string) => crt === '3'; // Regime Normal — Simples/MEI/sem CRT normalmente não geram crédito amplo de IBS/CBS pro comprador
-      const comCredito = perfilFornecedores.fornecedores.filter(f => geraCreditoAmplo(f.crtDeclarado));
-      const semCredito = perfilFornecedores.fornecedores.filter(f => !geraCreditoAmplo(f.crtDeclarado));
-      const totalComCredito = comCredito.reduce((s, f) => s + f.totalComprado, 0);
-      const totalSemCredito = semCredito.reduce((s, f) => s + f.totalComprado, 0);
-      const pctSemCredito = totalCompras > 0 ? (totalSemCredito / totalCompras) * 100 : 0;
-      const temFornecedorSimplesOuMei = perfilFornecedores.fornecedores.some(f => f.crtDeclarado === '1' || f.crtDeclarado === '2' || f.crtDeclarado === '4');
+    //
+    // Limite estrutural que atravessa os 3 tópicos de crédito abaixo: o <CRT>
+    // da nota só distingue Simples Nacional (1/2) de Regime Normal (3) de MEI
+    // (4) — NÃO diz se um Simples aderiu ao regime de apuração híbrido/regular
+    // (LC 214/2025, opção que gera crédito cheio) nem se um "Regime Normal" é
+    // Lucro Presumido ou Lucro Real (distinção do IRPJ/CSLL, o CRT nunca
+    // diferencia os dois). Por isso o CRT entra só como PALPITE inicial — os
+    // seletores abaixo deixam o contador corrigir pra cada caso que conhece de
+    // verdade, em vez do relatório afirmar algo que o XML sozinho não confirma.
+    const REGIME_OPCOES: { key: string; label: string; credito: boolean }[] = [
+      { key: 'simples_puro', label: 'Simples Nacional (puro)', credito: false },
+      { key: 'simples_hibrido', label: 'Simples Nacional (híbrido/regular)', credito: true },
+      { key: 'mei', label: 'MEI', credito: false },
+      { key: 'presumido', label: 'Lucro Presumido', credito: true },
+      { key: 'real', label: 'Lucro Real', credito: true },
+      { key: 'desconhecido', label: 'Não identificado (assumido sem crédito)', credito: false },
+    ];
+    const regimeKeyPorCrt = (crt: string): string => crt === '1' || crt === '2' ? 'simples_puro' : crt === '4' ? 'mei' : crt === '3' ? 'presumido' : 'desconhecido';
+    const opcoesSelectHtml = (defaultKey: string) => REGIME_OPCOES.map(o => `<option value="${o.key}"${o.key === defaultKey ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+
+    if (mainCnpj && (perfilFornecedores.fornecedores.length > 0 || faturamentoTotal > 0)) {
       topicos.push({
-        id: 'reforma-credito-fornecedores', area: 'reforma', titulo: 'Crédito de IBS/CBS por Fornecedor',
-        nivel: pctSemCredito >= 50 ? 'atencao' : 'info',
-        resumo: `${formatarPct(pctSemCredito)}% das compras (${formatarMoeda(totalSemCredito)}) vêm de fornecedor(es) que, pela regra geral da Reforma, não geram crédito amplo de IBS/CBS pro comprador`,
-        corpo: `Simples Nacional, MEI e fornecedor sem CRT identificável normalmente NÃO geram crédito amplo de IBS/CBS pra quem compra deles — só Regime Normal gera (regra geral da LC 214/2025; há exceções por regime específico que este relatório não avalia). ${formatarMoeda(totalComCredito)} (${formatarPct(100 - pctSemCredito)}%) das compras já vêm de fornecedor em Regime Normal. Vale usar essa lista como ponto de partida pra negociar regime com os maiores fornecedores sem crédito — é um dos "6 pilares" da Reforma (geração de créditos) que mais depende de ação do próprio cliente, não só do contador.${temFornecedorSimplesOuMei ? ' <strong>Atenção a um limite real deste quadro:</strong> o CRT da nota só diz se o fornecedor é optante do Simples — NÃO diz se ele aderiu ao "regime de apuração híbrido/regular" que a Reforma permite ao Simples Nacional especificamente pra gerar crédito cheio de IBS/CBS a quem compra dele (LC 214/2025). Essa adesão não aparece em nenhum campo do XML. Além disso, Simples Nacional só passa a ser obrigado a preencher o grupo IBS/CBS na nota a partir de 01/01/2027 (Ato Conjunto RFB/CGIBS nº 4/2026) — então em 2026 nem a ausência do grupo nessas notas serve de pista. Pra fornecedor(es) Simples/MEI de peso na lista abaixo, confirme diretamente com eles (ou no portal do Comitê Gestor do IBS) antes de descartar o crédito.' : ''}`,
-        colunas: ['Fornecedor', 'CNPJ', 'Regime Declarado', 'Total Comprado (R$)', 'Gera crédito amplo (regra geral)'],
-        linhas: perfilFornecedores.fornecedores.slice(0, 30).map(f => [f.nome, f.cnpj, f.crtDeclaradoLabel, f.totalComprado, geraCreditoAmplo(f.crtDeclarado) ? 'Sim' : 'Não']),
+        id: 'reforma-regimes-referencia', area: 'reforma', titulo: 'Regimes Tributários e Geração de Crédito de IBS/CBS',
+        nivel: 'info',
+        resumo: 'Referência rápida: o que cada regime gera (ou não) de crédito amplo de IBS/CBS pra quem compra dele',
+        corpo: `O &lt;CRT&gt; de qualquer nota só tem 4 valores possíveis (1/2 = Simples Nacional, 3 = Regime Normal, 4 = MEI) — nunca diz se um Simples Nacional aderiu ao regime híbrido/regular (opção facultativa que a Reforma permite pra gerar crédito cheio, LC 214/2025) nem se um "Regime Normal" é Lucro Presumido ou Lucro Real (distinção do IRPJ/CSLL, não do CRT). Os dois tópicos de crédito logo abaixo (fornecedores e o próprio regime da empresa como vendedora) trazem um seletor editável pra cada caso — o CRT entra só como palpite inicial.`,
+        colunas: ['Regime', 'Gera crédito amplo a quem compra dele?', 'Aproveita crédito das próprias compras?', 'Observação'],
+        linhas: [
+          ['Simples Nacional (puro)', 'Não (regra geral)', 'Não', 'Recolhe tudo pelo DAS unificado — fica fora da não cumulatividade do IBS/CBS.'],
+          ['Simples Nacional (regime híbrido/regular)', 'Sim', 'Sim', 'Opção facultativa da LC 214/2025 — não aparece em nenhum campo do XML; confirme direto com a empresa.'],
+          ['MEI', 'Não', 'Não', 'Regime do SIMEI, fora da sistemática do IBS/CBS.'],
+          ['Lucro Presumido', 'Sim', 'Sim', 'Regra geral de não cumulatividade — no XML, mesmo CRT=3 do Lucro Real.'],
+          ['Lucro Real', 'Sim', 'Sim', 'Idem — CRT=3 não diferencia de Presumido; quem diferencia é o regime de apuração do IRPJ/CSLL, não a nota fiscal.'],
+        ],
+      });
+    }
+
+    if (perfilFornecedores.fornecedores.length > 0) {
+      const top = perfilFornecedores.fornecedores.slice(0, 30);
+      const geraCreditoAmploPorCrt = (crt: string) => crt === '3'; // só pra tabela estática/Excel abaixo (palpite puro por CRT)
+      const totalCompras = perfilFornecedores.totalConsiderado;
+      const totalComCreditoPalpite = perfilFornecedores.fornecedores.filter(f => geraCreditoAmploPorCrt(f.crtDeclarado)).reduce((s, f) => s + f.totalComprado, 0);
+      const pctSemCreditoPalpite = totalCompras > 0 ? ((totalCompras - totalComCreditoPalpite) / totalCompras) * 100 : 0;
+      topicos.push({
+        id: 'reforma-credito-fornecedores', area: 'reforma', titulo: 'Crédito de IBS/CBS por Fornecedor — Simulação por Regime',
+        nivel: pctSemCreditoPalpite >= 50 ? 'atencao' : 'info',
+        resumo: `Palpite inicial por CRT: ${formatarPct(pctSemCreditoPalpite)}% das compras vêm de fornecedor que, pela regra geral, não gera crédito amplo — ajuste por fornecedor na tabela abaixo se souber o regime real`,
+        corpo: `Vale usar essa lista como ponto de partida pra negociar regime com os maiores fornecedores sem crédito — é um dos "6 pilares" da Reforma (geração de créditos) que mais depende de ação do próprio cliente, não só do contador. Cada linha abaixo já vem com um palpite baseado no CRT da nota mais recente; troque o "regime real" sempre que souber que é diferente (ex.: fornecedor Simples que aderiu ao híbrido, ou Regime Normal que você sabe ser Lucro Real) — os totais recalculam na hora.
+        <table class="simulador-tabela">
+          <thead><tr><th>Fornecedor</th><th>CRT declarado</th><th>Total Comprado (R$)</th><th>Regime real (ajuste se souber)</th></tr></thead>
+          <tbody>
+            ${top.map(f => `<tr>
+              <td>${esc(f.nome)}</td>
+              <td>${esc(f.crtDeclaradoLabel)}</td>
+              <td class="num">${formatarMoeda(f.totalComprado)}</td>
+              <td><select class="sel-regime-fornecedor" data-total="${f.totalComprado}">${opcoesSelectHtml(regimeKeyPorCrt(f.crtDeclarado))}</select></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+        <div class="simulador-nota">Entre ${top.length === perfilFornecedores.fornecedores.length ? 'os fornecedor(es) acima' : `os ${top.length} maiores de ${perfilFornecedores.fornecedores.length} fornecedor(es)`}: total com crédito amplo <strong id="fornCreditoCom">—</strong> · sem crédito amplo <strong id="fornCreditoSem">—</strong> (<span id="fornCreditoSemPct">—</span>%).</div>`,
+        colunas: ['Fornecedor', 'CNPJ', 'Regime Declarado (CRT)', 'Total Comprado (R$)', 'Gera crédito amplo — palpite por CRT'],
+        linhas: perfilFornecedores.fornecedores.slice(0, 30).map(f => [f.nome, f.cnpj, f.crtDeclaradoLabel, f.totalComprado, geraCreditoAmploPorCrt(f.crtDeclarado) ? 'Sim' : 'Não']),
       });
     }
 
     if (mainCnpj && faturamentoTotal > 0 && regimeTributario.label) {
-      const ehNormal = regimeTributario.crt === '3';
       const nClientes = perfilClientes.clientes.length;
       topicos.push({
         id: 'reforma-regime-como-vendedor', area: 'reforma', titulo: 'Seu Regime Como Vendedor — Efeito no Crédito dos Clientes',
-        nivel: ehNormal ? 'info' : 'atencao',
-        resumo: ehNormal
-          ? 'Regime Normal: as vendas da empresa normalmente geram crédito cheio de IBS/CBS pros clientes que compram dela'
-          : `${esc(regimeTributario.label)}: as vendas da empresa normalmente NÃO geram crédito amplo de IBS/CBS pros clientes que compram dela — o espelho exato do que a tabela de fornecedores acima mostra, só que agora do lado de quem vende`,
-        corpo: `O mesmo raciocínio do crédito de fornecedores vale ao contrário: ${ehNormal
-          ? `como a empresa está em <strong>Regime Normal</strong>, suas vendas normalmente passam crédito cheio de IBS/CBS pros ${nClientes > 0 ? `${nClientes} cliente(s) com CNPJ identificados acima` : 'clientes com CNPJ que comprarem dela'} — um ponto a favor na negociação comercial com clientes que também vendem/revendem (eles preferem fornecedor que passa crédito).`
-          : `como a empresa está em <strong>${esc(regimeTributario.label)}</strong>, suas vendas normalmente NÃO passam crédito amplo de IBS/CBS pros ${nClientes > 0 ? `${nClientes} cliente(s) com CNPJ identificados acima` : 'clientes com CNPJ que comprarem dela'} — isso pode pesar contra em negociação com cliente que revende ou industrializa (ele paga mais líquido comprando dela do que de um concorrente em Regime Normal, mesmo a preço igual). Vale avaliar com o cliente se faz sentido aderir ao regime de apuração híbrido/regular do Simples Nacional pra IBS/CBS (quando aplicável) — decisão de planejamento tributário, não algo que este relatório decide sozinho.`
-        } Mesma ressalva de cima: isso é a regra GERAL por regime, não confirma nem descarta uma eventual adesão ao regime híbrido/regular, que não aparece no XML.`,
+        nivel: 'info',
+        resumo: 'O mesmo raciocínio do crédito de fornecedores, só que do lado de quem vende — ajuste o regime real abaixo pra ver o efeito nos clientes',
+        corpo: `Regime declarado nas próprias notas: <strong>${esc(regimeTributario.label)}</strong> — mas, pela mesma limitação explicada acima, isso não confirma sozinho se a empresa aderiu ao regime híbrido/regular (se for Simples) nem se é Presumido ou Real (se for Regime Normal). Ajuste abaixo pro regime que você sabe que é o real:
+        <div class="simulador-grid" style="grid-template-columns:1fr;max-width:420px;margin:14px 0;">
+          <label>Regime real da empresa (ajuste se souber)
+            <select id="selRegimeVendedor" data-n-clientes="${nClientes}">${opcoesSelectHtml(regimeKeyPorCrt(regimeTributario.crt))}</select>
+          </label>
+        </div>
+        <div class="simulador-nota" id="vendedorNarrativa"></div>`,
       });
     }
 
@@ -4655,7 +4701,7 @@ ${htmlNomeDuplicado}
         id: 'reforma-simulador', area: 'reforma', titulo: 'Simulador: Impacto da Reforma Tributária no Preço',
         nivel: 'info',
         resumo: `Receita de ${formatarMoeda(receitaMensal)}/mês — simule abaixo quanto a empresa precisa reprecificar e o que sobra em cada cenário de repasse`,
-        corpo: `Receita do período já preenchida (${formatarMoeda(receitaMensal)}/mês${numMeses > 1 ? `, média de ${numMeses} meses carregados` : ''}). Regime declarado nas próprias notas: <strong>${esc(regimeTributario.label || 'não identificado')}</strong> — preencha a alíquota atual com base nisso (apuração/DAS do cliente); este relatório não calcula alíquota efetiva de Simples Nacional nem separa PIS/COFINS/ISS automaticamente, pra não fingir uma precisão que o XML fiscal sozinho não sustenta. A alíquota de Reforma vem pré-preenchida com uma estimativa de referência pro IVA dual (CBS+IBS) totalmente implantado — ajuste livremente; a alíquota final depende de regulamentação ainda em curso.${pctTesteReal > 0 ? ` <em>Só pra contexto: nas notas deste período o próprio sistema do cliente já destacou ${formatarPct(pctTesteReal)}% de IBS+CBS — isso é a alíquota do período de TESTE (2026, 0,1%+0,9%, compensável), não a alíquota final; não use esse número na simulação.</em>` : ''}
+        corpo: `Receita do período já preenchida (${formatarMoeda(receitaMensal)}/mês${numMeses > 1 ? `, média de ${numMeses} meses carregados` : ''}). Regime declarado nas próprias notas: <strong>${esc(regimeTributario.label || 'não identificado')}</strong> — preencha a alíquota atual com base nisso (apuração/DAS se Simples; alíquota efetiva de Presumido ou Real se Regime Normal — o CRT da nota não diferencia Presumido de Real, só o contador sabe qual dos dois é); este relatório não calcula alíquota efetiva automaticamente, pra não fingir uma precisão que o XML fiscal sozinho não sustenta. A alíquota de Reforma vem pré-preenchida com uma estimativa de referência pro IVA dual (CBS+IBS) totalmente implantado — ajuste livremente; a alíquota final depende de regulamentação ainda em curso.${pctTesteReal > 0 ? ` <em>Só pra contexto: nas notas deste período o próprio sistema do cliente já destacou ${formatarPct(pctTesteReal)}% de IBS+CBS — isso é a alíquota do período de TESTE (2026, 0,1%+0,9%, compensável), não a alíquota final; não use esse número na simulação.</em>` : ''}
         <div class="simulador">
           <div class="simulador-grid">
             <label>Receita bruta (R$/mês)
@@ -4934,19 +4980,19 @@ ${htmlNomeDuplicado}
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 <style>
-  /* Identidade Contador de Padarias: navy + dourado extraídos do logo oficial
-     (public/logo-contador.png) — não é mais o tom "ink" genérico de antes. */
-  :root { --ink:#0E223A; --ink2:#15304F; --gold:#E0B449; --gold-texto:#9C6E12; --parchment:#FAF8F3; --linha:#E3DFD3; }
+  /* Identidade Contador de Padarias já estabelecida no resto do app (ink quase-preto
+     quente, não o navy de uma variante específica do logo — ver memória do projeto). */
+  :root { --ink:#17150F; --gold:#C9A227; --gold-texto:#9A7B12; --parchment:#F7F4EC; --linha:#E4DFD0; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--parchment); color:var(--ink); font-family:'IBM Plex Sans',sans-serif; line-height:1.55; }
-  .capa { background:linear-gradient(165deg,var(--ink),var(--ink2)); color:#FAF8F3; padding:44px 32px 36px; }
+  .capa { background:var(--ink); color:#F7F4EC; padding:44px 32px 36px; }
   .capa-inner { max-width:920px; margin:0 auto; }
   .capa-logo { height:40px; margin-bottom:22px; display:block; }
   .capa .selo { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:var(--gold); margin-bottom:14px; }
   .capa h1 { font-family:'Newsreader',serif; font-weight:700; font-size:2.1rem; margin:0 0 4px; }
   .capa .subtitulo { font-family:'Newsreader',serif; font-style:italic; font-weight:400; font-size:1.05rem; color:var(--gold); margin:0 0 14px; }
-  .capa .meta { font-size:13.5px; color:rgba(250,248,243,0.75); display:flex; flex-wrap:wrap; gap:6px 22px; }
-  .capa .meta b { color:#FAF8F3; }
+  .capa .meta { font-size:13.5px; color:rgba(247,244,236,0.75); display:flex; flex-wrap:wrap; gap:6px 22px; }
+  .capa .meta b { color:#F7F4EC; }
   .wrap { max-width:920px; margin:0 auto; padding:34px 32px 70px; }
   .sumario { background:#fff; border:1px solid var(--linha); border-radius:0; padding:22px 24px 10px; margin-bottom:38px; }
   .sumario h2 { font-family:'Newsreader',serif; font-size:1.2rem; margin:0 0 4px; }
@@ -4976,7 +5022,7 @@ ${htmlNomeDuplicado}
   tbody tr:nth-child(even) { background:#FBFAF6; }
   td.num { text-align:right; font-family:'IBM Plex Mono',monospace; font-variant-numeric:tabular-nums; }
   .btn-excel { font-family:'IBM Plex Sans',sans-serif; font-size:12px; font-weight:600; letter-spacing:0.04em; color:var(--ink); background:transparent; border:0.8px solid var(--ink); border-radius:0; padding:8px 16px; cursor:pointer; }
-  .btn-excel:hover { background:var(--ink); color:#FAF8F3; }
+  .btn-excel:hover { background:var(--ink); color:#F7F4EC; }
   .tabela-nota { font-size:11px; color:#8A8370; padding:6px 12px; border-top:1px solid var(--linha); background:#FBFAF6; }
   footer { max-width:920px; margin:0 auto; padding:0 32px 60px; font-size:11.5px; color:#8A8370; max-width:75ch; }
   /* Simulador Reforma Tributária (interativo, vanilla JS embutido) */
@@ -5015,6 +5061,49 @@ ${htmlNomeDuplicado}
   </footer>
   <script>
     var DADOS = ${JSON.stringify(dadosParaExcel)};
+    var REGIME_INFO = ${JSON.stringify(Object.fromEntries(REGIME_OPCOES.map(o => [o.key, { label: o.label, credito: o.credito }])))};
+    function fmtMoedaBr(v) {
+      return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    }
+    (function () {
+      // Tabela de crédito por fornecedor: recalcula os totais sempre que o
+      // contador troca o "regime real" de alguma linha (o CRT só dava o palpite inicial).
+      var selects = Array.prototype.slice.call(document.querySelectorAll('.sel-regime-fornecedor'));
+      var elCom = document.getElementById('fornCreditoCom');
+      var elSem = document.getElementById('fornCreditoSem');
+      var elSemPct = document.getElementById('fornCreditoSemPct');
+      if (!selects.length || !elCom || !elSem || !elSemPct) return;
+      function recomputar() {
+        var totalCom = 0, totalSem = 0, totalGeral = 0;
+        selects.forEach(function (sel) {
+          var total = parseFloat(sel.getAttribute('data-total')) || 0;
+          totalGeral += total;
+          var info = REGIME_INFO[sel.value] || REGIME_INFO.desconhecido;
+          if (info.credito) totalCom += total; else totalSem += total;
+        });
+        elCom.textContent = fmtMoedaBr(totalCom);
+        elSem.textContent = fmtMoedaBr(totalSem);
+        elSemPct.textContent = (totalGeral > 0 ? (totalSem / totalGeral * 100) : 0).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+      }
+      selects.forEach(function (sel) { sel.addEventListener('change', recomputar); });
+      recomputar();
+    })();
+    (function () {
+      // Efeito do regime da própria empresa (como vendedora) no crédito dos clientes.
+      var sel = document.getElementById('selRegimeVendedor');
+      var saida = document.getElementById('vendedorNarrativa');
+      if (!sel || !saida) return;
+      function recomputar() {
+        var info = REGIME_INFO[sel.value] || REGIME_INFO.desconhecido;
+        var n = parseInt(sel.getAttribute('data-n-clientes'), 10) || 0;
+        var alvo = n > 0 ? (n + ' cliente(s) com CNPJ identificados acima') : 'clientes com CNPJ que comprarem dela';
+        saida.textContent = info.credito
+          ? ('Nesse regime (' + info.label + '), as vendas da empresa normalmente passam crédito cheio de IBS/CBS pros ' + alvo + ' — ponto a favor na negociação comercial com quem revende ou industrializa.')
+          : ('Nesse regime (' + info.label + '), as vendas da empresa normalmente NÃO passam crédito amplo de IBS/CBS pros ' + alvo + ' — pode pesar contra em negociação com cliente que revende ou industrializa.');
+      }
+      sel.addEventListener('change', recomputar);
+      recomputar();
+    })();
     (function () {
       var campoReceita = document.getElementById('simReceita');
       if (!campoReceita) return; // tópico do simulador não foi gerado neste relatório
