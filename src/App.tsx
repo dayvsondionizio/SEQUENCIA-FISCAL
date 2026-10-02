@@ -7,6 +7,7 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import { CCLASSTRIB_TABELA, CCLASSTRIB_VERSAO } from './cclasstribTabela';
+import { LOGO_CONTADOR_PADARIAS_B64 } from './logoContadorPadarias';
 import { createExtractorFromData } from 'node-unrar-js';
 // @ts-ignore
 // Usando CDN para garantir que o motor WASM seja carregado corretamente em qualquer ambiente
@@ -3583,7 +3584,18 @@ ${secoesPorCodigo}
       }))
       .sort((a, b) => b.totalComprado - a.totalComprado);
 
-    return { clientes, totalConsiderado };
+    // Se não achou nenhum cliente de NF-e mas a empresa TEM saída de NFC-e no
+    // período, o card não deve simplesmente sumir sem explicação — o analista
+    // vê "cadê o Perfil de Clientes?" e acha que quebrou (já aconteceu). Esse
+    // sinal deixa a tela mostrar "normal, essa empresa vende só a consumidor"
+    // em vez de só esconder o card calado.
+    const vendeSoPorNfce = clientes.length === 0 && xmlList.some(xml =>
+      xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.modelo === '65' && xml.tpNF === '1' &&
+      xml.rawXml && xml.protocolo && !(xml.chave && chavesCanceladas.has(xml.chave)) &&
+      (filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
+    );
+
+    return { clientes, totalConsiderado, vendeSoPorNfce };
   }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
 
   // Perfil de Fornecedores: espelho do Perfil de Clientes, mas pra NF-e de
@@ -4543,7 +4555,7 @@ ${htmlNomeDuplicado}
   // mais, e os alertas de conformidade — tudo com tópicos que minimizam/
   // maximizam, pra não afogar quem só precisa de uma visão geral primeiro.
   const exportarRelatorioAlertasHtml = () => {
-    type Area = 'perfil' | 'fornecedores' | 'ranking' | 'sazonalidade' | 'ibscbs' | 'tef';
+    type Area = 'perfil' | 'fornecedores' | 'ranking' | 'sazonalidade' | 'reforma' | 'ibscbs' | 'tef';
     type Topico = {
       id: string; area: Area; titulo: string;
       // 'info': conteúdo de perfil/retrato, não é um "problema" nem um
@@ -4587,6 +4599,81 @@ ${htmlNomeDuplicado}
         corpo: `Agrega as compras recebidas (NF-e onde a empresa auditada é o destinatário) pelo CNPJ do emitente. "ICMS Destacado" soma o vICMS item a item — base do crédito a avaliar (não o crédito efetivo, que depende do regime da própria empresa auditada). "Regime" é o CRT declarado pelo próprio fornecedor na nota mais recente (1/2 = Simples Nacional, 3 = Regime Normal, 4 = MEI) — importa diretamente pro crédito de IBS/CBS aproveitável na Reforma Tributária.${perfilFornecedores.fornecedores.length > 30 ? ` Mostrando os 30 maiores de ${perfilFornecedores.fornecedores.length}.` : ''}`,
         colunas: ['Fornecedor', 'CNPJ', 'Notas', 'Total Comprado (R$)', 'ICMS Destacado (R$)', 'Regime Declarado', 'Última Compra'],
         linhas: top.map(f => [f.nome, f.cnpj, f.quantidadeNotas, f.totalComprado, f.totalIcmsDestacado, f.crtDeclaradoLabel, dataFmt(f.ultimaCompra)]),
+      });
+    }
+
+    // ─── ÁREA: REFORMA TRIBUTÁRIA (simulação + crédito de fornecedores) ─────
+    // Importante pra postura consultiva: isto é SÓ a parte tributária (receita,
+    // alíquota atual, alíquota da Reforma, cenários de repasse de preço) — não
+    // chega a "lucro líquido" porque custo e despesa geral não vêm do XML
+    // fiscal, só da contabilidade do cliente. O rótulo "margem disponível"
+    // (preço − tributo) é deliberado: é o que sobra pra cobrir custo+despesa+
+    // lucro, e muda com o repasse de preço mesmo sem saber custo/despesa.
+    if (perfilFornecedores.fornecedores.length > 0) {
+      const totalCompras = perfilFornecedores.totalConsiderado;
+      const geraCreditoAmplo = (crt: string) => crt === '3'; // Regime Normal — Simples/MEI/sem CRT normalmente não geram crédito amplo de IBS/CBS pro comprador
+      const comCredito = perfilFornecedores.fornecedores.filter(f => geraCreditoAmplo(f.crtDeclarado));
+      const semCredito = perfilFornecedores.fornecedores.filter(f => !geraCreditoAmplo(f.crtDeclarado));
+      const totalComCredito = comCredito.reduce((s, f) => s + f.totalComprado, 0);
+      const totalSemCredito = semCredito.reduce((s, f) => s + f.totalComprado, 0);
+      const pctSemCredito = totalCompras > 0 ? (totalSemCredito / totalCompras) * 100 : 0;
+      const temFornecedorSimplesOuMei = perfilFornecedores.fornecedores.some(f => f.crtDeclarado === '1' || f.crtDeclarado === '2' || f.crtDeclarado === '4');
+      topicos.push({
+        id: 'reforma-credito-fornecedores', area: 'reforma', titulo: 'Crédito de IBS/CBS por Fornecedor',
+        nivel: pctSemCredito >= 50 ? 'atencao' : 'info',
+        resumo: `${formatarPct(pctSemCredito)}% das compras (${formatarMoeda(totalSemCredito)}) vêm de fornecedor(es) que, pela regra geral da Reforma, não geram crédito amplo de IBS/CBS pro comprador`,
+        corpo: `Simples Nacional, MEI e fornecedor sem CRT identificável normalmente NÃO geram crédito amplo de IBS/CBS pra quem compra deles — só Regime Normal gera (regra geral da LC 214/2025; há exceções por regime específico que este relatório não avalia). ${formatarMoeda(totalComCredito)} (${formatarPct(100 - pctSemCredito)}%) das compras já vêm de fornecedor em Regime Normal. Vale usar essa lista como ponto de partida pra negociar regime com os maiores fornecedores sem crédito — é um dos "6 pilares" da Reforma (geração de créditos) que mais depende de ação do próprio cliente, não só do contador.${temFornecedorSimplesOuMei ? ' <strong>Atenção a um limite real deste quadro:</strong> o CRT da nota só diz se o fornecedor é optante do Simples — NÃO diz se ele aderiu ao "regime de apuração híbrido/regular" que a Reforma permite ao Simples Nacional especificamente pra gerar crédito cheio de IBS/CBS a quem compra dele (LC 214/2025). Essa adesão não aparece em nenhum campo do XML. Além disso, Simples Nacional só passa a ser obrigado a preencher o grupo IBS/CBS na nota a partir de 01/01/2027 (Ato Conjunto RFB/CGIBS nº 4/2026) — então em 2026 nem a ausência do grupo nessas notas serve de pista. Pra fornecedor(es) Simples/MEI de peso na lista abaixo, confirme diretamente com eles (ou no portal do Comitê Gestor do IBS) antes de descartar o crédito.' : ''}`,
+        colunas: ['Fornecedor', 'CNPJ', 'Regime Declarado', 'Total Comprado (R$)', 'Gera crédito amplo (regra geral)'],
+        linhas: perfilFornecedores.fornecedores.slice(0, 30).map(f => [f.nome, f.cnpj, f.crtDeclaradoLabel, f.totalComprado, geraCreditoAmplo(f.crtDeclarado) ? 'Sim' : 'Não']),
+      });
+    }
+
+    if (mainCnpj && faturamentoTotal > 0 && regimeTributario.label) {
+      const ehNormal = regimeTributario.crt === '3';
+      const nClientes = perfilClientes.clientes.length;
+      topicos.push({
+        id: 'reforma-regime-como-vendedor', area: 'reforma', titulo: 'Seu Regime Como Vendedor — Efeito no Crédito dos Clientes',
+        nivel: ehNormal ? 'info' : 'atencao',
+        resumo: ehNormal
+          ? 'Regime Normal: as vendas da empresa normalmente geram crédito cheio de IBS/CBS pros clientes que compram dela'
+          : `${esc(regimeTributario.label)}: as vendas da empresa normalmente NÃO geram crédito amplo de IBS/CBS pros clientes que compram dela — o espelho exato do que a tabela de fornecedores acima mostra, só que agora do lado de quem vende`,
+        corpo: `O mesmo raciocínio do crédito de fornecedores vale ao contrário: ${ehNormal
+          ? `como a empresa está em <strong>Regime Normal</strong>, suas vendas normalmente passam crédito cheio de IBS/CBS pros ${nClientes > 0 ? `${nClientes} cliente(s) com CNPJ identificados acima` : 'clientes com CNPJ que comprarem dela'} — um ponto a favor na negociação comercial com clientes que também vendem/revendem (eles preferem fornecedor que passa crédito).`
+          : `como a empresa está em <strong>${esc(regimeTributario.label)}</strong>, suas vendas normalmente NÃO passam crédito amplo de IBS/CBS pros ${nClientes > 0 ? `${nClientes} cliente(s) com CNPJ identificados acima` : 'clientes com CNPJ que comprarem dela'} — isso pode pesar contra em negociação com cliente que revende ou industrializa (ele paga mais líquido comprando dela do que de um concorrente em Regime Normal, mesmo a preço igual). Vale avaliar com o cliente se faz sentido aderir ao regime de apuração híbrido/regular do Simples Nacional pra IBS/CBS (quando aplicável) — decisão de planejamento tributário, não algo que este relatório decide sozinho.`
+        } Mesma ressalva de cima: isso é a regra GERAL por regime, não confirma nem descarta uma eventual adesão ao regime híbrido/regular, que não aparece no XML.`,
+      });
+    }
+
+    if (mainCnpj && faturamentoTotal > 0) {
+      const numMeses = filterMes === 'Todos' ? Math.max(mesesDisponiveis.length, 1) : 1;
+      const receitaMensal = faturamentoTotal / numMeses;
+      const numParaInputBr = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const totalIbsCbsTeste = auditoriaClassTrib.totalIBS + auditoriaClassTrib.totalCBS;
+      const baseComGrupo = auditoriaClassTrib.codigosUsados.reduce((s, c) => s + c.valor, 0);
+      const pctTesteReal = baseComGrupo > 0 ? (totalIbsCbsTeste / baseComGrupo) * 100 : 0;
+      topicos.push({
+        id: 'reforma-simulador', area: 'reforma', titulo: 'Simulador: Impacto da Reforma Tributária no Preço',
+        nivel: 'info',
+        resumo: `Receita de ${formatarMoeda(receitaMensal)}/mês — simule abaixo quanto a empresa precisa reprecificar e o que sobra em cada cenário de repasse`,
+        corpo: `Receita do período já preenchida (${formatarMoeda(receitaMensal)}/mês${numMeses > 1 ? `, média de ${numMeses} meses carregados` : ''}). Regime declarado nas próprias notas: <strong>${esc(regimeTributario.label || 'não identificado')}</strong> — preencha a alíquota atual com base nisso (apuração/DAS do cliente); este relatório não calcula alíquota efetiva de Simples Nacional nem separa PIS/COFINS/ISS automaticamente, pra não fingir uma precisão que o XML fiscal sozinho não sustenta. A alíquota de Reforma vem pré-preenchida com uma estimativa de referência pro IVA dual (CBS+IBS) totalmente implantado — ajuste livremente; a alíquota final depende de regulamentação ainda em curso.${pctTesteReal > 0 ? ` <em>Só pra contexto: nas notas deste período o próprio sistema do cliente já destacou ${formatarPct(pctTesteReal)}% de IBS+CBS — isso é a alíquota do período de TESTE (2026, 0,1%+0,9%, compensável), não a alíquota final; não use esse número na simulação.</em>` : ''}
+        <div class="simulador">
+          <div class="simulador-grid">
+            <label>Receita bruta (R$/mês)
+              <input type="text" id="simReceita" value="${numParaInputBr(receitaMensal)}" inputmode="decimal">
+            </label>
+            <label>Alíquota atual sobre a receita (%)<span class="ajuda">regime detectado: ${esc(regimeTributario.label || 'não identificado')}</span>
+              <input type="text" id="simAliqAtual" value="0,00" inputmode="decimal">
+            </label>
+            <label>Alíquota de referência Reforma — CBS+IBS (%)<span class="ajuda">estimativa, sujeita a regulamentação</span>
+              <input type="text" id="simAliqReforma" value="26,50" inputmode="decimal">
+            </label>
+          </div>
+          <table class="simulador-tabela">
+            <thead><tr><th>Cenário de repasse ao preço</th><th>Receita necessária</th><th>Tributo (Reforma)</th><th>Margem disponível</th><th>Diferença vs. hoje</th></tr></thead>
+            <tbody id="simCorpo"></tbody>
+          </table>
+          <div class="simulador-nota">"Margem disponível" = receita menos o tributo sobre consumo — é o que sobra pra cobrir custo, despesa geral e lucro; NÃO é o lucro líquido (que também depende de custo e despesa, informação que não vem do XML fiscal). "Receita necessária" é o preço de venda que, em cada cenário, absorve aquele % do aumento de carga tributária. Todos os valores recalculam ao digitar.</div>
+        </div>`,
       });
     }
 
@@ -4768,10 +4855,11 @@ ${htmlNomeDuplicado}
       fornecedores: 'Perfil de Fornecedores',
       ranking: 'Produtos',
       sazonalidade: 'Sazonalidade',
-      ibscbs: 'IBS/CBS — Reforma Tributária',
+      reforma: 'Reforma Tributária — Simulação e Créditos',
+      ibscbs: 'IBS/CBS — Conformidade Estrutural',
       tef: 'TEF — Auditoria de Pagamento',
     };
-    const ordemAreas: Area[] = ['perfil', 'fornecedores', 'ranking', 'sazonalidade', 'ibscbs', 'tef'];
+    const ordemAreas: Area[] = ['perfil', 'fornecedores', 'ranking', 'sazonalidade', 'reforma', 'ibscbs', 'tef'];
     const topicosPorArea = Object.fromEntries(ordemAreas.map(a => [a, topicos.filter(t => t.area === a)])) as Record<Area, Topico[]>;
 
     const dadosParaExcel: Record<string, { colunas: string[]; linhas: (string | number)[][] }> = {};
@@ -4816,7 +4904,7 @@ ${htmlNomeDuplicado}
             <span class="topico-resumo">${esc(t.resumo)}</span>
           </summary>
           <div class="topico-corpo">
-            <p class="topico-texto">${t.corpo}</p>
+            <div class="topico-texto">${t.corpo}</div>
             ${tabelaHtml(t)}
             ${t.colunas && t.linhas && t.linhas.length > 0 ? `<button class="btn-excel" onclick="baixarExcelTopico('${t.id}','${esc(sanitizarNomeArquivo(t.titulo))}')">⇩ Baixar Excel deste tópico</button>` : ''}
           </div>
@@ -4846,53 +4934,68 @@ ${htmlNomeDuplicado}
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 <style>
-  :root { --ink:#17150F; --gold:#C9A227; --parchment:#F7F4EC; --linha:#E4DFD0; }
+  /* Identidade Contador de Padarias: navy + dourado extraídos do logo oficial
+     (public/logo-contador.png) — não é mais o tom "ink" genérico de antes. */
+  :root { --ink:#0E223A; --ink2:#15304F; --gold:#E0B449; --gold-texto:#9C6E12; --parchment:#FAF8F3; --linha:#E3DFD3; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--parchment); color:var(--ink); font-family:'IBM Plex Sans',sans-serif; line-height:1.55; }
-  .capa { background:var(--ink); color:#F7F4EC; padding:48px 32px 40px; }
+  .capa { background:linear-gradient(165deg,var(--ink),var(--ink2)); color:#FAF8F3; padding:44px 32px 36px; }
   .capa-inner { max-width:920px; margin:0 auto; }
+  .capa-logo { height:40px; margin-bottom:22px; display:block; }
   .capa .selo { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:var(--gold); margin-bottom:14px; }
-  .capa h1 { font-family:'Newsreader',serif; font-weight:700; font-size:2.1rem; margin:0 0 10px; }
-  .capa .meta { font-size:13.5px; color:rgba(247,244,236,0.75); display:flex; flex-wrap:wrap; gap:6px 22px; }
-  .capa .meta b { color:#F7F4EC; }
+  .capa h1 { font-family:'Newsreader',serif; font-weight:700; font-size:2.1rem; margin:0 0 4px; }
+  .capa .subtitulo { font-family:'Newsreader',serif; font-style:italic; font-weight:400; font-size:1.05rem; color:var(--gold); margin:0 0 14px; }
+  .capa .meta { font-size:13.5px; color:rgba(250,248,243,0.75); display:flex; flex-wrap:wrap; gap:6px 22px; }
+  .capa .meta b { color:#FAF8F3; }
   .wrap { max-width:920px; margin:0 auto; padding:34px 32px 70px; }
-  .sumario { background:#fff; border:1px solid var(--linha); border-radius:2px; padding:22px 24px 10px; margin-bottom:38px; }
+  .sumario { background:#fff; border:1px solid var(--linha); border-radius:0; padding:22px 24px 10px; margin-bottom:38px; }
   .sumario h2 { font-family:'Newsreader',serif; font-size:1.2rem; margin:0 0 4px; }
   .sumario .contagem { font-size:12.5px; color:#6B6350; margin-bottom:16px; }
   .sumario .contagem strong.n-critico { color:#B3261E; } .sumario .contagem strong.n-atencao { color:#B7791F; }
-  .sumario-linha { display:flex; align-items:center; gap:12px; text-decoration:none; color:var(--ink); padding:9px 10px; border-left:3px solid; border-radius:2px; margin-bottom:8px; background:#FBFAF6; transition:background .15s; }
+  .sumario-linha { display:flex; align-items:center; gap:12px; text-decoration:none; color:var(--ink); padding:9px 10px; border-left:3px solid; border-radius:0; margin-bottom:8px; background:#FBFAF6; transition:background .15s; }
   .sumario-linha:hover { background:#F1EDE0; }
-  .sumario-badge { font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:3px; white-space:nowrap; }
+  .sumario-badge { font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:0; white-space:nowrap; }
   .sumario-titulo { font-weight:600; font-size:13.5px; white-space:nowrap; }
   .sumario-resumo { font-size:12.5px; color:#6B6350; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .area { margin-bottom:36px; }
   .area h2 { font-family:'Newsreader',serif; font-size:1.5rem; font-weight:600; border-bottom:2px solid var(--ink); padding-bottom:8px; margin:0 0 18px; }
-  .topico { background:#fff; border:1px solid var(--linha); border-left:4px solid; border-radius:2px; margin-bottom:14px; }
+  .topico { background:#fff; border:1px solid var(--linha); border-left:4px solid; border-radius:0; margin-bottom:14px; }
   .topico summary { list-style:none; cursor:pointer; padding:14px 18px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
   .topico summary::-webkit-details-marker { display:none; }
   .topico summary::before { content:'▸'; font-size:11px; color:#9C9583; transition:transform .15s; margin-right:2px; }
   .topico[open] summary::before { transform:rotate(90deg); }
-  .topico-badge { font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600; padding:3px 9px; border-radius:3px; white-space:nowrap; }
+  .topico-badge { font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600; padding:3px 9px; border-radius:0; white-space:nowrap; }
   .topico-titulo { font-family:'Newsreader',serif; font-weight:600; font-size:16px; }
   .topico-resumo { font-size:12.5px; color:#6B6350; flex:1; }
   .topico-corpo { padding:0 18px 18px; border-top:1px solid var(--linha); margin-top:0; }
   .topico-texto { font-size:13.5px; color:#3A362B; margin:14px 0; max-width:70ch; }
-  .tabela-wrap { overflow-x:auto; max-height:420px; overflow-y:auto; border:1px solid var(--linha); border-radius:2px; margin-bottom:12px; }
+  .tabela-wrap { overflow-x:auto; max-height:420px; overflow-y:auto; border:1px solid var(--linha); border-radius:0; margin-bottom:12px; }
   table { width:100%; border-collapse:collapse; font-size:12.5px; }
   thead th { position:sticky; top:0; background:#FBFAF6; text-align:left; font-weight:600; color:#6B6350; text-transform:uppercase; font-size:10.5px; letter-spacing:0.04em; padding:8px 12px; border-bottom:1px solid var(--linha); white-space:nowrap; }
   tbody td { padding:7px 12px; border-bottom:1px solid #F0EDE2; white-space:nowrap; }
   tbody tr:nth-child(even) { background:#FBFAF6; }
   td.num { text-align:right; font-family:'IBM Plex Mono',monospace; font-variant-numeric:tabular-nums; }
-  .btn-excel { font-family:'IBM Plex Sans',sans-serif; font-size:12.5px; font-weight:600; color:var(--ink); background:linear-gradient(180deg,#E7C453,var(--gold)); border:1px solid #A9821C; border-radius:3px; padding:8px 16px; cursor:pointer; }
-  .btn-excel:hover { filter:brightness(1.04); }
+  .btn-excel { font-family:'IBM Plex Sans',sans-serif; font-size:12px; font-weight:600; letter-spacing:0.04em; color:var(--ink); background:transparent; border:0.8px solid var(--ink); border-radius:0; padding:8px 16px; cursor:pointer; }
+  .btn-excel:hover { background:var(--ink); color:#FAF8F3; }
   .tabela-nota { font-size:11px; color:#8A8370; padding:6px 12px; border-top:1px solid var(--linha); background:#FBFAF6; }
   footer { max-width:920px; margin:0 auto; padding:0 32px 60px; font-size:11.5px; color:#8A8370; max-width:75ch; }
+  /* Simulador Reforma Tributária (interativo, vanilla JS embutido) */
+  .simulador-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin:16px 0 18px; }
+  .simulador-grid label { display:flex; flex-direction:column; gap:5px; font-size:11.5px; font-weight:600; color:#6B6350; text-transform:uppercase; letter-spacing:0.03em; }
+  .simulador-grid .ajuda { font-weight:400; text-transform:none; letter-spacing:0; color:#9C9583; font-size:11px; }
+  .simulador-grid input { font-family:'IBM Plex Mono',monospace; font-size:14px; font-weight:600; color:var(--ink); background:#FBFAF6; border:0.8px solid var(--linha); border-radius:0; padding:8px 10px; width:100%; }
+  .simulador-grid input:focus { outline:none; border-color:var(--gold-texto); background:#fff; }
+  .simulador-tabela thead th:not(:first-child), .simulador-tabela td.num { font-variant-numeric:tabular-nums; }
+  .simulador-nota { font-size:11.5px; color:#8A8370; margin-top:10px; max-width:70ch; }
+  .simulador-real { font-size:12px; color:var(--gold-texto); background:#FBF6E8; border:0.8px solid #E6D4A0; padding:8px 12px; margin-bottom:14px; }
   @media (max-width:640px) { .capa,.wrap,footer { padding-left:18px; padding-right:18px; } .sumario-linha { flex-wrap:wrap; } .sumario-resumo { white-space:normal; } }
 </style>
 </head><body>
   <div class="capa"><div class="capa-inner">
+    <img class="capa-logo" src="${LOGO_CONTADOR_PADARIAS_B64}" alt="Contador de Padarias">
     <div class="selo">Sequência Fiscal · Perfil do Cliente</div>
     <h1>${esc(empresa)}</h1>
+    <div class="subtitulo">Hoje é operacional. Amanhã é consultivo.</div>
     <div class="meta">
       <span>Período: <b>${esc(periodo)}</b></span>
       <span>Gerado em: <b>${hoje}</b></span>
@@ -4908,10 +5011,55 @@ ${htmlNomeDuplicado}
     ${ordemAreas.map(areaHtml).join('')}
   </div>
   <footer>
-    <strong>Metodologia e limites.</strong> Os tópicos de perfil (clientes, produtos, sazonalidade) são agregações diretas dos XMLs — não há juízo de valor envolvido. Os tópicos de IBS/CBS e TEF são checagens estruturais e determinísticas — comparações de código × código e conta × conta. Nenhum dos dois substitui análise de um contador nem é uma auditoria oficial da Receita Federal. Gerado automaticamente pelo Sequência Fiscal a partir dos XMLs carregados na análise.
+    <strong>Metodologia e limites.</strong> Os tópicos de perfil (clientes, produtos, sazonalidade) são agregações diretas dos XMLs — não há juízo de valor envolvido. O simulador de Reforma Tributária usa a receita apurada nos XMLs, mas a alíquota atual e a alíquota de Reforma são parâmetros que o contador informa/ajusta — nenhuma delas é calculada automaticamente a partir do XML (custo e despesa geral, que fariam parte de uma DRE completa, não vêm do XML fiscal). Os tópicos de IBS/CBS e TEF são checagens estruturais e determinísticas — comparações de código × código e conta × conta. Nenhum desses tópicos substitui análise de um contador nem é uma auditoria oficial da Receita Federal. Gerado automaticamente pelo Sequência Fiscal a partir dos XMLs carregados na análise.
   </footer>
   <script>
     var DADOS = ${JSON.stringify(dadosParaExcel)};
+    (function () {
+      var campoReceita = document.getElementById('simReceita');
+      if (!campoReceita) return; // tópico do simulador não foi gerado neste relatório
+      var campoAliqAtual = document.getElementById('simAliqAtual');
+      var campoAliqReforma = document.getElementById('simAliqReforma');
+      var corpoTabela = document.getElementById('simCorpo');
+      function simNum(input) {
+        var v = parseFloat(String(input.value).trim().replace(/\\./g, '').replace(',', '.'));
+        return isNaN(v) ? 0 : v;
+      }
+      function simMoeda(v) {
+        return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+      }
+      var CENARIOS = [
+        { label: '100% — repassa o necessário por completo', assertividade: 1 },
+        { label: '80% — repassa parte do necessário', assertividade: 0.8 },
+        { label: '50% — repassa só metade do necessário', assertividade: 0.5 },
+        { label: '0% — mantém o preço atual (não repassa nada)', assertividade: 0 },
+      ];
+      function simRecalcular() {
+        var receita = simNum(campoReceita);
+        var aliqAtual = simNum(campoAliqAtual) / 100;
+        var aliqReforma = simNum(campoAliqReforma) / 100;
+        var margemAtual = receita * (1 - aliqAtual);
+        var precoNecessario100 = aliqReforma < 1 ? margemAtual / (1 - aliqReforma) : receita;
+        var linhas = CENARIOS.map(function (c) {
+          var precoEfetivo = receita + c.assertividade * (precoNecessario100 - receita);
+          var tributoEfetivo = precoEfetivo * aliqReforma;
+          var margemEfetiva = precoEfetivo - tributoEfetivo;
+          var diff = margemEfetiva - margemAtual;
+          var corDiff = diff >= 0 ? '#1E5A3D' : '#B3261E';
+          var sinal = diff >= 0 ? '+' : '';
+          return '<tr><td>' + c.label + '</td>' +
+            '<td class="num">' + simMoeda(precoEfetivo) + '</td>' +
+            '<td class="num">' + simMoeda(tributoEfetivo) + '</td>' +
+            '<td class="num">' + simMoeda(margemEfetiva) + '</td>' +
+            '<td class="num" style="color:' + corDiff + '">' + sinal + simMoeda(diff) + '</td></tr>';
+        });
+        corpoTabela.innerHTML = linhas.join('');
+      }
+      [campoReceita, campoAliqAtual, campoAliqReforma].forEach(function (campo) {
+        campo.addEventListener('input', simRecalcular);
+      });
+      simRecalcular();
+    })();
     function baixarExcelTopico(id, nomeBase) {
       var t = DADOS[id];
       if (!t) return;
@@ -9333,6 +9481,18 @@ ${htmlNomeDuplicado}
                       )}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Quando a empresa só vende por NFC-e, o card de baixo não aparece — sem
+                  isso aqui, some sem explicação nenhuma e parece bug (já confundiu
+                  analista, achando que quebrou). */}
+              {perfilClientes.vendeSoPorNfce && (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-violet-300 rounded-xl p-5 flex items-start gap-3">
+                  <Users className="w-5 h-5 text-violet-400 shrink-0 mt-0.5" />
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    <strong className="text-slate-700 dark:text-slate-200">Perfil de Clientes não se aplica aqui.</strong> As vendas desse período são por NFC-e (consumidor final) — o destinatário quase nunca tem CNPJ, então não existe "cliente" pra identificar e perfilar. Isso é esperado pra um negócio de varejo/balcão, não um erro.
+                  </div>
                 </div>
               )}
 
