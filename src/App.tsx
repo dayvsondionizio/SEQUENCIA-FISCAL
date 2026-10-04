@@ -1524,32 +1524,31 @@ export default function App() {
   // lote/automático pra não estourar limite da API com dezenas de clientes de
   // uma vez), e guarda o resultado num cache pra não reconsultar ao
   // expandir/recolher a mesma linha de novo.
+  const buscarDadosCnpj = async (cnpj: string, timeoutMs = 10000): Promise<PerfilClienteReceitaDados> => {
+    const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    return {
+      situacao: data.descricao_situacao_cadastral || 'Desconhecida',
+      // null da API = "não informado pela Receita", diferente de "não
+      // optante" — mantido como null pra não afirmar algo que a fonte
+      // não confirmou.
+      opcaoSimples: data.opcao_pelo_simples === null || data.opcao_pelo_simples === undefined ? null : !!data.opcao_pelo_simples,
+      opcaoMei: data.opcao_pelo_mei === null || data.opcao_pelo_mei === undefined ? null : !!data.opcao_pelo_mei,
+      porte: data.porte || '',
+      cnaeDescricao: data.cnae_fiscal_descricao || '',
+      naturezaJuridica: data.natureza_juridica || '',
+      dataInicioAtividade: data.data_inicio_atividade || '',
+      municipio: data.municipio || '',
+      uf: data.uf || '',
+    };
+  };
+
   const consultarCnpjCliente = async (cnpj: string) => {
     setConsultaClientesCnpj(prev => ({ ...prev, [cnpj]: { status: 'loading' } }));
     try {
-      const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { signal: AbortSignal.timeout(10000) });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      setConsultaClientesCnpj(prev => ({
-        ...prev,
-        [cnpj]: {
-          status: 'ok',
-          dados: {
-            situacao: data.descricao_situacao_cadastral || 'Desconhecida',
-            // null da API = "não informado pela Receita", diferente de "não
-            // optante" — mantido como null pra não afirmar algo que a fonte
-            // não confirmou.
-            opcaoSimples: data.opcao_pelo_simples === null || data.opcao_pelo_simples === undefined ? null : !!data.opcao_pelo_simples,
-            opcaoMei: data.opcao_pelo_mei === null || data.opcao_pelo_mei === undefined ? null : !!data.opcao_pelo_mei,
-            porte: data.porte || '',
-            cnaeDescricao: data.cnae_fiscal_descricao || '',
-            naturezaJuridica: data.natureza_juridica || '',
-            dataInicioAtividade: data.data_inicio_atividade || '',
-            municipio: data.municipio || '',
-            uf: data.uf || '',
-          },
-        },
-      }));
+      const dados = await buscarDadosCnpj(cnpj);
+      setConsultaClientesCnpj(prev => ({ ...prev, [cnpj]: { status: 'ok', dados } }));
     } catch (err) {
       console.error('Erro ao consultar CNPJ de cliente (BrasilAPI):', err);
       setConsultaClientesCnpj(prev => ({ ...prev, [cnpj]: { status: 'erro' } }));
@@ -3696,6 +3695,74 @@ ${secoesPorCodigo}
     return { fornecedores, totalConsiderado };
   }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
 
+  // Mix de alíquotas de IBS/CBS lido do grupo <IBSCBS> de cada item das notas
+  // (saídas da empresa e entradas de fornecedor): quanto do valor está em
+  // tributação integral, reduzida, zero (ex.: cesta básica, Anexo I da LC
+  // 214/2025) ou fora de incidência. Só código × tabela oficial — o app NUNCA
+  // interpreta nome de produto/NCM. Item sem o grupo (sistema não adaptado,
+  // ou Simples antes de 2027) conta como alíquota cheia e entra na cobertura,
+  // pra quem lê saber o quanto do mix é dado e o quanto é suposição. "fator"
+  // = média ponderada de (1 − redução) sobre o valor; a redução de IBS e CBS
+  // é ponderada pelo peso de cada um na alíquota de referência (CBS 8,8 +
+  // IBS 17,7), que na prática é igual nos dois.
+  type MixLado = {
+    total: number; comGrupo: number; coberturaPct: number; fator: number;
+    porCodigo: { code: string; nome: string; efeito: string; valor: number }[];
+  };
+  const mixAliquotas = useMemo(() => {
+    const lado = () => ({ total: 0, comGrupo: 0, somaFator: 0, codigos: new Map<string, { nome: string; efeito: string; valor: number }>() });
+    const acum = { saidas: lado(), entradas: lado() };
+    if (!mainCnpj) {
+      const vazio: MixLado = { total: 0, comGrupo: 0, coberturaPct: 0, fator: 1, porCodigo: [] };
+      return { saidas: vazio, entradas: vazio };
+    }
+    const PESO_IBS = 17.7 / 26.5;
+    xmlList.forEach(xml => {
+      if (xml.tipo !== 'nfe' || !xml.rawXml || !xml.protocolo) return;
+      if (xml.chave && chavesCanceladas.has(xml.chave)) return;
+      if (filterMes !== 'Todos' && getMonthYear(xml.data) !== filterMes) return;
+      let a: ReturnType<typeof lado> | null = null;
+      if (xml.emitCnpj === mainCnpj && xml.tpNF !== '0') a = acum.saidas;
+      else if (xml.destCnpj === mainCnpj && xml.emitCnpj && xml.emitCnpj !== mainCnpj) a = acum.entradas;
+      if (!a) return;
+      const ex = getNotaExtract(xml);
+      if (!ex) return;
+      ex.dets.forEach(det => {
+        const v = det.vProd;
+        if (!(v > 0)) return;
+        a!.total += v;
+        if (!det.temIbsCbs) {
+          a!.somaFator += v;
+          const sem = a!.codigos.get('sem-grupo') || { nome: 'Item sem o grupo IBS/CBS (assumido em alíquota cheia)', efeito: 'Integral (suposição)', valor: 0 };
+          sem.valor += v; a!.codigos.set('sem-grupo', sem);
+          return;
+        }
+        a!.comGrupo += v;
+        const ent = CCLASSTRIB_TABELA[det.cClassTrib];
+        const cst = det.ibsCst || '';
+        let f = 1;
+        let efeito = 'Integral';
+        if (cst.startsWith('4')) { f = 0; efeito = 'Fora de incidência / isento'; }
+        else if (ent) {
+          const red = ent.redIBS * PESO_IBS + ent.redCBS * (1 - PESO_IBS);
+          f = 1 - red / 100;
+          efeito = f <= 0.0001 ? 'Alíquota zero' : f < 0.9999 ? `Reduzida (${(red).toFixed(0)}% de redução)` : 'Integral';
+        }
+        a!.somaFator += v * f;
+        const chave = det.cClassTrib || '(sem cClassTrib)';
+        const c = a!.codigos.get(chave) || { nome: ent ? ent.nome : '(código fora da tabela oficial)', efeito, valor: 0 };
+        c.valor += v; a!.codigos.set(chave, c);
+      });
+    });
+    const fecha = (a: ReturnType<typeof lado>): MixLado => ({
+      total: a.total, comGrupo: a.comGrupo,
+      coberturaPct: a.total > 0 ? (a.comGrupo / a.total) * 100 : 0,
+      fator: a.total > 0 ? a.somaFator / a.total : 1,
+      porCodigo: Array.from(a.codigos.entries()).map(([code, c]) => ({ code, ...c })).sort((x, y) => y.valor - x.valor),
+    });
+    return { saidas: fecha(acum.saidas), entradas: fecha(acum.entradas) };
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
+
   // Exporta o ranking respeitando o filtro de origem selecionado na tela (se
   // estiver em "Todos", exporta todos) — a tela só desenha os 20 primeiros,
   // isso aqui exporta a lista inteira, útil quando o catálogo é grande.
@@ -4554,8 +4621,40 @@ ${htmlNomeDuplicado}
   // cliente num só documento: quem compra dele, o que ele vende, quando vende
   // mais, e os alertas de conformidade — tudo com tópicos que minimizam/
   // maximizam, pra não afogar quem só precisa de uma visão geral primeiro.
-  const exportarRelatorioAlertasHtml = () => {
-    type Area = 'perfil' | 'fornecedores' | 'ranking' | 'sazonalidade' | 'reforma' | 'ibscbs' | 'tef';
+  const exportarRelatorioAlertasHtml = async () => {
+    if (exportProgress) return; // já há uma exportação em andamento (esta ou outra)
+    // Camada 2 da verificação de regime (a camada 1 é o CRT da nota): antes de
+    // montar o relatório, consulta a Receita Federal (BrasilAPI) dos maiores
+    // fornecedores e clientes que ainda não foram consultados nesta sessão —
+    // uma de cada vez, com timeout e teto de tempo, e o que falhar vira "não
+    // consultada" no relatório (nunca trava nem derruba a exportação).
+    const alvosConsulta = Array.from(new Set([
+      ...perfilFornecedores.fornecedores.slice(0, 30).map(f => f.cnpj),
+      ...perfilClientes.clientes.slice(0, 30).map(c => c.cnpj),
+    ])).filter(c => !!c && c !== mainCnpj);
+    const cacheRegime: Record<string, PerfilClienteReceitaDados> = {};
+    (Object.entries(consultaClientesCnpj) as [string, { status: string; dados?: PerfilClienteReceitaDados }][]).forEach(([c, v]) => { if (v.status === 'ok' && v.dados) cacheRegime[c] = v.dados; });
+    const formatCnpj = (c: string) =>
+      c.replace(/^([0-9A-Za-z]{2})([0-9A-Za-z]{3})([0-9A-Za-z]{3})([0-9A-Za-z]{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+    const faltamConsulta = alvosConsulta.filter(c => !cacheRegime[c]);
+    if (faltamConsulta.length > 0) {
+      const inicioConsulta = Date.now();
+      let feitos = 0;
+      for (const cnpj of faltamConsulta) {
+        if (Date.now() - inicioConsulta > 90000) break;
+        setExportProgress({ atual: feitos, total: faltamConsulta.length, etapa: 'Consultando a Receita Federal (BrasilAPI)', titulo: 'Perfil do Cliente' });
+        try { cacheRegime[cnpj] = await buscarDadosCnpj(cnpj, 8000); } catch { /* fica "não consultada" */ }
+        feitos++;
+        await new Promise(r => setTimeout(r, 300));
+      }
+      setConsultaClientesCnpj(prev => {
+        const novo = { ...prev };
+        faltamConsulta.forEach(c => { if (cacheRegime[c]) novo[c] = { status: 'ok', dados: cacheRegime[c] }; });
+        return novo;
+      });
+      setExportProgress(null);
+    }
+    type Area = 'perfil' | 'fornecedores' | 'ranking' | 'sazonalidade' | 'reforma';
     type Topico = {
       id: string; area: Area; titulo: string;
       // 'info': conteúdo de perfil/retrato, não é um "problema" nem um
@@ -4602,127 +4701,6 @@ ${htmlNomeDuplicado}
       });
     }
 
-    // ─── ÁREA: REFORMA TRIBUTÁRIA (referência de regimes + crédito + simulação) ──
-    // Importante pra postura consultiva: isto é SÓ a parte tributária (receita,
-    // alíquota atual, alíquota da Reforma, cenários de repasse de preço) — não
-    // chega a "lucro líquido" porque custo e despesa geral não vêm do XML
-    // fiscal, só da contabilidade do cliente. O rótulo "margem disponível"
-    // (preço − tributo) é deliberado: é o que sobra pra cobrir custo+despesa+
-    // lucro, e muda com o repasse de preço mesmo sem saber custo/despesa.
-    //
-    // Limite estrutural que atravessa os 3 tópicos de crédito abaixo: o <CRT>
-    // da nota só distingue Simples Nacional (1/2) de Regime Normal (3) de MEI
-    // (4) — NÃO diz se um Simples aderiu ao regime de apuração híbrido/regular
-    // (LC 214/2025, opção que gera crédito cheio) nem se um "Regime Normal" é
-    // Lucro Presumido ou Lucro Real (distinção do IRPJ/CSLL, o CRT nunca
-    // diferencia os dois). Por isso o CRT entra só como PALPITE inicial — os
-    // seletores abaixo deixam o contador corrigir pra cada caso que conhece de
-    // verdade, em vez do relatório afirmar algo que o XML sozinho não confirma.
-    const REGIME_OPCOES: { key: string; label: string; credito: boolean }[] = [
-      { key: 'simples_puro', label: 'Simples Nacional (puro)', credito: false },
-      { key: 'simples_hibrido', label: 'Simples Nacional (híbrido/regular)', credito: true },
-      { key: 'mei', label: 'MEI', credito: false },
-      { key: 'presumido', label: 'Lucro Presumido', credito: true },
-      { key: 'real', label: 'Lucro Real', credito: true },
-      { key: 'desconhecido', label: 'Não identificado (assumido sem crédito)', credito: false },
-    ];
-    const regimeKeyPorCrt = (crt: string): string => crt === '1' || crt === '2' ? 'simples_puro' : crt === '4' ? 'mei' : crt === '3' ? 'presumido' : 'desconhecido';
-    const opcoesSelectHtml = (defaultKey: string) => REGIME_OPCOES.map(o => `<option value="${o.key}"${o.key === defaultKey ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
-
-    if (mainCnpj && (perfilFornecedores.fornecedores.length > 0 || faturamentoTotal > 0)) {
-      topicos.push({
-        id: 'reforma-regimes-referencia', area: 'reforma', titulo: 'Regimes Tributários e Geração de Crédito de IBS/CBS',
-        nivel: 'info',
-        resumo: 'Referência rápida: o que cada regime gera (ou não) de crédito amplo de IBS/CBS pra quem compra dele',
-        corpo: `O &lt;CRT&gt; de qualquer nota só tem 4 valores possíveis (1/2 = Simples Nacional, 3 = Regime Normal, 4 = MEI) — nunca diz se um Simples Nacional aderiu ao regime híbrido/regular (opção facultativa que a Reforma permite pra gerar crédito cheio, LC 214/2025) nem se um "Regime Normal" é Lucro Presumido ou Lucro Real (distinção do IRPJ/CSLL, não do CRT). Os dois tópicos de crédito logo abaixo (fornecedores e o próprio regime da empresa como vendedora) trazem um seletor editável pra cada caso — o CRT entra só como palpite inicial.`,
-        colunas: ['Regime', 'Gera crédito amplo a quem compra dele?', 'Aproveita crédito das próprias compras?', 'Observação'],
-        linhas: [
-          ['Simples Nacional (puro)', 'Não (regra geral)', 'Não', 'Recolhe tudo pelo DAS unificado — fica fora da não cumulatividade do IBS/CBS.'],
-          ['Simples Nacional (regime híbrido/regular)', 'Sim', 'Sim', 'Opção facultativa da LC 214/2025 — não aparece em nenhum campo do XML; confirme direto com a empresa.'],
-          ['MEI', 'Não', 'Não', 'Regime do SIMEI, fora da sistemática do IBS/CBS.'],
-          ['Lucro Presumido', 'Sim', 'Sim', 'Regra geral de não cumulatividade — no XML, mesmo CRT=3 do Lucro Real.'],
-          ['Lucro Real', 'Sim', 'Sim', 'Idem — CRT=3 não diferencia de Presumido; quem diferencia é o regime de apuração do IRPJ/CSLL, não a nota fiscal.'],
-        ],
-      });
-    }
-
-    if (perfilFornecedores.fornecedores.length > 0) {
-      const top = perfilFornecedores.fornecedores.slice(0, 30);
-      const geraCreditoAmploPorCrt = (crt: string) => crt === '3'; // só pra tabela estática/Excel abaixo (palpite puro por CRT)
-      const totalCompras = perfilFornecedores.totalConsiderado;
-      const totalComCreditoPalpite = perfilFornecedores.fornecedores.filter(f => geraCreditoAmploPorCrt(f.crtDeclarado)).reduce((s, f) => s + f.totalComprado, 0);
-      const pctSemCreditoPalpite = totalCompras > 0 ? ((totalCompras - totalComCreditoPalpite) / totalCompras) * 100 : 0;
-      topicos.push({
-        id: 'reforma-credito-fornecedores', area: 'reforma', titulo: 'Crédito de IBS/CBS por Fornecedor — Simulação por Regime',
-        nivel: pctSemCreditoPalpite >= 50 ? 'atencao' : 'info',
-        resumo: `Palpite inicial por CRT: ${formatarPct(pctSemCreditoPalpite)}% das compras vêm de fornecedor que, pela regra geral, não gera crédito amplo — ajuste por fornecedor na tabela abaixo se souber o regime real`,
-        corpo: `Vale usar essa lista como ponto de partida pra negociar regime com os maiores fornecedores sem crédito — é um dos "6 pilares" da Reforma (geração de créditos) que mais depende de ação do próprio cliente, não só do contador. Cada linha abaixo já vem com um palpite baseado no CRT da nota mais recente; troque o "regime real" sempre que souber que é diferente (ex.: fornecedor Simples que aderiu ao híbrido, ou Regime Normal que você sabe ser Lucro Real) — os totais recalculam na hora.
-        <table class="simulador-tabela">
-          <thead><tr><th>Fornecedor</th><th>CRT declarado</th><th>Total Comprado (R$)</th><th>Regime real (ajuste se souber)</th></tr></thead>
-          <tbody>
-            ${top.map(f => `<tr>
-              <td>${esc(f.nome)}</td>
-              <td>${esc(f.crtDeclaradoLabel)}</td>
-              <td class="num">${formatarMoeda(f.totalComprado)}</td>
-              <td><select class="sel-regime-fornecedor" data-total="${f.totalComprado}">${opcoesSelectHtml(regimeKeyPorCrt(f.crtDeclarado))}</select></td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
-        <div class="simulador-nota">Entre ${top.length === perfilFornecedores.fornecedores.length ? 'os fornecedor(es) acima' : `os ${top.length} maiores de ${perfilFornecedores.fornecedores.length} fornecedor(es)`}: total com crédito amplo <strong id="fornCreditoCom">—</strong> · sem crédito amplo <strong id="fornCreditoSem">—</strong> (<span id="fornCreditoSemPct">—</span>%).</div>`,
-        colunas: ['Fornecedor', 'CNPJ', 'Regime Declarado (CRT)', 'Total Comprado (R$)', 'Gera crédito amplo — palpite por CRT'],
-        linhas: perfilFornecedores.fornecedores.slice(0, 30).map(f => [f.nome, f.cnpj, f.crtDeclaradoLabel, f.totalComprado, geraCreditoAmploPorCrt(f.crtDeclarado) ? 'Sim' : 'Não']),
-      });
-    }
-
-    if (mainCnpj && faturamentoTotal > 0 && regimeTributario.label) {
-      const nClientes = perfilClientes.clientes.length;
-      topicos.push({
-        id: 'reforma-regime-como-vendedor', area: 'reforma', titulo: 'Seu Regime Como Vendedor — Efeito no Crédito dos Clientes',
-        nivel: 'info',
-        resumo: 'O mesmo raciocínio do crédito de fornecedores, só que do lado de quem vende — ajuste o regime real abaixo pra ver o efeito nos clientes',
-        corpo: `Regime declarado nas próprias notas: <strong>${esc(regimeTributario.label)}</strong> — mas, pela mesma limitação explicada acima, isso não confirma sozinho se a empresa aderiu ao regime híbrido/regular (se for Simples) nem se é Presumido ou Real (se for Regime Normal). Ajuste abaixo pro regime que você sabe que é o real:
-        <div class="simulador-grid" style="grid-template-columns:1fr;max-width:420px;margin:14px 0;">
-          <label>Regime real da empresa (ajuste se souber)
-            <select id="selRegimeVendedor" data-n-clientes="${nClientes}">${opcoesSelectHtml(regimeKeyPorCrt(regimeTributario.crt))}</select>
-          </label>
-        </div>
-        <div class="simulador-nota" id="vendedorNarrativa"></div>`,
-      });
-    }
-
-    if (mainCnpj && faturamentoTotal > 0) {
-      const numMeses = filterMes === 'Todos' ? Math.max(mesesDisponiveis.length, 1) : 1;
-      const receitaMensal = faturamentoTotal / numMeses;
-      const numParaInputBr = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const totalIbsCbsTeste = auditoriaClassTrib.totalIBS + auditoriaClassTrib.totalCBS;
-      const baseComGrupo = auditoriaClassTrib.codigosUsados.reduce((s, c) => s + c.valor, 0);
-      const pctTesteReal = baseComGrupo > 0 ? (totalIbsCbsTeste / baseComGrupo) * 100 : 0;
-      topicos.push({
-        id: 'reforma-simulador', area: 'reforma', titulo: 'Simulador: Impacto da Reforma Tributária no Preço',
-        nivel: 'info',
-        resumo: `Receita de ${formatarMoeda(receitaMensal)}/mês — simule abaixo quanto a empresa precisa reprecificar e o que sobra em cada cenário de repasse`,
-        corpo: `Receita do período já preenchida (${formatarMoeda(receitaMensal)}/mês${numMeses > 1 ? `, média de ${numMeses} meses carregados` : ''}). Regime declarado nas próprias notas: <strong>${esc(regimeTributario.label || 'não identificado')}</strong> — preencha a alíquota atual com base nisso (apuração/DAS se Simples; alíquota efetiva de Presumido ou Real se Regime Normal — o CRT da nota não diferencia Presumido de Real, só o contador sabe qual dos dois é); este relatório não calcula alíquota efetiva automaticamente, pra não fingir uma precisão que o XML fiscal sozinho não sustenta. A alíquota de Reforma vem pré-preenchida com uma estimativa de referência pro IVA dual (CBS+IBS) totalmente implantado — ajuste livremente; a alíquota final depende de regulamentação ainda em curso.${pctTesteReal > 0 ? ` <em>Só pra contexto: nas notas deste período o próprio sistema do cliente já destacou ${formatarPct(pctTesteReal)}% de IBS+CBS — isso é a alíquota do período de TESTE (2026, 0,1%+0,9%, compensável), não a alíquota final; não use esse número na simulação.</em>` : ''}
-        <div class="simulador">
-          <div class="simulador-grid">
-            <label>Receita bruta (R$/mês)
-              <input type="text" id="simReceita" value="${numParaInputBr(receitaMensal)}" inputmode="decimal">
-            </label>
-            <label>Alíquota atual sobre a receita (%)<span class="ajuda">regime detectado: ${esc(regimeTributario.label || 'não identificado')}</span>
-              <input type="text" id="simAliqAtual" value="0,00" inputmode="decimal">
-            </label>
-            <label>Alíquota de referência Reforma — CBS+IBS (%)<span class="ajuda">estimativa, sujeita a regulamentação</span>
-              <input type="text" id="simAliqReforma" value="26,50" inputmode="decimal">
-            </label>
-          </div>
-          <table class="simulador-tabela">
-            <thead><tr><th>Cenário de repasse ao preço</th><th>Receita necessária</th><th>Tributo (Reforma)</th><th>Margem disponível</th><th>Diferença vs. hoje</th></tr></thead>
-            <tbody id="simCorpo"></tbody>
-          </table>
-          <div class="simulador-nota">"Margem disponível" = receita menos o tributo sobre consumo — é o que sobra pra cobrir custo, despesa geral e lucro; NÃO é o lucro líquido (que também depende de custo e despesa, informação que não vem do XML fiscal). "Receita necessária" é o preço de venda que, em cada cenário, absorve aquele % do aumento de carga tributária. Todos os valores recalculam ao digitar.</div>
-        </div>`,
-      });
-    }
-
     // ─── ÁREA: RANKING DE PRODUTOS ─────────────────────────────────────────
     if (rankingProdutos.produtos.length > 0) {
       const top = rankingProdutos.produtos.slice(0, 30);
@@ -4758,396 +4736,734 @@ ${htmlNomeDuplicado}
       });
     }
 
-    // ─── ÁREA: IBS/CBS ───────────────────────────────────────────────────
-    if (auditoriaIbsCbs.totalNotas > 0) {
-      const nivelCobertura: Topico['nivel'] = auditoriaIbsCbs.pctComGrupo === 0 ? 'critico' : auditoriaIbsCbs.pctComGrupo === 100 ? 'ok' : 'atencao';
-      topicos.push({
-        id: 'ibscbs-cobertura', area: 'ibscbs', titulo: 'Cobertura do grupo IBS/CBS',
-        nivel: nivelCobertura,
-        resumo: `${auditoriaIbsCbs.notasComGrupo} de ${auditoriaIbsCbs.totalNotas} nota(s) (${formatarPct(auditoriaIbsCbs.pctComGrupo)}%) trazem o grupo IBS/CBS preenchido`,
-        corpo: nivelCobertura === 'critico'
-          ? 'Nenhuma nota desse período traz o grupo &lt;IBSCBS&gt; preenchido. 2026 é o período de teste da Reforma Tributária (0,1% IBS + 0,9% CBS, compensável) — o sistema de emissão do cliente ainda não parece adaptado. Vale confirmar com o suporte do sistema antes disso virar obrigatório de verdade.'
-          : nivelCobertura === 'ok'
-          ? '100% das notas desse período já trazem o grupo IBS/CBS — sistema do cliente parece adaptado à Reforma Tributária.'
-          : 'Só parte das notas traz o grupo IBS/CBS — pode ser uma atualização de sistema no meio do período (confira as datas na amostra abaixo) ou inconsistência a esclarecer com o suporte do sistema.',
-        colunas: auditoriaIbsCbs.amostraSemGrupo.length > 0 ? ['Série', 'Número', 'Data'] : undefined,
-        linhas: auditoriaIbsCbs.amostraSemGrupo.map(n => [n.serie, n.numero, dataFmt(n.data)]),
-      });
-
-      if (auditoriaClassTrib.totalItens > 0) {
-        const temErro = auditoriaClassTrib.problemas.some(p => p.nivel === 'erro');
-        const temAlerta = auditoriaClassTrib.problemas.some(p => p.nivel === 'alerta');
-        topicos.push({
-          id: 'ibscbs-classtrib', area: 'ibscbs', titulo: 'Validação cClassTrib × Tabela Oficial',
-          nivel: temErro ? 'critico' : temAlerta ? 'atencao' : 'ok',
-          resumo: auditoriaClassTrib.problemas.length === 0
-            ? `${auditoriaClassTrib.totalItens} item(ns) verificados, nenhuma inconsistência estrutural`
-            : `${auditoriaClassTrib.problemas.length} inconsistência(s) em ${auditoriaClassTrib.totalItens} item(ns) verificados`,
-          corpo: `Checagem estrutural (código × código) contra a tabela oficial ${esc(CCLASSTRIB_VERSAO)}: formato, prefixo CST↔cClassTrib, existência, vigência na data de emissão, permissão pro modelo do documento e redução de alíquota compatível. Não avalia se o código escolhido é o adequado pro produto — isso é decisão do contador.`,
-          colunas: auditoriaClassTrib.problemas.length > 0 ? ['Gravidade', 'Código', 'Motivo', 'Itens', 'Notas', 'Exemplo'] : undefined,
-          linhas: auditoriaClassTrib.problemas.map(p => [p.nivel === 'erro' ? 'Erro' : 'Alerta', p.code, p.motivo, p.itens, p.notas.size, p.exemplo]),
-        });
-      }
-
-      if (auditoriaClassTrib.codigosUsados.length > 0) {
-        topicos.push({
-          id: 'ibscbs-codigos', area: 'ibscbs', titulo: 'Códigos cClassTrib em uso',
-          nivel: auditoriaClassTrib.cclassTribUnicoSuspeito ? 'atencao' : 'ok',
-          resumo: auditoriaClassTrib.cclassTribUnicoSuspeito
-            ? `Só ${esc(auditoriaClassTrib.codigosUsados[0]?.code || '')} foi usado no período inteiro, apesar de ${auditoriaClassTrib.ncmsDistintos} NCMs distintos no catálogo`
-            : `${auditoriaClassTrib.codigosUsados.length} código(s) distinto(s) em uso`,
-          corpo: auditoriaClassTrib.cclassTribUnicoSuspeito
-            ? 'Vale confirmar se o sistema do cliente classifica produto a produto ou aplica um valor fixo/padrão pra tudo. Cada código pode estar estruturalmente correto e ainda assim ser resultado de um cadastro que nunca foi de fato analisado.'
-            : 'Distribuição de faturamento e valores de IBS/CBS destacados por código cClassTrib, conforme o próprio sistema do cliente calculou (nenhum cálculo é feito por este relatório).',
-          colunas: ['Código', 'Nome', 'CST', 'Na tabela oficial', 'Itens', 'Notas', 'Valor (R$)', 'IBS destacado (R$)', 'CBS destacado (R$)'],
-          linhas: auditoriaClassTrib.codigosUsados.map(c => [c.code, c.nome, c.cst, c.naTabela ? 'Sim' : 'Não', c.itens, c.notas.size, c.valor, c.vIBS, c.vCBS]),
-        });
-      }
-    }
-
-    // ─── ÁREA: TEF ───────────────────────────────────────────────────────
-    const temDadosTef = auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0
-      || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0;
-    if (temDadosTef) {
-      const pctIntegrado = auditoriaPagamento.totalCartao > 0 ? (auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100 : 0;
-      const riscoObrigatoriedade = !regimeTributario.isSimples && !regimeTributario.isMei && regimeTributario.label !== null && auditoriaPagamento.totalNaoIntegrado > 0;
-      const problemasOutros = auditoriaPagamento.problemas.filter(p => !p.motivo.startsWith('Falso TEF'));
-
-      topicos.push({
-        id: 'tef-resumo', area: 'tef', titulo: 'Resumo de Integração ao TEF',
-        nivel: riscoObrigatoriedade || auditoriaPagamento.totalFalsoTef > 0 ? 'critico' : auditoriaPagamento.totalNaoIntegrado > 0 ? 'atencao' : 'ok',
-        resumo: `${formatarPct(pctIntegrado)}% integrado — ${auditoriaPagamento.totalIntegrado} integrado(s), ${auditoriaPagamento.totalNaoIntegrado} POS manual, ${auditoriaPagamento.totalFalsoTef} falso TEF, de ${auditoriaPagamento.totalCartao} venda(s) em cartão sujeita(s) a TEF`,
-        corpo: `${riscoObrigatoriedade ? 'Regime tributário não é Simples/MEI e há venda em cartão sem integração TEF — risco de obrigatoriedade não cumprida (verificar legislação estadual/municipal aplicável). ' : ''}${auditoriaPagamento.totalCartaoNaoAplicavel} venda(s) em cartão ficaram fora do escopo de TEF (não presencial ou interestadual — legítimo, não é problema). ${auditoriaPagamento.notasComPagamentoDividido} nota(s) têm pagamento dividido em mais de uma forma. ${auditoriaPagamento.cartaoIndPagSuspeito} pagamento(s) em cartão vieram marcados "a prazo" (indPag=1) — sempre suspeito, pois quem parcela no cartão é o cliente com a operadora, o lojista recebe à vista.`,
-        colunas: ['Indicador', 'Valor'],
-        linhas: [
-          ['Vendas em cartão sujeitas a TEF', auditoriaPagamento.totalCartao],
-          ['Integrado de verdade', auditoriaPagamento.totalIntegrado],
-          ['POS manual (não integrado)', auditoriaPagamento.totalNaoIntegrado],
-          ['Falso TEF', auditoriaPagamento.totalFalsoTef],
-          ['Fora do escopo de TEF', auditoriaPagamento.totalCartaoNaoAplicavel],
-          ['Notas com pagamento dividido', auditoriaPagamento.notasComPagamentoDividido],
-          ['Cartão com indPag=1 (a prazo, suspeito)', auditoriaPagamento.cartaoIndPagSuspeito],
-        ],
-      });
-
-      if (auditoriaPagamento.totalFalsoTef > 0) {
-        const linhasFalso = auditoriaPagamento.problemas.filter(p => p.motivo.startsWith('Falso TEF'));
-        topicos.push({
-          id: 'tef-falso', area: 'tef', titulo: 'Falso TEF',
-          nivel: 'critico',
-          resumo: `${auditoriaPagamento.totalFalsoTef} venda(s) declaram integração (tpIntegra=1) sem código de autorização`,
-          corpo: 'Alerta grave: uma integração de TEF de verdade sempre traz o código de autorização (cAut) devolvido pela adquirente. Uma venda que afirma tpIntegra=1 sem esse código é uma contradição que os próprios dados da nota revelam — indica PDV mal configurado ou uma integração que a nota declara mas não ocorreu de fato. Mais grave que POS manual comum (tpIntegra=2), que ao menos é honesto sobre não estar integrado.',
-          colunas: ['Série', 'Número', 'Data', 'Forma de Pagamento', 'CNPJ Adquirente', 'Bandeira'],
-          linhas: linhasFalso.map(p => [p.xml.serie, p.xml.numero, dataFmt(p.xml.data), p.tPagNome, p.cardCnpj || '—', p.cardTBand || '—']),
-        });
-      }
-
-      if (problemasOutros.length > 0) {
-        topicos.push({
-          id: 'tef-outros-problemas', area: 'tef', titulo: 'Outros Problemas de Pagamento',
-          nivel: 'atencao',
-          resumo: `${problemasOutros.length} ocorrência(s) — código de autorização genérico, CNPJ da adquirente igual ao emitente, "Sem Pagamento" indevido, troco sem dinheiro correspondente, ou bloco de cartão em forma não-cartão`,
-          corpo: 'Cada linha é uma inconsistência técnica encontrada na própria estrutura do XML — não interpretação, só o que os dados contradizem.',
-          colunas: ['Série', 'Número', 'Data', 'Forma de Pagamento', 'Motivo'],
-          linhas: problemasOutros.map(p => [p.xml.serie, p.xml.numero, dataFmt(p.xml.data), p.tPagNome, p.motivo]),
-        });
-      }
-
-      if (auditoriaPagamento.notasNaoIntegradas.length > 0) {
-        topicos.push({
-          id: 'tef-nao-integradas', area: 'tef', titulo: 'Notas com POS Manual (Não Integrado)',
-          nivel: 'atencao',
-          resumo: `${auditoriaPagamento.notasNaoIntegradas.length} nota(s) com pagamento em cartão passado manualmente, sem integração TEF`,
-          corpo: 'tpIntegra=2 (POS/Cartão de Terceiro não integrado) — o pagamento em cartão foi feito num equipamento separado do PDV, sem comunicação automática. Não é necessariamente irregular, mas é o oposto do fluxo que a legislação de TEF busca garantir; vale confirmar o motivo com o cliente.',
-          colunas: ['Série', 'Número', 'Data', 'Forma de Pagamento'],
-          linhas: auditoriaPagamento.notasNaoIntegradas.map(n => [n.xml.serie, n.xml.numero, dataFmt(n.xml.data), n.tPagNome]),
-        });
-      }
-
-      if (auditoriaPagamento.notasForaDoEscopo.length > 0) {
-        topicos.push({
-          id: 'tef-fora-escopo', area: 'tef', titulo: 'Notas Fora do Escopo de TEF',
-          nivel: 'ok',
-          resumo: `${auditoriaPagamento.notasForaDoEscopo.length} nota(s) com cartão fora do escopo (não presencial ou interestadual) — legítimo, listado só pra transparência`,
-          corpo: 'Venda não presencial (e-commerce/entrega) ou interestadual não é obrigada a TEF local. Essas notas não contam como "POS manual" nem entram na base de cálculo do % de integração.',
-          colunas: ['Série', 'Número', 'Data', 'Motivo'],
-          linhas: auditoriaPagamento.notasForaDoEscopo.map(n => [n.xml.serie, n.xml.numero, dataFmt(n.xml.data), n.motivo]),
-        });
-      }
-
-      if (auditoriaPagamento.breakdownPorTipoPagamento.length > 0) {
-        topicos.push({
-          id: 'tef-breakdown', area: 'tef', titulo: 'Faturamento por Forma de Pagamento',
-          nivel: 'ok',
-          resumo: `${auditoriaPagamento.breakdownPorTipoPagamento.length} forma(s) de pagamento distintas usadas no período`,
-          corpo: 'Quantidade e valor (líquido de troco) por forma de pagamento declarada nas notas — visão geral mesmo sem nenhuma venda em cartão a auditar.',
-          colunas: ['Forma de Pagamento', 'Quantidade', 'Valor (R$)'],
-          linhas: auditoriaPagamento.breakdownPorTipoPagamento.map(b => [b.tPagNome, b.qtd, b.valor]),
-        });
-      }
-    }
-
-    if (topicos.length === 0) return;
-
-    const nivelInfo: Record<Topico['nivel'], { label: string; cor: string; corFundo: string; corBorda: string; icone: string }> = {
-      critico: { label: 'Crítico', cor: '#7A1F1A', corFundo: '#FBEAE9', corBorda: '#B3261E', icone: '⛔' },
-      atencao: { label: 'Atenção', cor: '#7A5210', corFundo: '#FBF1DE', corBorda: '#B7791F', icone: '⚠' },
-      ok: { label: 'Regular', cor: '#1E5A3D', corFundo: '#E8F5EE', corBorda: '#2F6F4E', icone: '✓' },
-      info: { label: 'Perfil', cor: '#1E4A6B', corFundo: '#E8F1F8', corBorda: '#2F6F9E', icone: 'ℹ' },
-    };
-
-    const areaLabel: Record<Area, string> = {
-      perfil: 'Perfil de Clientes',
-      fornecedores: 'Perfil de Fornecedores',
-      ranking: 'Produtos',
-      sazonalidade: 'Sazonalidade',
-      reforma: 'Reforma Tributária — Simulação e Créditos',
-      ibscbs: 'IBS/CBS — Conformidade Estrutural',
-      tef: 'TEF — Auditoria de Pagamento',
-    };
-    const ordemAreas: Area[] = ['perfil', 'fornecedores', 'ranking', 'sazonalidade', 'reforma', 'ibscbs', 'tef'];
-    const topicosPorArea = Object.fromEntries(ordemAreas.map(a => [a, topicos.filter(t => t.area === a)])) as Record<Area, Topico[]>;
+    const temReforma = !!mainCnpj && (faturamentoTotal > 0 || perfilFornecedores.fornecedores.length > 0);
+    if (topicos.length === 0 && !temReforma) return;
 
     const dadosParaExcel: Record<string, { colunas: string[]; linhas: (string | number)[][] }> = {};
     topicos.forEach(t => { if (t.colunas && t.linhas) dadosParaExcel[t.id] = { colunas: t.colunas, linhas: t.linhas }; });
 
-    const linhaSumario = (t: Topico) => {
-      const ni = nivelInfo[t.nivel];
-      return `
-        <a href="#${t.id}" class="sumario-linha" style="border-left-color:${ni.corBorda}">
-          <span class="sumario-badge" style="color:${ni.cor};background:${ni.corFundo}">${ni.icone} ${ni.label}</span>
-          <span class="sumario-titulo">${esc(t.titulo)}</span>
-          <span class="sumario-resumo">${esc(t.resumo)}</span>
-        </a>`;
-    };
+    // ─── REFORMA TRIBUTÁRIA: regime + crédito dos dois lados + simulação ─────
+    // Importante pra postura consultiva: isto é SÓ a parte tributária (receita,
+    // alíquota atual, alíquota da Reforma, crédito de compras, cenários de
+    // repasse de preço) — não chega a "lucro líquido" porque custo e despesa
+    // geral não vêm do XML fiscal, só da contabilidade do cliente.
+    //
+    // Limites estruturais que atravessam tudo abaixo:
+    // (1) o <CRT> da nota só distingue Simples (1/2), Regime Normal (3) e MEI
+    //     (4) — não diz se um Simples aderiu ao regime regular/híbrido (LC
+    //     214/2025, art. 41) nem se "Regime Normal" é Presumido ou Real;
+    // (2) o regime do DESTINATÁRIO (cliente) não vem em nenhum campo da nota;
+    // (3) por isso o regime vem em DUAS CAMADAS — CRT da nota + consulta à
+    //     Receita (BrasilAPI) — e ainda assim é só palpite editável; a Receita
+    //     vale mais que o CRT quando divergem (cadastro atual × campo
+    //     preenchido pelo emissor na data da nota);
+    // (4) crédito exige as duas pontas: o vendedor precisa gerar E o comprador
+    //     precisa poder usar (regime regular). Fornecedor Simples puro NÃO gera
+    //     crédito zero: o comprador aproveita só a parcela de IBS/CBS contida
+    //     no DAS (LC 214/2025, arts. 155 e 156) — parâmetro "parcial".
+    const REGIME_OPCOES: { key: string; label: string; gera: boolean; usa: boolean; parcial: boolean }[] = [
+      { key: 'simples_puro', label: 'Simples Nacional (puro)', gera: false, usa: false, parcial: true },
+      { key: 'simples_hibrido', label: 'Simples Nacional (híbrido/regular)', gera: true, usa: true, parcial: false },
+      { key: 'mei', label: 'MEI', gera: false, usa: false, parcial: false },
+      { key: 'presumido', label: 'Lucro Presumido', gera: true, usa: true, parcial: false },
+      { key: 'real', label: 'Lucro Real', gera: true, usa: true, parcial: false },
+      { key: 'desconhecido', label: 'Não identificado', gera: false, usa: false, parcial: false },
+    ];
+    const regimeKeyPorCrt = (crt: string): string => crt === '1' || crt === '2' ? 'simples_puro' : crt === '4' ? 'mei' : crt === '3' ? 'presumido' : 'desconhecido';
+    const labelRegime = (key: string) => REGIME_OPCOES.find(o => o.key === key)?.label || key;
+    const opcoesSelectHtml = (defaultKey: string) => REGIME_OPCOES.map(o => `<option value="${o.key}"${o.key === defaultKey ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+    const numMesesRef = filterMes === 'Todos' ? Math.max(mesesDisponiveis.length, 1) : 1;
+    const nl = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-    const tabelaHtml = (t: Topico) => {
+    const sugestaoRegime = (cnpj: string, crt: string): { key: string; crtTxt: string; receitaTxt: string; divergencia: string } => {
+      const keyCrt = regimeKeyPorCrt(crt);
+      const crtTxt = crt ? (crtLabel[crt] || `CRT ${crt}`) : 'sem CRT';
+      const d = cacheRegime[cnpj];
+      if (d) {
+        let keyApi: string | null = null;
+        let txt = '';
+        if (d.opcaoMei === true) { keyApi = 'mei'; txt = 'MEI'; }
+        else if (d.opcaoSimples === true) { keyApi = 'simples_puro'; txt = 'Optante do Simples'; }
+        else if (d.opcaoSimples === false) { keyApi = 'presumido'; txt = 'Não optante do Simples'; }
+        else if (d.opcaoSimples === null) {
+          // Conferido na BrasilAPI com Nestlé e PepsiCo (Regime Normal, nunca no Simples):
+          // vêm com null — a Receita só registra opção pelo Simples de quem já optou
+          // alguma vez, então null = sem opção registrada, não "dado desconhecido".
+          // Porte ME/EPP com null fica marcado pra confirmar (pode ser defasagem do cadastro).
+          keyApi = 'presumido';
+          txt = d.porte && d.porte !== 'DEMAIS' ? 'Sem opção pelo Simples (confirmar)' : 'Sem opção pelo Simples';
+        }
+        if (keyApi) {
+          const simplesCrt = keyCrt === 'simples_puro' || keyCrt === 'mei';
+          const simplesApi = keyApi === 'simples_puro' || keyApi === 'mei';
+          const diverge = !!crt && simplesCrt !== simplesApi;
+          return { key: keyApi, crtTxt, receitaTxt: txt, divergencia: diverge ? 'CRT da nota e Receita divergem — vale a Receita (cadastro atual)' : '' };
+        }
+        return { key: keyCrt, crtTxt, receitaTxt: 'sem informação do Simples', divergencia: '' };
+      }
+      return { key: keyCrt, crtTxt, receitaTxt: 'não consultada', divergencia: '' };
+    };
+    const celulaCamadas = (s: { crtTxt: string; receitaTxt: string; divergencia: string }) =>
+      `<div class="cam-l"><span class="cam-crt">CRT: ${esc(s.crtTxt)}</span> · <span class="cam-rf">Receita: ${esc(s.receitaTxt)}</span></div>${s.divergencia ? `<div class="cam-div">⚠ ${esc(s.divergencia)}</div>` : ''}`;
+
+    const topF = perfilFornecedores.fornecedores.slice(0, 30);
+    const topC = perfilClientes.clientes.slice(0, 30);
+    const receitaMensal = faturamentoTotal / numMesesRef;
+    const fatorComprasPct = mixAliquotas.entradas.total > 0 ? mixAliquotas.entradas.fator * 100 : 100;
+    const fatorReceitaPct = mixAliquotas.saidas.total > 0 ? mixAliquotas.saidas.fator * 100 : 100;
+    const consumidorValor = Math.max(faturamentoTotal - perfilClientes.totalConsiderado, 0);
+    const consumidorPct = faturamentoTotal > 0 ? (consumidorValor / faturamentoTotal) * 100 : 0;
+    const totalComprasTop = topF.reduce((s, f) => s + f.totalComprado, 0);
+
+    // tabelas minimalistas (estilo Coopera): sem fundo, hairlines, números à direita
+    const tabelaApoio = (t: { colunas?: string[]; linhas?: (string | number)[][] }, limite = 300) => {
       if (!t.colunas || !t.linhas) return '';
-      const LIMITE = 300;
-      const linhasVisiveis = t.linhas.slice(0, LIMITE);
       const colunas = t.colunas;
+      const ehNum = colunas.map((_, i) => typeof t.linhas![0]?.[i] === 'number');
       const ehMoeda = colunas.map(c => c.includes('R$'));
-      return `
-        <div class="tabela-wrap">
-          <table>
-            <thead><tr>${colunas.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
-            <tbody>${linhasVisiveis.map(l => `<tr>${l.map((v, i) => {
-              const valorExibido = typeof v === 'number' && ehMoeda[i] ? formatarMoeda(v) : v;
-              return `<td class="${typeof v === 'number' ? 'num' : ''}">${esc(valorExibido)}</td>`;
-            }).join('')}</tr>`).join('')}</tbody>
-          </table>
-          ${t.linhas.length > LIMITE ? `<div class="tabela-nota">Mostrando ${LIMITE} de ${t.linhas.length} linha(s) — baixe em Excel pra ver todas.</div>` : ''}
-        </div>`;
+      return `<div class="tw"><table class="t">
+        <thead><tr>${colunas.map((c, i) => `<th class="${ehNum[i] ? 'r' : ''}">${esc(c)}</th>`).join('')}</tr></thead>
+        <tbody>${t.linhas.slice(0, limite).map(l => `<tr>${l.map((v, i) => `<td class="${ehNum[i] ? 'num' : ''}">${esc(typeof v === 'number' && ehMoeda[i] ? formatarMoeda(v) : v)}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>${t.linhas.length > limite ? `<div class="nota-peq">Mostrando ${limite} de ${t.linhas.length} linha(s) — baixe em Excel pra ver todas.</div>` : ''}</div>`;
     };
+    const btnExcel = (id: string, titulo: string) => `<button type="button" class="btn suave" onclick="baixarExcelTopico('${id}','${esc(sanitizarNomeArquivo(titulo))}')">Baixar Excel</button>`;
 
-    const topicoHtml = (t: Topico) => {
-      const ni = nivelInfo[t.nivel];
-      return `
-        <details id="${t.id}" class="topico" style="border-left-color:${ni.corBorda}" ${t.nivel !== 'ok' ? 'open' : ''}>
-          <summary>
-            <span class="topico-badge" style="color:${ni.cor};background:${ni.corFundo}">${ni.icone} ${ni.label}</span>
-            <span class="topico-titulo">${esc(t.titulo)}</span>
-            <span class="topico-resumo">${esc(t.resumo)}</span>
-          </summary>
-          <div class="topico-corpo">
-            <div class="topico-texto">${t.corpo}</div>
-            ${tabelaHtml(t)}
-            ${t.colunas && t.linhas && t.linhas.length > 0 ? `<button class="btn-excel" onclick="baixarExcelTopico('${t.id}','${esc(sanitizarNomeArquivo(t.titulo))}')">⇩ Baixar Excel deste tópico</button>` : ''}
-          </div>
-        </details>`;
-    };
+    const secao = (id: string, titulo: string, meta: string, figRotulo: string, figId: string, figValor: string, corpo: string, aberta: boolean) => ({ id, titulo, html: `
+      <details class="sec" id="${id}"${aberta ? ' open' : ''}>
+        <summary>
+          <span class="mk"></span><span class="idx"></span>
+          <span class="sec-titulo"><span class="sec-t">${esc(titulo)}</span><span class="sec-m">${meta}</span></span>
+          <span class="sec-fig"><span class="sec-fl">${esc(figRotulo)}</span><span class="sec-fv" id="${figId}">${figValor}</span></span>
+        </summary>
+        <div class="sec-corpo">${corpo}</div>
+      </details>` });
+    const subsecao = (titulo: string, contagem: string, corpo: string, aberta = false) => `
+      <details class="sub"${aberta ? ' open' : ''}>
+        <summary><span class="mk2"></span><span class="sub-t">${esc(titulo)}</span><span class="sub-c">${esc(contagem)}</span></summary>
+        <div class="sub-corpo">${corpo}</div>
+      </details>`;
 
-    const areaHtml = (area: Area) => {
-      const lista = topicosPorArea[area];
-      if (lista.length === 0) return '';
-      return `
-        <section class="area">
-          <h2>${areaLabel[area]}</h2>
-          ${lista.map(topicoHtml).join('')}
-        </section>`;
-    };
+    const secoes: { id: string; titulo: string; html: string }[] = [];
 
-    const totalCritico = topicos.filter(t => t.nivel === 'critico').length;
+    if (temReforma) {
+      // 1. Leituras-chave (montadas no navegador, recalculam com as premissas)
+      secoes.push(secao('sec-leituras', 'Leituras-chave', 'O que chama atenção, em linguagem direta', 'Pontos', 'figLeituras', '—',
+        `<div id="insights" class="insights"></div>`, true));
+
+      // 2. Premissas e regime
+      secoes.push(secao('sec-premissas', 'Regime e premissas', 'Regime real da empresa e parâmetros — tudo editável, tudo recalcula', 'Regime', 'figPremissas', esc(regimeTributario.label || 'a definir'),
+        `<p class="nota">Os campos já vêm com um palpite — o regime sai do CRT das notas e da consulta à Receita Federal. Troque pelo que você sabe e todas as tabelas e leituras desta página recalculam na hora.</p>
+        <div class="campos">
+          <label><span class="rot">Regime real da empresa</span>
+            <select id="selRegimeEmpresa" class="rf-in">${opcoesSelectHtml(regimeKeyPorCrt(regimeTributario.crt))}</select>
+            <span class="aj">palpite pelo CRT das notas: ${esc(regimeTributario.label || 'não identificado')}</span></label>
+          <label><span class="rot">Alíquota de referência CBS + IBS (%)</span>
+            <input type="text" id="simAliqReforma" class="rf-in" value="26,50" inputmode="decimal">
+            <span class="aj">estimativa para o IVA dual já implantado; a final depende de regulamentação</span></label>
+          <label><span class="rot">Crédito parcial de fornecedor Simples puro (% da compra)</span>
+            <input type="text" id="inpParcial" class="rf-in" value="3,00" inputmode="decimal">
+            <span class="aj">estimativa — use a alíquota efetiva de IBS/CBS no DAS do fornecedor (LC 214, arts. 155 e 156)</span></label>
+          <label><span class="rot">Alíquota sobre a receita (% da cheia)</span>
+            <input type="text" id="simFatorReceita" class="rf-in" value="${nl(fatorReceitaPct)}" inputmode="decimal">
+            <span class="aj">${mixAliquotas.saidas.total > 0 ? `do mix de cClassTrib das vendas (${formatarPct(mixAliquotas.saidas.coberturaPct)}% do valor com o grupo; o resto assumido cheio)` : 'sem dados de cClassTrib — assumido cheio'}</span></label>
+          <label><span class="rot">Alíquota sobre as compras (% da cheia)</span>
+            <input type="text" id="inpFatorCompras" class="rf-in" value="${nl(fatorComprasPct)}" inputmode="decimal">
+            <span class="aj">${mixAliquotas.entradas.total > 0 ? `do mix de cClassTrib das entradas (${formatarPct(mixAliquotas.entradas.coberturaPct)}% do valor com o grupo; o resto assumido cheio)` : 'sem entradas lidas — assumido cheio'}</span></label>
+        </div>
+        <div class="narr" id="empresaNarrativa"></div>
+        <details class="como"><summary>Como o regime é verificado — e o que nenhuma camada enxerga</summary>
+          <div class="nota">Camada 1: o CRT da nota (1 e 2 = Simples Nacional, 3 = Regime Normal, 4 = MEI). Camada 2: a consulta à Receita Federal (BrasilAPI), que diz se a empresa é optante do Simples ou MEI hoje — quando as duas divergem, vale a Receita. Nenhuma das duas enxerga se um Simples aderiu ao regime regular/híbrido (LC 214/2025, art. 41), nem se "Regime Normal" é Lucro Presumido ou Real. E o regime do cliente (quem compra) não vem na nota: só a Receita ajuda. Por isso o que está pré-preenchido é palpite, não confirmação.</div>
+        </details>`, true));
+
+      // 3. Cadeia: impacto por tipo de relação (a tabela-resumo)
+      secoes.push(secao('sec-cadeia', 'Cadeia de valor — quem compra e de quem se compra', 'O que muda, na Reforma, em cada tipo de relação comercial', 'Crédito em jogo', 'figCadeia', '—',
+        `<p class="nota">Cada linha agrupa as relações da empresa pelo regime do outro lado. "Crédito" é o IBS/CBS que volta (compras) ou que é entregue (vendas). Troque o regime de qualquer fornecedor ou cliente nas tabelas abaixo e esta tabela acompanha.</p>
+        <div class="tw"><table class="t">
+          <thead><tr><th>Relação</th><th class="r">Volume (R$)</th><th class="r">% do lado</th><th class="r">Crédito (R$)</th><th>O que muda</th><th>O que fazer</th></tr></thead>
+          <tbody id="cadeiaCorpo"></tbody>
+        </table></div>`, true));
+    }
+
+    // 4. Fornecedores
+    if (topF.length > 0) {
+      const sug = topF.map(f => ({ f, s: sugestaoRegime(f.cnpj, f.crtDeclarado) }));
+      dadosParaExcel['reforma-fornecedores'] = {
+        colunas: ['Fornecedor', 'CNPJ', 'CRT declarado', 'Receita (BrasilAPI)', 'Total Comprado (R$)', 'Regime sugerido'],
+        linhas: sug.map(({ f, s }) => [f.nome, f.cnpj, s.crtTxt, s.receitaTxt, f.totalComprado, labelRegime(s.key)]),
+      };
+      secoes.push(secao('sec-fornecedores', 'Fornecedores — regime e crédito', `${topF.length === perfilFornecedores.fornecedores.length ? `${topF.length} fornecedor(es)` : `${topF.length} maiores de ${perfilFornecedores.fornecedores.length} fornecedores`} · ${esc(formatarMoeda(totalComprasTop))} em compras`, 'Crédito perdido', 'figForn', '—',
+        `<p class="nota">Comprar de fornecedor em Regime Normal devolve o IBS/CBS como crédito; comprar de Simples puro devolve só a parcela do DAS. A lista mostra quanto crédito cada fornecedor gera e onde vale renegociar. Só as NF-e de entrada anexadas entram — se faltou nota de compra, o número real é maior.</p>
+        <div class="tw"><table class="t">
+          <thead><tr><th>Fornecedor</th><th>Regime (verificação em 2 camadas)</th><th class="r">Compras (R$)</th><th class="r">Crédito estimado (R$)</th><th>Impacto e ação</th></tr></thead>
+          <tbody>
+            ${sug.map(({ f, s }, i) => `<tr class="rf-linha${i >= 10 ? ' extra' : ''}">
+              <td><div class="ent-n">${esc(f.nome)}</div><div class="ent-s">${esc(formatCnpj(f.cnpj))} · última compra ${esc(dataFmt(f.ultimaCompra))}</div></td>
+              <td class="cam-cell" data-cnpj="${esc(f.cnpj)}" data-crt="${esc(f.crtDeclarado)}"><select class="rf-in sel-regime-fornecedor" data-total="${f.totalComprado}">${opcoesSelectHtml(s.key)}</select>${celulaCamadas(s)}</td>
+              <td class="num">${formatarMoeda(f.totalComprado)}</td>
+              <td class="num cred-cell">—</td>
+              <td class="imp-cell">—</td>
+            </tr>`).join('')}
+          </tbody>
+        </table></div>
+        <div class="acoes">
+          ${sug.length > 10 ? `<button type="button" class="btn btn-mais" data-n="${sug.length}">Mostrar todos os ${sug.length}</button>` : ''}
+          <button type="button" class="btn suave btn-consulta-rf" data-alvo="sel-regime-fornecedor">Atualizar consulta à Receita Federal</button>
+          ${btnExcel('reforma-fornecedores', 'Fornecedores e regime')}
+          <span class="nota-peq" id="consultaStatus-sel-regime-fornecedor"></span>
+        </div>
+        <div class="nota-peq">Total das compras listadas <b id="fornTotalCompras">—</b> · crédito estimado <b id="fornCredito">—</b> · crédito que deixa de existir pelo regime dos fornecedores <b id="fornCreditoPerdido">—</b> (<span id="fornPctPerdido">—</span>% do crédito cheio possível).</div>`, false));
+    }
+
+    // 5. Clientes
+    if (temReforma) {
+      const sugC = topC.map(c => ({ c, s: sugestaoRegime(c.cnpj, '') }));
+      const totalVendasTopC = topC.reduce((s, c) => s + c.totalComprado, 0);
+      if (topC.length > 0) {
+        dadosParaExcel['reforma-clientes'] = {
+          colunas: ['Cliente', 'CNPJ', 'Receita (BrasilAPI)', 'Vendas (R$)', 'Regime sugerido'],
+          linhas: sugC.map(({ c, s }) => [c.nome, c.cnpj, s.receitaTxt, c.totalComprado, labelRegime(s.key)]),
+        };
+      }
+      secoes.push(secao('sec-clientes', 'Clientes — quem compra de você', topC.length > 0 ? `${topC.length === perfilClientes.clientes.length ? `${topC.length} cliente(s)` : `${topC.length} maiores de ${perfilClientes.clientes.length} clientes`} com CNPJ · ${esc(formatarMoeda(totalVendasTopC))} em vendas` : 'Nenhum comprador com CNPJ nas NF-e do período', 'Vantagem a ganhar', 'figCli', '—',
+        `<p class="nota">Crédito exige as duas pontas: o cliente só aproveita o IBS/CBS se ele próprio estiver no regime regular (Presumido, Real ou Simples híbrido). Cliente Simples puro ou MEI não usa crédito, então vender com ou sem crédito dá no mesmo; já quem revende ou industrializa em Regime Normal compara fornecedores pelo preço líquido do crédito.</p>
+        <div class="tw"><table class="t">
+          <thead><tr><th>Cliente</th><th>Regime (verificação em 2 camadas)</th><th class="r">Vendas (R$)</th><th class="r">Crédito que recebe (R$)</th><th>Impacto e ação</th></tr></thead>
+          <tbody>
+            <tr class="rf-cons"><td><div class="ent-n">Consumidor final</div><div class="ent-s">NFC-e e vendas sem CNPJ de comprador</div></td><td>—</td><td class="num">${formatarMoeda(consumidorValor)}</td><td class="num">—</td>
+              <td class="imp-cell"><span class="tag tag-info">Sem crédito</span> <span class="imp-t">${formatarPct(consumidorPct)}% do faturamento. O consumidor não aproveita crédito: com o imposto por fora o preço final sobe, e o repasse depende de quanto ele aceita (veja o simulador).</span></td></tr>
+            ${sugC.map(({ c, s }, i) => `<tr class="rf-linha${i >= 10 ? ' extra' : ''}">
+              <td><div class="ent-n">${esc(c.nome)}</div><div class="ent-s">${esc(formatCnpj(c.cnpj))} · última compra ${esc(dataFmt(c.ultimaCompra))}</div></td>
+              <td class="cam-cell" data-cnpj="${esc(c.cnpj)}" data-crt=""><select class="rf-in sel-regime-cliente" data-total="${c.totalComprado}">${opcoesSelectHtml(s.key)}</select>${celulaCamadas(s)}</td>
+              <td class="num">${formatarMoeda(c.totalComprado)}</td>
+              <td class="num cli-cred">—</td>
+              <td class="imp-cell">—</td>
+            </tr>`).join('')}
+          </tbody>
+        </table></div>
+        <div class="acoes">
+          ${sugC.length > 10 ? `<button type="button" class="btn btn-mais" data-n="${sugC.length}">Mostrar todos os ${sugC.length}</button>` : ''}
+          ${topC.length > 0 ? `<button type="button" class="btn suave btn-consulta-rf" data-alvo="sel-regime-cliente">Atualizar consulta à Receita Federal</button>${btnExcel('reforma-clientes', 'Clientes e regime')}` : ''}
+          <span class="nota-peq" id="consultaStatus-sel-regime-cliente"></span>
+        </div>
+        ${topC.length > 0 ? `<div class="nota-peq">Vendas a quem aproveita crédito <b id="cliVendasAprov">—</b> · a quem não aproveita <b id="cliVendasNao">—</b> · regime não identificado <b id="cliVendasDesc">—</b>. Crédito entregue hoje <b id="cliCredito">—</b>; com crédito cheio seria <b id="cliCreditoPleno">—</b> — a diferença (<b id="cliCreditoDif">—</b>) é a vantagem que um concorrente em Regime Normal leva sobre a empresa, a preço igual.</div>` : `<div class="nota">Nenhuma NF-e de venda do período identifica um comprador com CNPJ — a venda é a consumidor final, onde crédito não se aplica. Se a empresa também vende a revendedores ou outras empresas, anexe essas NF-e pra este quadro mostrar quem aproveita o crédito.</div>`}`, false));
+    }
+
+    // 6. Mix de alíquotas
+    if (mixAliquotas.saidas.total > 0 || mixAliquotas.entradas.total > 0) {
+      const nomeLado = { saidas: 'Vendas', entradas: 'Compras' } as const;
+      const linhasMix: (string | number)[][] = [];
+      (['saidas', 'entradas'] as const).forEach(l => {
+        const m = mixAliquotas[l];
+        m.porCodigo.slice(0, 8).forEach(c => {
+          linhasMix.push([nomeLado[l], c.code === 'sem-grupo' ? 'Sem o grupo IBS/CBS' : `${c.code} — ${c.nome}`, c.efeito, c.valor, `${formatarPct(m.total > 0 ? (c.valor / m.total) * 100 : 0)}%`]);
+        });
+        if (m.porCodigo.length > 8) {
+          const resto = m.porCodigo.slice(8).reduce((s, c) => s + c.valor, 0);
+          linhasMix.push([nomeLado[l], `Outros ${m.porCodigo.length - 8} código(s)`, 'Variado', resto, `${formatarPct(m.total > 0 ? (resto / m.total) * 100 : 0)}%`]);
+        }
+      });
+      const mixT = { colunas: ['Lado', 'Código / situação', 'Efeito na alíquota', 'Valor (R$)', '% do lado'], linhas: linhasMix };
+      dadosParaExcel['reforma-mix'] = mixT;
+      secoes.push(secao('sec-mix', 'Mix de alíquotas (cClassTrib)', 'Quanto das vendas e compras paga alíquota cheia, reduzida ou zero', 'Alíquota média das vendas', 'figMix', mixAliquotas.saidas.total > 0 ? `${formatarPct(mixAliquotas.saidas.fator * 100)}% da cheia` : '—',
+        `<p class="nota">Lido direto do código cClassTrib de cada item, comparado com a tabela oficial — o app não interpreta nome de produto nem NCM. Alíquota zero e reduzida aparecem quando o emissor já classifica o item (ex.: Anexo I da LC 214/2025, cesta básica, onde está o pão francês). Item sem o grupo IBS/CBS é assumido em alíquota cheia, por isso a cobertura importa: vendas com o grupo em ${formatarPct(mixAliquotas.saidas.coberturaPct)}% do valor, compras em ${formatarPct(mixAliquotas.entradas.coberturaPct)}%.</p>
+        ${tabelaApoio(mixT)}
+        <div class="acoes">${btnExcel('reforma-mix', 'Mix de aliquotas')}</div>`, false));
+    }
+
+    // 7. Simulador de preço
+    if (temReforma && faturamentoTotal > 0) {
+      const totalIbsCbsTeste = auditoriaClassTrib.totalIBS + auditoriaClassTrib.totalCBS;
+      const baseComGrupo = auditoriaClassTrib.codigosUsados.reduce((s, c) => s + c.valor, 0);
+      const pctTesteReal = baseComGrupo > 0 ? (totalIbsCbsTeste / baseComGrupo) * 100 : 0;
+      secoes.push(secao('sec-simulador', 'Simulador — impacto no preço', `Receita de ${esc(formatarMoeda(receitaMensal))} por mês${numMesesRef > 1 ? ` (média de ${numMesesRef} meses)` : ''}, já com o crédito de compras`, 'Reprecificação p/ manter a margem', 'figSim', '—',
+        `<p class="nota">Quanto o preço precisa subir pra manter a margem de hoje, e o que sobra em cada cenário de repasse. "Margem disponível" = receita − débito de IBS/CBS + crédito de compras: é o que cobre custo, despesa e lucro — não é o lucro líquido, que também depende de custo e despesa (fora do XML fiscal). O crédito vem da tabela de fornecedores; o custo de compra é suposto constante (o repasse de preço dos fornecedores não está modelado).${pctTesteReal > 0 ? ` Só como contexto: o sistema do cliente já destaca ${formatarPct(pctTesteReal)}% de IBS+CBS nas notas — é a alíquota do período de teste (2026), não a final; não use na simulação.` : ''}</p>
+        <div class="aviso" id="simAviso"></div>
+        <div class="campos">
+          <label><span class="rot">Receita bruta (R$/mês)</span>
+            <input type="text" id="simReceita" class="rf-in" value="${nl(receitaMensal)}" inputmode="decimal"></label>
+          <label><span class="rot">Alíquota atual sobre a receita (%)</span>
+            <input type="text" id="simAliqAtual" class="rf-in" value="0,00" inputmode="decimal">
+            <span class="aj">carga efetiva de hoje (DAS, Presumido ou Real) — o XML não calcula; regime declarado: ${esc(regimeTributario.label || 'não identificado')}</span></label>
+          <label><span class="rot">Crédito de IBS/CBS sobre compras (R$/mês)</span>
+            <input type="text" id="simCredito" class="rf-in-manual" value="0,00" inputmode="decimal">
+            <span class="aj">automático pela tabela de fornecedores — digite pra sobrescrever <button type="button" class="link" id="btnCreditoAuto">voltar ao automático</button></span></label>
+        </div>
+        <div class="destaque" id="simResumo"></div>
+        <div class="tw"><table class="t">
+          <thead><tr><th>Cenário de repasse ao preço</th><th class="r">Receita necessária</th><th class="r">Débito IBS/CBS</th><th class="r">Crédito de compras</th><th class="r">Margem disponível</th><th class="r">Diferença vs. hoje</th></tr></thead>
+          <tbody id="simCorpo"></tbody>
+        </table></div>`, false));
+    }
+
+    // 8. Dados de apoio (perfil bruto: quem compra, de quem compra, produtos, sazonalidade)
+    const ordemApoio: Area[] = ['perfil', 'fornecedores', 'ranking', 'sazonalidade'];
+    const apoioSubs = topicos.filter(t => ordemApoio.includes(t.area)).sort((a, b) => ordemApoio.indexOf(a.area) - ordemApoio.indexOf(b.area));
+    if (apoioSubs.length > 0) {
+      secoes.push(secao('sec-apoio', 'Dados de apoio', 'Perfil bruto extraído dos XMLs — principais clientes e fornecedores, produtos e sazonalidade', 'Tabelas', 'figApoio', String(apoioSubs.length),
+        apoioSubs.map(t => subsecao(t.titulo, t.resumo, `<p class="nota">${t.corpo}</p>${tabelaApoio(t)}${t.colunas && t.linhas && t.linhas.length > 0 ? `<div class="acoes">${btnExcel(t.id, t.titulo)}</div>` : ''}`)).join(''), false));
+    }
+
     const totalAtencao = topicos.filter(t => t.nivel === 'atencao').length;
-    const totalInfo = topicos.filter(t => t.nivel === 'info').length;
-    const totalOk = topicos.length - totalCritico - totalAtencao - totalInfo;
+    const nomeEmpresaGrande = empresa.length > 26;
+    const periodoLegivel = filterMes !== 'Todos'
+      ? filterMes
+      : mesesDisponiveis.length > 1
+        ? `${mesesDisponiveis.slice(0, -1).join(', ')} e ${mesesDisponiveis[mesesDisponiveis.length - 1]}`
+        : (mesesDisponiveis[0] || periodo);
+    const rotuloNav: Record<string, string> = {
+      'sec-leituras': 'Leituras', 'sec-premissas': 'Regime', 'sec-cadeia': 'Cadeia', 'sec-fornecedores': 'Fornecedores',
+      'sec-clientes': 'Clientes', 'sec-mix': 'Mix', 'sec-simulador': 'Simulador', 'sec-apoio': 'Apoio',
+    };
 
     const html = `<!DOCTYPE html>
 <html lang="pt-BR"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Perfil do Cliente — ${esc(empresa)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 <style>
-  /* Identidade Contador de Padarias já estabelecida no resto do app (ink quase-preto
-     quente, não o navy de uma variante específica do logo — ver memória do projeto). */
-  :root { --ink:#17150F; --gold:#C9A227; --gold-texto:#9A7B12; --parchment:#F7F4EC; --linha:#E4DFD0; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--parchment); color:var(--ink); font-family:'IBM Plex Sans',sans-serif; line-height:1.55; }
-  .capa { background:var(--ink); color:#F7F4EC; padding:44px 32px 36px; }
-  .capa-inner { max-width:920px; margin:0 auto; }
-  .capa-logo { height:40px; margin-bottom:22px; display:block; }
-  .capa .selo { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:var(--gold); margin-bottom:14px; }
-  .capa h1 { font-family:'Newsreader',serif; font-weight:700; font-size:2.1rem; margin:0 0 4px; }
-  .capa .subtitulo { font-family:'Newsreader',serif; font-style:italic; font-weight:400; font-size:1.05rem; color:var(--gold); margin:0 0 14px; }
-  .capa .meta { font-size:13.5px; color:rgba(247,244,236,0.75); display:flex; flex-wrap:wrap; gap:6px 22px; }
-  .capa .meta b { color:#F7F4EC; }
-  .wrap { max-width:920px; margin:0 auto; padding:34px 32px 70px; }
-  .sumario { background:#fff; border:1px solid var(--linha); border-radius:0; padding:22px 24px 10px; margin-bottom:38px; }
-  .sumario h2 { font-family:'Newsreader',serif; font-size:1.2rem; margin:0 0 4px; }
-  .sumario .contagem { font-size:12.5px; color:#6B6350; margin-bottom:16px; }
-  .sumario .contagem strong.n-critico { color:#B3261E; } .sumario .contagem strong.n-atencao { color:#B7791F; }
-  .sumario-linha { display:flex; align-items:center; gap:12px; text-decoration:none; color:var(--ink); padding:9px 10px; border-left:3px solid; border-radius:0; margin-bottom:8px; background:#FBFAF6; transition:background .15s; }
-  .sumario-linha:hover { background:#F1EDE0; }
-  .sumario-badge { font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:0; white-space:nowrap; }
-  .sumario-titulo { font-weight:600; font-size:13.5px; white-space:nowrap; }
-  .sumario-resumo { font-size:12.5px; color:#6B6350; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .area { margin-bottom:36px; }
-  .area h2 { font-family:'Newsreader',serif; font-size:1.5rem; font-weight:600; border-bottom:2px solid var(--ink); padding-bottom:8px; margin:0 0 18px; }
-  .topico { background:#fff; border:1px solid var(--linha); border-left:4px solid; border-radius:0; margin-bottom:14px; }
-  .topico summary { list-style:none; cursor:pointer; padding:14px 18px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-  .topico summary::-webkit-details-marker { display:none; }
-  .topico summary::before { content:'▸'; font-size:11px; color:#9C9583; transition:transform .15s; margin-right:2px; }
-  .topico[open] summary::before { transform:rotate(90deg); }
-  .topico-badge { font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600; padding:3px 9px; border-radius:0; white-space:nowrap; }
-  .topico-titulo { font-family:'Newsreader',serif; font-weight:600; font-size:16px; }
-  .topico-resumo { font-size:12.5px; color:#6B6350; flex:1; }
-  .topico-corpo { padding:0 18px 18px; border-top:1px solid var(--linha); margin-top:0; }
-  .topico-texto { font-size:13.5px; color:#3A362B; margin:14px 0; max-width:70ch; }
-  .tabela-wrap { overflow-x:auto; max-height:420px; overflow-y:auto; border:1px solid var(--linha); border-radius:0; margin-bottom:12px; }
-  table { width:100%; border-collapse:collapse; font-size:12.5px; }
-  thead th { position:sticky; top:0; background:#FBFAF6; text-align:left; font-weight:600; color:#6B6350; text-transform:uppercase; font-size:10.5px; letter-spacing:0.04em; padding:8px 12px; border-bottom:1px solid var(--linha); white-space:nowrap; }
-  tbody td { padding:7px 12px; border-bottom:1px solid #F0EDE2; white-space:nowrap; }
-  tbody tr:nth-child(even) { background:#FBFAF6; }
-  td.num { text-align:right; font-family:'IBM Plex Mono',monospace; font-variant-numeric:tabular-nums; }
-  .btn-excel { font-family:'IBM Plex Sans',sans-serif; font-size:12px; font-weight:600; letter-spacing:0.04em; color:var(--ink); background:transparent; border:0.8px solid var(--ink); border-radius:0; padding:8px 16px; cursor:pointer; }
-  .btn-excel:hover { background:var(--ink); color:#F7F4EC; }
-  .tabela-nota { font-size:11px; color:#8A8370; padding:6px 12px; border-top:1px solid var(--linha); background:#FBFAF6; }
-  footer { max-width:920px; margin:0 auto; padding:0 32px 60px; font-size:11.5px; color:#8A8370; max-width:75ch; }
-  /* Simulador Reforma Tributária (interativo, vanilla JS embutido) */
-  .simulador-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin:16px 0 18px; }
-  .simulador-grid label { display:flex; flex-direction:column; gap:5px; font-size:11.5px; font-weight:600; color:#6B6350; text-transform:uppercase; letter-spacing:0.03em; }
-  .simulador-grid .ajuda { font-weight:400; text-transform:none; letter-spacing:0; color:#9C9583; font-size:11px; }
-  .simulador-grid input { font-family:'IBM Plex Mono',monospace; font-size:14px; font-weight:600; color:var(--ink); background:#FBFAF6; border:0.8px solid var(--linha); border-radius:0; padding:8px 10px; width:100%; }
-  .simulador-grid input:focus { outline:none; border-color:var(--gold-texto); background:#fff; }
-  .simulador-tabela thead th:not(:first-child), .simulador-tabela td.num { font-variant-numeric:tabular-nums; }
-  .simulador-nota { font-size:11.5px; color:#8A8370; margin-top:10px; max-width:70ch; }
-  .simulador-real { font-size:12px; color:var(--gold-texto); background:#FBF6E8; border:0.8px solid #E6D4A0; padding:8px 12px; margin-bottom:14px; }
-  @media (max-width:640px) { .capa,.wrap,footer { padding-left:18px; padding-right:18px; } .sumario-linha { flex-wrap:wrap; } .sumario-resumo { white-space:normal; } }
+  /* Linguagem visual do relatório Coopera / Contador de Padarias: ink quente, dourado,
+     Newsreader nos números e títulos, hairlines no lugar de caixas, zero radius. */
+  :root { --ink:#17150F; --gold:#C9A227; --gold-t:#9A7B12; --bg:#FCFBF8; --g1:#5E594F; --g2:#78736A; --g3:#A29C92; --l1:#E5E0D6; --l2:#EFEBE3; }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; scroll-padding-top:84px; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--ink); font-family:'IBM Plex Sans',sans-serif; }
+  .top { background:var(--ink); padding:20px 40px; display:flex; align-items:center; justify-content:space-between; gap:24px; position:sticky; top:0; z-index:20; }
+  .top img { width:150px; display:block; }
+  .top nav { display:flex; gap:22px; flex-wrap:wrap; justify-content:flex-end; }
+  .top nav a { font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:#A8A29A; text-decoration:none; }
+  .top nav a:hover { color:var(--gold); }
+  .wrap { max-width:1180px; margin:0 auto; padding:48px 40px 80px; counter-reset:sec; }
+  .h1a, .h1b { font-family:Newsreader,serif; font-size:44px; line-height:1.1; font-weight:400; letter-spacing:-.01em; }
+  .h1b { font-style:italic; color:var(--gold-t); }
+  .h1b.menor { font-size:34px; }
+  .regua { width:60px; height:3px; background:var(--gold); margin:20px 0; }
+  .lede { font-size:16px; line-height:1.65; color:var(--g1); max-width:720px; }
+  .kpis { display:grid; grid-template-columns:repeat(4,1fr); border-top:1px solid var(--l1); border-bottom:1px solid var(--l1); margin-top:36px; }
+  .kpi { padding:22px 24px; border-left:1px solid var(--l1); }
+  .kpi:first-child { padding-left:0; border-left:0; }
+  .kpi:last-child { padding-right:0; }
+  .k-r { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--g2); }
+  .k-v { font-family:Newsreader,serif; font-size:24px; font-weight:500; margin-top:8px; }
+  .k-s { font-size:11.5px; color:var(--g2); margin-top:4px; }
+  .kpi.dest .k-r, .kpi.dest .k-v { color:var(--gold-t); }
+  .barra { display:flex; align-items:center; gap:16px; flex-wrap:wrap; padding:36px 0 18px; border-bottom:1px solid var(--l1); }
+  .barra .info { flex:1; min-width:200px; font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--g3); }
+  .btn { padding:11px 18px; font-family:inherit; font-size:13px; letter-spacing:.04em; color:var(--ink); background:transparent; border:1px solid var(--ink); border-radius:0; cursor:pointer; }
+  .btn.suave { color:var(--g1); border-color:var(--l1); }
+  .btn:hover { background:var(--ink); border-color:var(--ink); color:var(--bg); }
+  .btn:disabled { opacity:.5; cursor:wait; }
+  .link { font:inherit; font-size:11.5px; color:var(--gold-t); background:none; border:0; padding:0; text-decoration:underline; cursor:pointer; }
+
+  details.sec { border-top:1px solid var(--l1); }
+  details.sec:last-of-type { border-bottom:1px solid var(--l1); }
+  details.sec > summary, details.sub > summary { list-style:none; cursor:pointer; }
+  details > summary::-webkit-details-marker { display:none; }
+  details.sec > summary { display:flex; align-items:center; gap:18px; padding:16px 0; }
+  .mk { width:26px; flex:0 0 auto; font-size:16px; line-height:1; color:var(--gold); text-align:center; font-weight:500; }
+  .mk::before { content:'+'; }
+  details[open] > summary > .mk::before { content:'−'; }
+  .idx { width:32px; flex:0 0 auto; font-family:Newsreader,serif; font-size:15px; color:var(--g3); }
+  details.sec .idx::before { counter-increment:sec; content:counter(sec); }
+  .sec-titulo { flex:1 1 0; min-width:0; }
+  .sec-t { display:block; font-family:Newsreader,serif; font-size:19px; font-weight:500; line-height:1.25; }
+  .sec-m { display:block; font-size:11.5px; color:var(--g2); margin-top:3px; }
+  .sec-fig { flex:0 0 auto; text-align:right; white-space:nowrap; }
+  .sec-fl { display:block; font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--g2); }
+  .sec-fv { display:block; font-family:Newsreader,serif; font-size:21px; font-weight:500; color:var(--gold-t); margin-top:3px; }
+  .sec-corpo { padding:4px 0 30px 76px; }
+
+  details.sub { margin-bottom:26px; }
+  details.sub > summary { display:flex; align-items:baseline; gap:10px; padding-bottom:8px; border-bottom:1px solid var(--ink); }
+  .mk2 { font-size:12px; line-height:1; color:var(--gold); width:12px; flex:0 0 auto; }
+  .mk2::before { content:'+'; }
+  details[open] > summary > .mk2::before { content:'−'; }
+  .sub-t { font-size:13.5px; font-weight:600; flex:1 1 0; }
+  .sub-c { font-size:11px; color:var(--g3); text-align:right; max-width:55%; }
+  .sub-corpo { padding-top:14px; }
+
+  .nota { font-size:13.5px; line-height:1.75; color:var(--g1); max-width:780px; margin:0 0 18px; }
+  .nota-peq { font-size:12px; line-height:1.6; color:var(--g2); margin:10px 0; max-width:820px; }
+  .nota-peq b { color:var(--ink); font-weight:600; }
+  .tw { overflow-x:auto; }
+  table.t { width:100%; border-collapse:collapse; font-size:12.5px; font-variant-numeric:tabular-nums; }
+  .t th { padding:0 16px 8px 0; font-weight:500; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--g2); white-space:nowrap; border-bottom:1px solid var(--ink); text-align:left; vertical-align:bottom; }
+  .t td { padding:9px 14px 9px 0; border-bottom:1px solid var(--l2); vertical-align:top; }
+  .t td:first-child { min-width:150px; }
+  .t select { width:100%; }
+  .t th:last-child, .t td:last-child { padding-right:0; }
+  .t th.r, .t td.num { text-align:right; white-space:nowrap; }
+  .t td.t-txt, .t td.cam-cell, .t td.imp-cell { white-space:normal; }
+  .t td.t-txt { font-size:12px; line-height:1.55; color:var(--g1); min-width:200px; }
+  .ent-n { font-family:Newsreader,serif; font-size:14.5px; font-weight:500; line-height:1.3; }
+  .ent-s { font-size:11px; color:var(--g2); margin-top:2px; }
+  .cam-cell { min-width:185px; max-width:230px; font-size:11.5px; color:var(--g2); }
+  .cam-l { margin-top:6px; }
+  .cam-div { color:var(--gold-t); font-weight:600; margin-top:4px; }
+  .imp-cell { min-width:230px; font-size:12px; line-height:1.55; color:var(--g1); }
+  .imp-t { display:block; margin-top:5px; }
+  tr.rf-cons td { background:transparent; }
+  .sec-corpo:not(.mostra-tudo) tr.extra { display:none; }
+  .acoes { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:16px 0 4px; }
+  .tag { display:inline-block; font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; padding:3px 8px; border:1px solid; white-space:nowrap; line-height:1.3; }
+  .tag-alta { background:var(--ink); color:var(--bg); border-color:var(--ink); }
+  .tag-media { color:var(--gold-t); border-color:var(--gold); }
+  .tag-info { color:var(--g2); border-color:var(--l1); }
+  .tag-ok { color:var(--ink); border-color:var(--ink); }
+
+  .campos { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:22px 28px; margin:0 0 18px; }
+  .campos label { display:flex; flex-direction:column; gap:7px; }
+  .rot { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--g2); }
+  .aj { font-size:11.5px; line-height:1.5; color:var(--g2); }
+  .campos input, .campos select { width:100%; padding:11px 14px; font-family:inherit; font-size:14px; color:var(--ink); background:#fff; border:1px solid var(--l1); border-radius:0; outline:none; }
+  .campos input:focus, .campos select:focus, .t select:focus { border-color:var(--gold-t); }
+  .t select { font-family:inherit; font-size:12.5px; color:var(--ink); background:#fff; border:1px solid var(--l1); border-radius:0; padding:6px 8px; max-width:100%; outline:none; }
+  .narr { border-left:3px solid var(--gold); padding:4px 0 4px 16px; font-size:13.5px; line-height:1.7; color:var(--g1); margin:6px 0 18px; max-width:780px; }
+  .como summary { font-size:12px; letter-spacing:.04em; color:var(--gold-t); cursor:pointer; margin-bottom:10px; }
+  .aviso { display:none; font-size:12.5px; line-height:1.6; color:var(--g1); border:1px solid var(--gold); padding:10px 14px; margin:0 0 18px; max-width:780px; }
+  .destaque { font-family:Newsreader,serif; font-size:21px; line-height:1.4; margin:4px 0 22px; max-width:780px; }
+  .destaque b { color:var(--gold-t); font-weight:500; }
+  .destaque small { display:block; font-family:'IBM Plex Sans',sans-serif; font-size:12px; color:var(--g2); margin-top:4px; }
+  .neg { color:#8C2F25; }
+  .insights { max-width:900px; }
+  .ins { display:flex; gap:18px; padding:14px 0; border-top:1px solid var(--l2); }
+  .ins:first-child { border-top:0; padding-top:4px; }
+  .ins .tg { width:120px; flex:0 0 auto; padding-top:2px; }
+  .ins .tx { font-size:14px; line-height:1.65; color:var(--g1); }
+  .ins .tx b { color:var(--ink); font-weight:600; }
+
+  .natureza { background:var(--ink); color:var(--bg); padding:24px 30px; margin-top:48px; }
+  .natureza .n-r { font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#A8A29A; }
+  .natureza .n-t { font-size:13.5px; line-height:1.7; color:#CFC9BE; margin-top:8px; }
+  .rodape { font-size:11px; letter-spacing:.06em; color:var(--g3); margin-top:40px; }
+
+  @media (max-width:860px) {
+    .top { padding:16px 20px; } .top nav { display:none; }
+    .wrap { padding:32px 20px 60px; }
+    .h1a, .h1b { font-size:32px; } .h1b.menor { font-size:26px; }
+    .kpis { grid-template-columns:1fr 1fr; } .kpi, .kpi:first-child, .kpi:last-child { padding:18px 16px; border-left:0; border-bottom:1px solid var(--l1); }
+    .sec-corpo { padding-left:0; } .sec-fig { display:none; } .idx { width:20px; }
+    .ins { flex-direction:column; gap:6px; } .ins .tg { width:auto; }
+  }
+  @media print {
+    .top { position:static; } .top nav, .btn, .acoes, .barra .btn { display:none !important; }
+    details.sec, details.sub { display:block; } details > .sec-corpo, details > .sub-corpo { display:block !important; }
+    .sec-corpo:not(.mostra-tudo) tr.extra { display:table-row; }
+  }
 </style>
 </head><body>
-  <div class="capa"><div class="capa-inner">
-    <img class="capa-logo" src="${LOGO_CONTADOR_PADARIAS_B64}" alt="Contador de Padarias">
-    <div class="selo">Sequência Fiscal · Perfil do Cliente</div>
-    <h1>${esc(empresa)}</h1>
-    <div class="subtitulo">Hoje é operacional. Amanhã é consultivo.</div>
-    <div class="meta">
-      <span>Período: <b>${esc(periodo)}</b></span>
-      <span>Gerado em: <b>${hoje}</b></span>
-      <span>${totalCritico} tópico(s) <b style="color:#F2B8B5">crítico(s)</b>, ${totalAtencao} de <b style="color:#EAD08C">atenção</b></span>
-    </div>
-  </div></div>
-  <div class="wrap">
-    <div class="sumario">
-      <h2>Sumário Executivo</h2>
-      <div class="contagem">${topicos.length} tópico(s) no total — <strong class="n-critico">${totalCritico} crítico(s)</strong>, <strong class="n-atencao">${totalAtencao} de atenção</strong>, ${totalOk} regular(es), ${totalInfo} de perfil. Clique em qualquer linha pra ir direto ao tópico.</div>
-      ${topicos.map(linhaSumario).join('')}
-    </div>
-    ${ordemAreas.map(areaHtml).join('')}
+  <div class="top">
+    <img src="${LOGO_CONTADOR_PADARIAS_B64}" alt="Contador de Padarias">
+    <nav>${secoes.map(s => `<a href="#${s.id}" data-sec="${s.id}">${esc(rotuloNav[s.id] || s.titulo)}</a>`).join('')}</nav>
   </div>
-  <footer>
-    <strong>Metodologia e limites.</strong> Os tópicos de perfil (clientes, produtos, sazonalidade) são agregações diretas dos XMLs — não há juízo de valor envolvido. O simulador de Reforma Tributária usa a receita apurada nos XMLs, mas a alíquota atual e a alíquota de Reforma são parâmetros que o contador informa/ajusta — nenhuma delas é calculada automaticamente a partir do XML (custo e despesa geral, que fariam parte de uma DRE completa, não vêm do XML fiscal). Os tópicos de IBS/CBS e TEF são checagens estruturais e determinísticas — comparações de código × código e conta × conta. Nenhum desses tópicos substitui análise de um contador nem é uma auditoria oficial da Receita Federal. Gerado automaticamente pelo Sequência Fiscal a partir dos XMLs carregados na análise.
-  </footer>
+  <div class="wrap">
+    <div class="h1a">Perfil e Reforma Tributária</div>
+    <div class="h1b${nomeEmpresaGrande ? ' menor' : ''}">${esc(empresa)}</div>
+    <div class="regua"></div>
+    <div class="lede">Retrato da empresa a partir das notas fiscais de ${esc(periodoLegivel)}: quem compra dela, de quem ela compra e quanto crédito de IBS/CBS circula nessa cadeia — para orientar o cliente sobre a Reforma Tributária e mostrar onde a conversa consultiva rende mais.</div>
+    ${temReforma ? `<div class="kpis">
+      <div class="kpi"><div class="k-r">Faturamento do período</div><div class="k-v">${esc(formatarMoeda(faturamentoTotal))}</div><div class="k-s">${esc(formatarMoeda(receitaMensal))} por mês</div></div>
+      <div class="kpi"><div class="k-r">Venda a consumidor final</div><div class="k-v">${esc(formatarPct(consumidorPct))}%</div><div class="k-s">${esc(formatarMoeda(consumidorValor))} sem CNPJ de comprador</div></div>
+      <div class="kpi"><div class="k-r">Compras identificadas</div><div class="k-v">${esc(formatarMoeda(perfilFornecedores.totalConsiderado))}</div><div class="k-s">${perfilFornecedores.fornecedores.length} fornecedor(es) nas NF-e de entrada</div></div>
+      <div class="kpi dest"><div class="k-r">Crédito de IBS/CBS estimado</div><div class="k-v" id="kpiCredito">—</div><div class="k-s">sobre as compras listadas, no período</div></div>
+    </div>` : ''}
+    <div class="barra">
+      <span class="info">${secoes.length} seção(ões) · ${perfilFornecedores.fornecedores.length} fornecedor(es) · ${perfilClientes.clientes.length} cliente(s) com CNPJ · ${esc(periodoLegivel)}${totalAtencao > 0 ? ` · ${totalAtencao} pra olhar com atenção` : ''}</span>
+      <button type="button" class="btn" id="btnExpandir">Expandir todas</button>
+      <button type="button" class="btn suave" id="btnRecolher">Recolher todas</button>
+    </div>
+    ${secoes.map(s => s.html).join('')}
+    <div class="natureza">
+      <div class="n-r">Natureza do documento</div>
+      <div class="n-t">Este perfil é um retrato calculado a partir dos XMLs carregados e serve de apoio à conversa consultiva — não é apuração fiscal nem auditoria oficial. O regime de cada empresa vem em duas camadas (CRT da nota e consulta à Receita Federal) e é sempre um palpite editável: nenhuma das duas enxerga o regime híbrido do Simples nem Presumido × Real, e o regime do cliente não vem na nota. O mix de alíquotas é lido do código cClassTrib de cada item, sem interpretar nome de produto ou NCM; item sem o grupo IBS/CBS é assumido em alíquota cheia. As alíquotas, o crédito parcial do Simples puro (LC 214/2025, arts. 155 e 156) e a carga atual são premissas ajustáveis. Custo e despesa geral não vêm do XML fiscal, por isso o simulador para na margem disponível. As auditorias de conformidade (sequência, anomalias, IBS/CBS estrutural, TEF) ficam na própria ferramenta, para o analista.</div>
+    </div>
+    <div class="rodape">Gerado em ${hoje} · Sequência Fiscal — Contador de Padarias</div>
+  </div>
   <script>
     var DADOS = ${JSON.stringify(dadosParaExcel)};
-    var REGIME_INFO = ${JSON.stringify(Object.fromEntries(REGIME_OPCOES.map(o => [o.key, { label: o.label, credito: o.credito }])))};
-    function fmtMoedaBr(v) {
-      return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    var REGIME_INFO = ${JSON.stringify(Object.fromEntries(REGIME_OPCOES.map(o => [o.key, { label: o.label, gera: o.gera, usa: o.usa, parcial: o.parcial }])))};
+    var RF_DATA = ${JSON.stringify({ numMeses: numMesesRef, faturamento: faturamentoTotal, consumidorValor, consumidorPct, fatorReceitaMix: mixAliquotas.saidas.total > 0 ? mixAliquotas.saidas.fator : 1, coberturaSaidas: mixAliquotas.saidas.coberturaPct, temSaidas: mixAliquotas.saidas.total > 0 })};
+    function qsa(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+    function fmtMoedaBr(v) { return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
+    function fmtNumBr(v) { return v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function fmtPctBr(v) { return v.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }
+    function numDe(id, padrao) {
+      var el = document.getElementById(id);
+      if (!el) return padrao;
+      var v = parseFloat(String(el.value).trim().replace(/\\./g, '').replace(',', '.'));
+      return isNaN(v) ? padrao : v;
     }
-    (function () {
-      // Tabela de crédito por fornecedor: recalcula os totais sempre que o
-      // contador troca o "regime real" de alguma linha (o CRT só dava o palpite inicial).
-      var selects = Array.prototype.slice.call(document.querySelectorAll('.sel-regime-fornecedor'));
-      var elCom = document.getElementById('fornCreditoCom');
-      var elSem = document.getElementById('fornCreditoSem');
-      var elSemPct = document.getElementById('fornCreditoSemPct');
-      if (!selects.length || !elCom || !elSem || !elSemPct) return;
-      function recomputar() {
-        var totalCom = 0, totalSem = 0, totalGeral = 0;
-        selects.forEach(function (sel) {
-          var total = parseFloat(sel.getAttribute('data-total')) || 0;
-          totalGeral += total;
-          var info = REGIME_INFO[sel.value] || REGIME_INFO.desconhecido;
-          if (info.credito) totalCom += total; else totalSem += total;
-        });
-        elCom.textContent = fmtMoedaBr(totalCom);
-        elSem.textContent = fmtMoedaBr(totalSem);
-        elSemPct.textContent = (totalGeral > 0 ? (totalSem / totalGeral * 100) : 0).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    function infoDe(key) { return REGIME_INFO[key] || REGIME_INFO.desconhecido; }
+    function setTxt(id, txt) { var el = document.getElementById(id); if (el) el.textContent = txt; }
+    function setHtml(id, h) { var el = document.getElementById(id); if (el) el.innerHTML = h; }
+    function esc2(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+    function tag(cls, txt) { return '<span class="tag tag-' + cls + '">' + txt + '</span>'; }
+    function prioDe(share) { return share >= 0.2 ? ['alta', 'Prioridade alta'] : share >= 0.05 ? ['media', 'Prioridade média'] : ['info', 'Prioridade baixa']; }
+
+    function impForn(r, empresa, share) {
+      if (!empresa.usa) return tag('info', 'Sem efeito') + '<span class="imp-t">A empresa não aproveita crédito: o regime dele não muda o custo.</span>';
+      if (r.key === 'desconhecido') return tag('media', 'Confirmar') + '<span class="imp-t">Regime não identificado — confirme antes de contar com o crédito.</span>';
+      if (r.info.gera) return tag('ok', 'Manter') + '<span class="imp-t">Crédito cheio: volta cerca de ' + fmtMoedaBr(r.cred) + '.</span>';
+      var p = prioDe(share);
+      if (r.info.parcial) return tag(p[0], p[1]) + '<span class="imp-t">Crédito só parcial: deixa de creditar cerca de ' + fmtMoedaBr(r.perdido) + '. Renegociar preço ou pedir adesão ao regime regular.</span>';
+      return tag(p[0], p[1]) + '<span class="imp-t">Sem crédito (regra do MEI a confirmar): cerca de ' + fmtMoedaBr(r.perdido) + ' de IBS/CBS vira custo. Avaliar preço ou fornecedor em Regime Normal.</span>';
+    }
+    function impCli(r, empresa, share) {
+      if (r.key === 'desconhecido') return tag('media', 'Confirmar') + '<span class="imp-t">Regime não identificado — consulte a Receita pra saber se ele aproveita crédito.</span>';
+      if (!r.info.usa) return tag('info', 'Sem efeito') + '<span class="imp-t">Não usa crédito de IBS/CBS (' + esc2(r.info.label) + '): vender com ou sem crédito dá no mesmo.</span>';
+      if (empresa.gera) return tag('ok', 'Manter') + '<span class="imp-t">Aproveita e recebe crédito cheio (cerca de ' + fmtMoedaBr(r.cred) + '): no mesmo pé de um concorrente em Regime Normal.</span>';
+      var p = prioDe(share);
+      return tag(p[0], p[1]) + '<span class="imp-t">Aproveita crédito e recebe só ' + fmtMoedaBr(r.cred) + ': paga cerca de ' + fmtMoedaBr(r.gap) + ' a mais, líquido, que num concorrente em Regime Normal — risco de pedir desconto ou trocar de fornecedor.</span>';
+    }
+    function linhaCadeia(rel, vol, pct, cred, muda, fazer) {
+      return '<tr><td><b>' + rel + '</b></td><td class="num">' + fmtMoedaBr(vol) + '</td><td class="num">' + fmtPctBr(pct) + '%</td><td class="num">' + cred + '</td><td class="t-txt">' + muda + '</td><td class="t-txt">' + fazer + '</td></tr>';
+    }
+    var CENARIOS = [
+      { label: '100% — repassa o necessário por completo', assertividade: 1 },
+      { label: '80% — repassa parte do necessário', assertividade: 0.8 },
+      { label: '50% — repassa só metade do necessário', assertividade: 0.5 },
+      { label: '0% — mantém o preço atual (não repassa nada)', assertividade: 0 },
+    ];
+
+    // Recalcula tudo a partir do estado atual da tela: regime da empresa →
+    // crédito de fornecedores → crédito entregue a clientes → cadeia, leituras e simulador.
+    function recalcReforma() {
+      var selEmp = document.getElementById('selRegimeEmpresa');
+      var empresa = infoDe(selEmp ? selEmp.value : 'desconhecido');
+      var aliqRef = numDe('simAliqReforma', 26.5) / 100;
+      var parcial = numDe('inpParcial', 0) / 100;
+      var aCompra = aliqRef * numDe('inpFatorCompras', 100) / 100;
+      var aVenda = aliqRef * numDe('simFatorReceita', 100) / 100;
+
+      if (selEmp) {
+        var comoComprador = empresa.usa ? 'aproveita crédito de IBS/CBS das compras (quando o fornecedor gera)' : 'NÃO aproveita crédito de fornecedor (fora do regime regular de IBS/CBS)';
+        var comoVendedor = empresa.gera ? 'passa crédito cheio aos clientes que conseguem usar' : (empresa.parcial ? 'passa só crédito parcial (a parcela de IBS/CBS contida no DAS — LC 214, arts. 155 e 156)' : 'não passa crédito aos clientes');
+        setTxt('empresaNarrativa', 'Nesse regime (' + empresa.label + '), como compradora a empresa ' + comoComprador + '; como vendedora, ' + comoVendedor + '.');
+        setTxt('figPremissas', empresa.label);
       }
-      selects.forEach(function (sel) { sel.addEventListener('change', recomputar); });
-      recomputar();
-    })();
-    (function () {
-      // Efeito do regime da própria empresa (como vendedora) no crédito dos clientes.
-      var sel = document.getElementById('selRegimeVendedor');
-      var saida = document.getElementById('vendedorNarrativa');
-      if (!sel || !saida) return;
-      function recomputar() {
-        var info = REGIME_INFO[sel.value] || REGIME_INFO.desconhecido;
-        var n = parseInt(sel.getAttribute('data-n-clientes'), 10) || 0;
-        var alvo = n > 0 ? (n + ' cliente(s) com CNPJ identificados acima') : 'clientes com CNPJ que comprarem dela';
-        saida.textContent = info.credito
-          ? ('Nesse regime (' + info.label + '), as vendas da empresa normalmente passam crédito cheio de IBS/CBS pros ' + alvo + ' — ponto a favor na negociação comercial com quem revende ou industrializa.')
-          : ('Nesse regime (' + info.label + '), as vendas da empresa normalmente NÃO passam crédito amplo de IBS/CBS pros ' + alvo + ' — pode pesar contra em negociação com cliente que revende ou industrializa.');
-      }
-      sel.addEventListener('change', recomputar);
-      recomputar();
-    })();
-    (function () {
-      var campoReceita = document.getElementById('simReceita');
-      if (!campoReceita) return; // tópico do simulador não foi gerado neste relatório
-      var campoAliqAtual = document.getElementById('simAliqAtual');
-      var campoAliqReforma = document.getElementById('simAliqReforma');
-      var corpoTabela = document.getElementById('simCorpo');
-      function simNum(input) {
-        var v = parseFloat(String(input.value).trim().replace(/\\./g, '').replace(',', '.'));
-        return isNaN(v) ? 0 : v;
-      }
-      function simMoeda(v) {
-        return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-      }
-      var CENARIOS = [
-        { label: '100% — repassa o necessário por completo', assertividade: 1 },
-        { label: '80% — repassa parte do necessário', assertividade: 0.8 },
-        { label: '50% — repassa só metade do necessário', assertividade: 0.5 },
-        { label: '0% — mantém o preço atual (não repassa nada)', assertividade: 0 },
-      ];
-      function simRecalcular() {
-        var receita = simNum(campoReceita);
-        var aliqAtual = simNum(campoAliqAtual) / 100;
-        var aliqReforma = simNum(campoAliqReforma) / 100;
+
+      // fornecedores
+      var rowsF = qsa('.sel-regime-fornecedor').map(function (sel) {
+        var tr = sel.closest('tr');
+        var total = parseFloat(sel.getAttribute('data-total')) || 0;
+        var info = infoDe(sel.value);
+        var cred = empresa.usa ? total * (info.gera ? aCompra : (info.parcial ? parcial : 0)) : 0;
+        var pleno = empresa.usa ? total * aCompra : 0;
+        return { tr: tr, nome: tr.querySelector('.ent-n').textContent, total: total, key: sel.value, info: info, cred: cred, perdido: pleno - cred };
+      });
+      var totCompras = 0, credF = 0, perdF = 0;
+      rowsF.forEach(function (r) { totCompras += r.total; credF += r.cred; perdF += r.perdido; });
+      var bF = { pleno: { n: 0, v: 0, c: 0, p: 0 }, parcial: { n: 0, v: 0, c: 0, p: 0 }, sem: { n: 0, v: 0, c: 0, p: 0 }, desc: { n: 0, v: 0, c: 0, p: 0 } };
+      rowsF.forEach(function (r) {
+        r.tr.querySelector('.cred-cell').textContent = fmtMoedaBr(r.cred);
+        r.tr.querySelector('.imp-cell').innerHTML = impForn(r, empresa, perdF > 0 ? r.perdido / perdF : 0);
+        var b = r.key === 'desconhecido' ? bF.desc : (r.info.gera ? bF.pleno : (r.info.parcial ? bF.parcial : bF.sem));
+        b.n++; b.v += r.total; b.c += r.cred; b.p += r.perdido;
+      });
+      setTxt('fornTotalCompras', fmtMoedaBr(totCompras));
+      setTxt('fornCredito', fmtMoedaBr(credF));
+      setTxt('fornCreditoPerdido', fmtMoedaBr(perdF));
+      setTxt('fornPctPerdido', fmtPctBr((credF + perdF) > 0 ? (perdF / (credF + perdF)) * 100 : 0));
+      setTxt('kpiCredito', fmtMoedaBr(credF));
+      setTxt('figForn', fmtMoedaBr(perdF));
+
+      // clientes
+      var rowsC = qsa('.sel-regime-cliente').map(function (sel) {
+        var tr = sel.closest('tr');
+        var total = parseFloat(sel.getAttribute('data-total')) || 0;
+        var info = infoDe(sel.value);
+        var usa = sel.value !== 'desconhecido' && info.usa;
+        var cred = usa ? total * (empresa.gera ? aVenda : (empresa.parcial ? parcial : 0)) : 0;
+        var pleno = usa ? total * aVenda : 0;
+        return { tr: tr, nome: tr.querySelector('.ent-n').textContent, total: total, key: sel.value, info: info, usa: usa, cred: cred, gap: pleno - cred };
+      });
+      var gapTotal = 0, credCli = 0, credCliPleno = 0;
+      var bC = { aprov: { n: 0, v: 0, c: 0, g: 0 }, nao: { n: 0, v: 0, c: 0, g: 0 }, desc: { n: 0, v: 0, c: 0, g: 0 } };
+      rowsC.forEach(function (r) { gapTotal += r.gap; credCli += r.cred; credCliPleno += r.cred + r.gap; });
+      rowsC.forEach(function (r) {
+        r.tr.querySelector('.cli-cred').textContent = fmtMoedaBr(r.cred);
+        r.tr.querySelector('.imp-cell').innerHTML = impCli(r, empresa, gapTotal > 0 ? r.gap / gapTotal : 0);
+        var b = r.key === 'desconhecido' ? bC.desc : (r.usa ? bC.aprov : bC.nao);
+        b.n++; b.v += r.total; b.c += r.cred; b.g += r.gap;
+      });
+      setTxt('cliVendasAprov', fmtMoedaBr(bC.aprov.v));
+      setTxt('cliVendasNao', fmtMoedaBr(bC.nao.v));
+      setTxt('cliVendasDesc', fmtMoedaBr(bC.desc.v));
+      setTxt('cliCredito', fmtMoedaBr(credCli));
+      setTxt('cliCreditoPleno', fmtMoedaBr(credCliPleno));
+      setTxt('cliCreditoDif', fmtMoedaBr(gapTotal));
+      setTxt('figCli', rowsC.length ? fmtMoedaBr(gapTotal) : '—');
+      setTxt('figCadeia', fmtMoedaBr(perdF + gapTotal));
+
+      // cadeia (tabela-resumo por tipo de relação)
+      var fat = RF_DATA.faturamento || 0;
+      var linhas = [];
+      if (RF_DATA.consumidorValor > 0) linhas.push(linhaCadeia('Venda a consumidor final', RF_DATA.consumidorValor, RF_DATA.consumidorPct, '—', 'Sem crédito: o consumidor não aproveita IBS/CBS. Com o imposto por fora o preço final sobe, e o repasse depende de quanto ele aceita.', 'Definir o repasse de preço — veja o simulador.'));
+      if (bC.aprov.n > 0) linhas.push(linhaCadeia('Clientes que aproveitam crédito (' + bC.aprov.n + ')', bC.aprov.v, fat > 0 ? bC.aprov.v / fat * 100 : 0, fmtMoedaBr(bC.aprov.c),
+        empresa.gera ? 'Recebem crédito cheio: sem desvantagem frente a concorrente em Regime Normal.' : 'Recebem só crédito parcial: pagam cerca de ' + fmtMoedaBr(bC.aprov.g) + ' a mais, líquido, que comprando de concorrente em Regime Normal.',
+        empresa.gera ? 'Manter o regime e usar o crédito como argumento comercial.' : 'Avaliar adesão ao regime regular (híbrido) ou migração; preparar resposta caso peçam desconto.'));
+      if (bC.nao.n > 0) linhas.push(linhaCadeia('Clientes que não aproveitam crédito (' + bC.nao.n + ')', bC.nao.v, fat > 0 ? bC.nao.v / fat * 100 : 0, '—', 'Não usam crédito de IBS/CBS: vender com ou sem crédito dá no mesmo.', 'Nada a fazer pelo crédito; o preço final sobe pelo imposto por fora.'));
+      if (bC.desc.n > 0) linhas.push(linhaCadeia('Clientes sem regime identificado (' + bC.desc.n + ')', bC.desc.v, fat > 0 ? bC.desc.v / fat * 100 : 0, '—', 'Não dá pra saber se aproveitam crédito.', 'Consultar a Receita e confirmar o regime.'));
+      if (bF.pleno.n > 0) linhas.push(linhaCadeia('Fornecedores com crédito cheio (' + bF.pleno.n + ')', bF.pleno.v, totCompras > 0 ? bF.pleno.v / totCompras * 100 : 0, fmtMoedaBr(bF.pleno.c),
+        empresa.usa ? 'O IBS/CBS da compra volta integralmente como crédito.' : 'Geram crédito, mas a empresa não aproveita (' + esc2(empresa.label) + ').', empresa.usa ? 'Manter e priorizar nas compras.' : 'Avaliar migrar pro regime regular — o crédito já está disponível nesses fornecedores.'));
+      if (bF.parcial.n > 0) linhas.push(linhaCadeia('Fornecedores Simples puro (' + bF.parcial.n + ')', bF.parcial.v, totCompras > 0 ? bF.parcial.v / totCompras * 100 : 0, fmtMoedaBr(bF.parcial.c),
+        empresa.usa ? 'Crédito só da parcela do DAS (estimado em ' + fmtPctBr(parcial * 100) + '% da compra): deixa de creditar cerca de ' + fmtMoedaBr(bF.parcial.p) + '.' : 'Sem efeito: a empresa não aproveita crédito.',
+        empresa.usa ? 'Renegociar preço, pedir adesão ao regime regular ou migrar compras para fornecedor em Regime Normal.' : '—'));
+      if (bF.sem.n > 0) linhas.push(linhaCadeia('Fornecedores MEI (' + bF.sem.n + ')', bF.sem.v, totCompras > 0 ? bF.sem.v / totCompras * 100 : 0, fmtMoedaBr(bF.sem.c),
+        empresa.usa ? 'Sem crédito (regra do MEI a confirmar): todo o IBS/CBS embutido vira custo, cerca de ' + fmtMoedaBr(bF.sem.p) + '.' : 'Sem efeito: a empresa não aproveita crédito.',
+        empresa.usa ? 'Avaliar preço ou fornecedor alternativo em Regime Normal.' : '—'));
+      if (bF.desc.n > 0) linhas.push(linhaCadeia('Fornecedores sem regime identificado (' + bF.desc.n + ')', bF.desc.v, totCompras > 0 ? bF.desc.v / totCompras * 100 : 0, '—', 'Não dá pra contar com o crédito sem saber o regime.', 'Consultar a Receita e confirmar com o fornecedor.'));
+      setHtml('cadeiaCorpo', linhas.length ? linhas.join('') : '<tr><td colspan="6" class="t-txt">Sem relações identificadas nas notas carregadas.</td></tr>');
+
+      // simulador
+      var corpo = document.getElementById('simCorpo');
+      var receita = 0, aliqAtual = 0, preco100 = 0, cred = 0;
+      if (corpo) {
+        receita = numDe('simReceita', 0);
+        aliqAtual = numDe('simAliqAtual', 0) / 100;
+        var campoCred = document.getElementById('simCredito');
+        var credMensal = RF_DATA.numMeses > 0 ? credF / RF_DATA.numMeses : 0;
+        if (campoCred && !campoCred.getAttribute('data-manual')) campoCred.value = fmtNumBr(credMensal);
+        cred = campoCred ? numDe('simCredito', 0) : 0;
+        var aviso = document.getElementById('simAviso');
+        if (!empresa.usa) {
+          cred = 0;
+          if (aviso) { aviso.style.display = 'block'; aviso.textContent = 'Regime sem apuração regular de IBS/CBS (' + empresa.label + '): o tributo continua no DAS e não há crédito de compras — o crédito fica zerado aqui. Use em "Alíquota de referência" a alíquota efetiva do DAS, não a do IVA cheio.'; }
+        } else if (aviso) { aviso.style.display = 'none'; aviso.textContent = ''; }
+        var aEff = aVenda < 1 ? aVenda : 0;
         var margemAtual = receita * (1 - aliqAtual);
-        var precoNecessario100 = aliqReforma < 1 ? margemAtual / (1 - aliqReforma) : receita;
-        var linhas = CENARIOS.map(function (c) {
-          var precoEfetivo = receita + c.assertividade * (precoNecessario100 - receita);
-          var tributoEfetivo = precoEfetivo * aliqReforma;
-          var margemEfetiva = precoEfetivo - tributoEfetivo;
-          var diff = margemEfetiva - margemAtual;
-          var corDiff = diff >= 0 ? '#1E5A3D' : '#B3261E';
+        preco100 = (margemAtual - cred) / (1 - aEff);
+        var saldoCredor = empresa.usa && aEff > 0 && cred > receita * aEff + 0.005;
+        if (saldoCredor && aviso) {
+          aviso.style.display = 'block';
+          aviso.textContent = 'O crédito de compras (' + fmtMoedaBr(cred) + ' por mês) supera o débito de IBS/CBS sobre a receita (' + fmtMoedaBr(receita * aEff) + '): confira se receita e compras cobrem o mesmo período e a mesma empresa — notas de compra de um período maior que as de venda causam isso. Se for real, há saldo credor e nenhum aumento de preço a repassar.';
+        }
+        corpo.innerHTML = !(preco100 > 0) ? '<tr><td colspan="6" class="t-txt">Sem cenário calculável: o crédito de compras anula o débito (saldo credor).</td></tr>' : CENARIOS.map(function (c) {
+          var preco = receita + c.assertividade * (preco100 - receita);
+          var debito = preco * aEff;
+          var margem = preco - debito + cred;
+          var diff = margem - margemAtual;
           var sinal = diff >= 0 ? '+' : '';
           return '<tr><td>' + c.label + '</td>' +
-            '<td class="num">' + simMoeda(precoEfetivo) + '</td>' +
-            '<td class="num">' + simMoeda(tributoEfetivo) + '</td>' +
-            '<td class="num">' + simMoeda(margemEfetiva) + '</td>' +
-            '<td class="num" style="color:' + corDiff + '">' + sinal + simMoeda(diff) + '</td></tr>';
-        });
-        corpoTabela.innerHTML = linhas.join('');
+            '<td class="num">' + fmtMoedaBr(preco) + '</td>' +
+            '<td class="num">' + fmtMoedaBr(debito) + '</td>' +
+            '<td class="num">' + fmtMoedaBr(cred) + '</td>' +
+            '<td class="num">' + fmtMoedaBr(margem) + '</td>' +
+            '<td class="num' + (diff < -0.005 ? ' neg' : '') + '">' + sinal + fmtMoedaBr(diff) + '</td></tr>';
+        }).join('');
+        var resumo = document.getElementById('simResumo');
+        if (resumo && receita > 0 && !(preco100 > 0)) {
+          resumo.innerHTML = 'Com esse crédito de compras não há aumento de preço a repassar.<small>Revise a receita, as compras ou o regime acima.</small>';
+          setTxt('figSim', '—');
+        } else if (resumo && receita > 0) {
+          var subiu = preco100 - receita;
+          var pctUp = (preco100 / receita - 1) * 100;
+          resumo.innerHTML = 'Para manter a margem de hoje, o preço médio precisa ' + (subiu >= 0 ? 'subir ' : 'cair ') + '<b>' + fmtPctBr(Math.abs(pctUp)) + '%</b> (' + fmtMoedaBr(Math.abs(subiu)) + ' por mês).' +
+            (aliqAtual === 0 ? '<small>A alíquota atual está em 0%: informe a carga de hoje (DAS, Presumido ou Real) pra comparação fazer sentido.</small>' : '');
+          setTxt('figSim', aliqAtual === 0 ? '—' : (subiu >= 0 ? '+' : '−') + fmtPctBr(Math.abs(pctUp)) + '%');
+        }
       }
-      [campoReceita, campoAliqAtual, campoAliqReforma].forEach(function (campo) {
-        campo.addEventListener('input', simRecalcular);
+
+      // leituras-chave
+      var it = [];
+      function ins(cls, rotulo, texto) { it.push('<div class="ins"><div class="tg">' + tag(cls, rotulo) + '</div><div class="tx">' + texto + '</div></div>'); }
+      if (!empresa.usa && empresa.label !== 'Não identificado') ins('alta', 'Prioridade', '<b>Regime da empresa.</b> Como ' + esc2(empresa.label) + ', a empresa não aproveita crédito de fornecedor. Vale simular a migração para o regime regular (Presumido, Real ou Simples híbrido): com crédito, o custo líquido das compras cai.');
+      if (empresa.usa && rowsF.length) ins(perdF / Math.max(credF + perdF, 1) >= 0.2 ? 'media' : 'info', 'Crédito', '<b>Crédito de compras.</b> Cerca de <b>' + fmtMoedaBr(credF) + '</b> de IBS/CBS voltam como crédito sobre ' + fmtMoedaBr(totCompras) + ' em compras listadas. Deixa de aproveitar <b>' + fmtMoedaBr(perdF) + '</b> (' + fmtPctBr((credF + perdF) > 0 ? perdF / (credF + perdF) * 100 : 0) + '% do crédito cheio possível) por causa do regime de fornecedores.');
+      var topP = rowsF.filter(function (r) { return r.perdido > 0.005; }).sort(function (a, b) { return b.perdido - a.perdido; }).slice(0, 3);
+      if (empresa.usa && topP.length) ins('alta', 'Renegociar', '<b>Fornecedores que mais custam crédito:</b> ' + topP.map(function (r) { return esc2(r.nome) + ' (' + fmtMoedaBr(r.perdido) + ')'; }).join(', ') + '. Candidatos a pedir adesão ao regime regular, desconto equivalente ao crédito perdido ou troca por fornecedor em Regime Normal.');
+      if (gapTotal > 0.005 && !empresa.gera) ins('media', 'Risco comercial', '<b>Clientes que aproveitam crédito</b> recebem só ' + fmtMoedaBr(credCli) + ' dos ' + fmtMoedaBr(credCliPleno) + ' possíveis: pagam cerca de <b>' + fmtMoedaBr(gapTotal) + '</b> a mais, líquido, que comprando de concorrente em Regime Normal.');
+      var nDesc = bF.desc.n + bC.desc.n;
+      if (nDesc > 0) ins('media', 'Confirmar regime', '<b>' + nDesc + ' cadastro(s) sem regime identificado</b> (fornecedores e clientes). Use "Atualizar consulta à Receita Federal" nas tabelas ou confirme direto — enquanto isso, ficam fora do crédito.');
+      var nDiv = qsa('.cam-div').length;
+      if (nDiv > 0) ins('media', 'Divergência', '<b>' + nDiv + ' cadastro(s) em que o CRT da nota e a Receita divergem</b> (vale a Receita). Vale conferir se o fornecedor ou cliente mudou de regime.');
+      if (RF_DATA.consumidorValor > 0) ins('info', 'Consumidor final', '<b>' + fmtPctBr(RF_DATA.consumidorPct) + '% das vendas</b> (' + fmtMoedaBr(RF_DATA.consumidorValor) + ') são a consumidor final: crédito não entra nessa venda — o que decide é quanto do imposto por fora o cliente aceita no preço (veja o simulador).');
+      if (RF_DATA.temSaidas && RF_DATA.fatorReceitaMix < 0.995) ins('info', 'Alíquota reduzida', 'Em média a receita paga <b>' + fmtPctBr(RF_DATA.fatorReceitaMix * 100) + '% da alíquota cheia</b>: há itens com alíquota zero ou reduzida no cClassTrib das vendas.');
+      if (RF_DATA.temSaidas && RF_DATA.coberturaSaidas < 90) ins('media', 'Cobertura', 'Só <b>' + fmtPctBr(RF_DATA.coberturaSaidas) + '%</b> do valor das vendas tem o grupo IBS/CBS preenchido; o resto foi assumido em alíquota cheia, então o mix é em parte suposição.');
+      setHtml('insights', it.length ? it.join('') : '<div class="nota">Sem pontos de atenção com as premissas atuais.</div>');
+      setTxt('figLeituras', String(it.length));
+    }
+
+    // Segunda camada de verificação do regime: Receita Federal via BrasilAPI,
+    // atualização por clique, uma consulta de cada vez, com timeout — a Receita
+    // prevalece sobre o CRT quando divergem em "é Simples?".
+    function chaveCrt(crt) { return crt === '1' || crt === '2' ? 'simples_puro' : crt === '4' ? 'mei' : crt === '3' ? 'presumido' : 'desconhecido'; }
+    function ehSimplesKey(k) { return k === 'simples_puro' || k === 'mei'; }
+    function mapeiaApi(d) {
+      if (d.opcao_pelo_mei === true) return { key: 'mei', txt: 'MEI' };
+      if (d.opcao_pelo_simples === true) return { key: 'simples_puro', txt: 'Optante do Simples' };
+      if (d.opcao_pelo_simples === false) return { key: 'presumido', txt: 'Não optante do Simples' };
+      if (d.opcao_pelo_simples === null || d.opcao_pelo_simples === undefined) return { key: 'presumido', txt: d.porte && d.porte !== 'DEMAIS' ? 'Sem opção pelo Simples (confirmar)' : 'Sem opção pelo Simples' };
+      return null;
+    }
+    function aplicaApi(sel, cel, crt, d) {
+      var m = mapeiaApi(d);
+      var spanRf = cel.querySelector('.cam-rf');
+      if (!m) { if (spanRf) spanRf.textContent = 'Receita: sem informação do Simples'; return; }
+      if (spanRf) spanRf.textContent = 'Receita: ' + m.txt;
+      var diverge = !!crt && ehSimplesKey(chaveCrt(crt)) !== ehSimplesKey(m.key);
+      var divEl = cel.querySelector('.cam-div');
+      if (diverge && !divEl) { divEl = document.createElement('div'); divEl.className = 'cam-div'; cel.appendChild(divEl); }
+      if (divEl) divEl.textContent = diverge ? '⚠ CRT da nota e Receita divergem — vale a Receita (cadastro atual)' : '';
+      if (!sel.getAttribute('data-manual')) sel.value = m.key;
+    }
+    function consultarLote(classeSel, btn) {
+      var sels = qsa('.' + classeSel);
+      var statusEl = document.getElementById('consultaStatus-' + classeSel);
+      var i = 0, ok = 0, falha = 0;
+      btn.disabled = true;
+      function proximo() {
+        if (i >= sels.length) {
+          btn.disabled = false;
+          if (statusEl) statusEl.textContent = 'Concluído: ' + ok + ' consultado(s), ' + falha + ' falha(s).';
+          recalcReforma();
+          return;
+        }
+        var sel = sels[i++];
+        var cel = sel.closest('tr').querySelector('.cam-cell');
+        var cnpj = cel.getAttribute('data-cnpj');
+        var crt = cel.getAttribute('data-crt');
+        if (statusEl) statusEl.textContent = 'Consultando ' + i + ' de ' + sels.length + '...';
+        var ctl = new AbortController();
+        var t = setTimeout(function () { ctl.abort(); }, 10000);
+        fetch('https://brasilapi.com.br/api/cnpj/v1/' + cnpj, { signal: ctl.signal })
+          .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+          .then(function (d) { clearTimeout(t); aplicaApi(sel, cel, crt, d); ok++; })
+          .catch(function () { clearTimeout(t); falha++; })
+          .then(function () { setTimeout(proximo, 350); });
+      }
+      proximo();
+    }
+    function abreSecao(id) { var d = document.getElementById(id); if (d && d.tagName === 'DETAILS') d.open = true; }
+    (function () {
+      qsa('.rf-in').forEach(function (el) {
+        el.addEventListener('input', recalcReforma);
+        el.addEventListener('change', recalcReforma);
       });
-      simRecalcular();
+      qsa('.sel-regime-fornecedor, .sel-regime-cliente').forEach(function (el) {
+        el.addEventListener('change', function () { el.setAttribute('data-manual', '1'); });
+      });
+      var campoCred = document.getElementById('simCredito');
+      if (campoCred) campoCred.addEventListener('input', function () { campoCred.setAttribute('data-manual', '1'); recalcReforma(); });
+      var btnAuto = document.getElementById('btnCreditoAuto');
+      if (btnAuto && campoCred) btnAuto.addEventListener('click', function () { campoCred.removeAttribute('data-manual'); recalcReforma(); });
+      qsa('.btn-consulta-rf').forEach(function (btn) {
+        btn.addEventListener('click', function () { consultarLote(btn.getAttribute('data-alvo'), btn); });
+      });
+      qsa('.btn-mais').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var corpo = btn.closest('.sec-corpo');
+          var aberto = corpo.classList.toggle('mostra-tudo');
+          btn.textContent = aberto ? 'Mostrar só os 10 maiores' : 'Mostrar todos os ' + btn.getAttribute('data-n');
+        });
+      });
+      qsa('.top nav a').forEach(function (a) {
+        a.addEventListener('click', function () { abreSecao(a.getAttribute('data-sec')); });
+      });
+      var bE = document.getElementById('btnExpandir'), bR = document.getElementById('btnRecolher');
+      if (bE) bE.addEventListener('click', function () { qsa('details.sec').forEach(function (d) { d.open = true; }); });
+      if (bR) bR.addEventListener('click', function () { qsa('details.sec').forEach(function (d) { d.open = false; }); });
+      recalcReforma();
     })();
     function baixarExcelTopico(id, nomeBase) {
       var t = DADOS[id];
@@ -7947,7 +8263,7 @@ ${htmlNomeDuplicado}
               />
             </div>
             <p className="text-center max-w-md" style={{color: 'rgba(255,255,255,0.6)'}}>
-              {exportProgress.etapa} — {exportProgress.atual} de {exportProgress.total} notas
+              {exportProgress.etapa} — {exportProgress.atual} de {exportProgress.total} {exportProgress.etapa.startsWith('Consultando') ? 'consultas' : 'notas'}
             </p>
             <button
               onClick={() => setShowEasterEgg(true)}
@@ -8276,7 +8592,7 @@ ${htmlNomeDuplicado}
                   onClick={exportarRelatorioAlertasHtml}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all shrink-0"
                   style={{background: 'rgba(201,162,39,0.18)', border: '1px solid rgba(201,162,39,0.5)', color: '#C9A227'}}
-                  title="Baixa um HTML completo (clientes, produtos, sazonalidade, IBS/CBS e TEF) — tópicos expansíveis, pronto pra entender o cliente de ponta a ponta"
+                  title="Baixa o perfil do cliente em HTML (clientes, fornecedores, produtos, sazonalidade e Reforma Tributária: regime, créditos e simulação) — tópicos expansíveis, pra orientar o cliente"
                 >
                   <Users className="w-4 h-4" />
                   Perfil do Cliente
@@ -11208,7 +11524,7 @@ ${htmlNomeDuplicado}
                         <button
                           onClick={exportarRelatorioAlertasHtml}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
-                          title="Baixa o Perfil do Cliente completo em HTML (clientes, produtos, sazonalidade, IBS/CBS e TEF) — tópicos expansíveis, prontos pra mandar pra analista/superior"
+                          title="Baixa o Perfil do Cliente em HTML (clientes, fornecedores, produtos, sazonalidade e Reforma Tributária) — tópicos expansíveis, pra orientar o cliente"
                         >
                           <Download className="w-3 h-3" />
                           Exportar Perfil do Cliente
@@ -11748,7 +12064,7 @@ ${htmlNomeDuplicado}
                         <button
                           onClick={exportarRelatorioAlertasHtml}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
-                          title="Baixa o Perfil do Cliente completo em HTML (clientes, produtos, sazonalidade, IBS/CBS e TEF) — tópicos expansíveis, prontos pra mandar pra analista/superior"
+                          title="Baixa o Perfil do Cliente em HTML (clientes, fornecedores, produtos, sazonalidade e Reforma Tributária) — tópicos expansíveis, pra orientar o cliente"
                         >
                           <Download className="w-3 h-3" />
                           Exportar Perfil do Cliente
