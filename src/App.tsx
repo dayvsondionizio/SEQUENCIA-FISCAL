@@ -1730,6 +1730,10 @@ export default function App() {
   const [showPrintMenu, setShowPrintMenu] = useState(false);
   const [tipoRelatorioPDF, setTipoRelatorioPDF] = useState<'resumido' | 'completo'>('resumido');
   const [exportProgress, setExportProgress] = useState<{ atual: number; total: number; etapa: string; titulo?: string } | null>(null);
+  // Janela que só aparece ao gerar o Perfil do Cliente quando a empresa é do Simples: o app não consegue
+  // ver se ela optou pelo regime regular de IBS/CBS (híbrido), então o contador responde aqui e o HTML já sai fechado.
+  const [confirmaSimples, setConfirmaSimples] = useState<{ crtTxt: string; receitaTxt: string; diverge: boolean } | null>(null);
+  const [modoSimplesEscolhido, setModoSimplesEscolhido] = useState<'duvida' | 'puro' | 'hibrido'>('duvida');
   const [showExportXmlMenu, setShowExportXmlMenu] = useState(false);
   const [exportPartes, setExportPartes] = useState(1);
   const [notaSearchQuery, setNotaSearchQuery] = useState('');
@@ -3614,7 +3618,7 @@ ${secoesPorCodigo}
   // na fase de teste da Reforma). Não é o crédito EFETIVO (isso depende do
   // regime da própria empresa auditada — Simples normalmente não aproveita
   // crédito de ICMS, por exemplo), só o que está destacado na nota.
-  type FornecedorPerfil = ClientePerfil & { crtDeclarado: string; crtDeclaradoLabel: string; totalIcmsDestacado: number; totalIbsDestacado: number };
+  type FornecedorPerfil = ClientePerfil & { crtDeclarado: string; crtDeclaradoLabel: string; totalIcmsDestacado: number; totalIbsDestacado: number; sinalIcmsFora: string };
   const perfilFornecedores = useMemo(() => {
     const vazio: { fornecedores: FornecedorPerfil[]; totalConsiderado: number } = { fornecedores: [], totalConsiderado: 0 };
     if (!mainCnpj) return vazio;
@@ -3625,6 +3629,9 @@ ${secoesPorCodigo}
       porMes: Map<string, { valor: number; quantidade: number }>;
       crtDeclarado: string; crtData: string; // crt da nota mais recente vista até agora
       totalIcmsDestacado: number; totalIbsDestacado: number;
+      // sinais de ICMS fora do DAS declarados pelo próprio emitente (nunca inferidos de ausência de ICMS):
+      // CRT 2 (Simples com excesso de sublimite) ou ICMS destacado por CST em emitente do Simples (CRT 1/2)
+      sinalCrt2: boolean; sinalCst: boolean;
     };
     const mapa = new Map<string, AcumFornecedor>();
     xmlList.forEach(xml => {
@@ -3637,19 +3644,21 @@ ${secoesPorCodigo}
       let valorNota = 0;
       let icmsNota = 0;
       let ibsNota = 0;
+      let cstTributado = false;
       const produtosDaNota: { cProd: string; xProd: string; valor: number }[] = [];
       ex.dets.forEach(det => {
         if (!det.cProd) return;
         valorNota += det.vProd;
         icmsNota += det.vICMS || 0;
         ibsNota += det.vIBS || 0;
+        if (det.icmsTemCst && (det.vICMS || 0) > 0 && (ex.crt === '1' || ex.crt === '2')) cstTributado = true;
         produtosDaNota.push({ cProd: det.cProd, xProd: det.xProd, valor: det.vProd });
       });
       if (valorNota <= 0) return;
 
       let f = mapa.get(xml.emitCnpj);
       if (!f) {
-        f = { nome: xml.emitNome || '(sem nome)', quantidadeNotas: 0, totalComprado: 0, primeiraCompra: xml.data || '', ultimaCompra: xml.data || '', produtos: new Map(), porMes: new Map(), crtDeclarado: '', crtData: '', totalIcmsDestacado: 0, totalIbsDestacado: 0 };
+        f = { nome: xml.emitNome || '(sem nome)', quantidadeNotas: 0, totalComprado: 0, primeiraCompra: xml.data || '', ultimaCompra: xml.data || '', produtos: new Map(), porMes: new Map(), crtDeclarado: '', crtData: '', totalIcmsDestacado: 0, totalIbsDestacado: 0, sinalCrt2: false, sinalCst: false };
         mapa.set(xml.emitCnpj, f);
       }
       if (xml.emitNome) f.nome = xml.emitNome;
@@ -3657,6 +3666,8 @@ ${secoesPorCodigo}
       f.totalComprado += valorNota;
       f.totalIcmsDestacado += icmsNota;
       f.totalIbsDestacado += ibsNota;
+      if (ex.crt === '2') f.sinalCrt2 = true;
+      if (cstTributado) f.sinalCst = true;
       if (xml.data && (!f.primeiraCompra || xml.data < f.primeiraCompra)) f.primeiraCompra = xml.data;
       if (xml.data && (!f.ultimaCompra || xml.data > f.ultimaCompra)) f.ultimaCompra = xml.data;
       // Mantém o CRT da nota mais RECENTE — regime declarado hoje importa
@@ -3682,7 +3693,7 @@ ${secoesPorCodigo}
         ticketMedio: f.quantidadeNotas > 0 ? f.totalComprado / f.quantidadeNotas : 0,
         primeiraCompra: f.primeiraCompra, ultimaCompra: f.ultimaCompra,
         crtDeclarado: f.crtDeclarado, crtDeclaradoLabel: crtLabel[f.crtDeclarado] || (f.crtDeclarado ? `CRT ${f.crtDeclarado}` : '—'),
-        totalIcmsDestacado: f.totalIcmsDestacado, totalIbsDestacado: f.totalIbsDestacado,
+        totalIcmsDestacado: f.totalIcmsDestacado, totalIbsDestacado: f.totalIbsDestacado, sinalIcmsFora: f.sinalCrt2 ? 'crt2' : f.sinalCst ? 'cst' : '',
         produtos: Array.from(f.produtos.values())
           .sort((a, b) => b.valor - a.valor)
           .slice(0, 5),
@@ -3709,12 +3720,14 @@ ${secoesPorCodigo}
     total: number; comGrupo: number; coberturaPct: number; fator: number;
     porCodigo: { code: string; nome: string; efeito: string; valor: number }[];
     porMes: { mes: string; pct: number }[];
+    // maiores produtos vendidos e o cClassTrib que o emissor usa neles (o dominante por valor); só no lado das saídas
+    topProdutos: { xProd: string; valor: number; code: string; nome: string; efeito: string; nCodigos: number }[];
   };
   const mixAliquotas = useMemo(() => {
-    const lado = () => ({ total: 0, comGrupo: 0, somaFator: 0, codigos: new Map<string, { nome: string; efeito: string; valor: number }>(), meses: new Map<string, { total: number; comGrupo: number }>() });
+    const lado = () => ({ total: 0, comGrupo: 0, somaFator: 0, codigos: new Map<string, { nome: string; efeito: string; valor: number }>(), meses: new Map<string, { total: number; comGrupo: number }>(), produtos: new Map<string, { xProd: string; valor: number; codigos: Map<string, number> }>() });
     const acum = { saidas: lado(), entradas: lado() };
     if (!mainCnpj) {
-      const vazio: MixLado = { total: 0, comGrupo: 0, coberturaPct: 0, fator: 1, porCodigo: [], porMes: [] };
+      const vazio: MixLado = { total: 0, comGrupo: 0, coberturaPct: 0, fator: 1, porCodigo: [], porMes: [], topProdutos: [] };
       return { saidas: vazio, entradas: vazio };
     }
     const PESO_IBS = 17.7 / 26.5;
@@ -3737,6 +3750,14 @@ ${secoesPorCodigo}
         mm.total += v;
         if (det.temIbsCbs) mm.comGrupo += v;
         a!.meses.set(mesChave, mm);
+        if (a === acum.saidas) {
+          const pk = det.cProd || det.xProd || '(sem código)';
+          const pr = a.produtos.get(pk) || { xProd: det.xProd || '(sem descrição)', valor: 0, codigos: new Map<string, number>() };
+          const ck = det.temIbsCbs ? (det.cClassTrib || '(sem cClassTrib)') : 'sem-grupo';
+          pr.valor += v;
+          pr.codigos.set(ck, (pr.codigos.get(ck) || 0) + v);
+          a.produtos.set(pk, pr);
+        }
         if (!det.temIbsCbs) {
           a!.somaFator += v;
           const sem = a!.codigos.get('sem-grupo') || { nome: 'Item sem o grupo IBS/CBS (assumido em alíquota cheia)', efeito: 'Integral (suposição)', valor: 0 };
@@ -3769,6 +3790,14 @@ ${secoesPorCodigo}
         .filter(([chave]) => chave.length === 7)
         .sort(([x], [y]) => x.localeCompare(y))
         .map(([chave, m]) => ({ mes: getMonthYear(chave), pct: m.total > 0 ? (m.comGrupo / m.total) * 100 : 0 })),
+      topProdutos: Array.from(a.produtos.values())
+        .sort((x, y) => y.valor - x.valor)
+        .slice(0, 15)
+        .map(p => {
+          const code = Array.from(p.codigos.entries()).sort((x, y) => y[1] - x[1])[0]?.[0] || 'sem-grupo';
+          const cod = a.codigos.get(code);
+          return { xProd: p.xProd, valor: p.valor, code, nome: cod ? cod.nome : '', efeito: cod ? cod.efeito : 'Integral (suposição)', nCodigos: p.codigos.size };
+        }),
     });
     return { saidas: fecha(acum.saidas), entradas: fecha(acum.entradas) };
   }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
@@ -4617,6 +4646,40 @@ ${htmlNomeDuplicado}
     };
   }, [xmlList, filterMes]);
 
+  // Clique em "Perfil do Cliente": consulta a Receita (BrasilAPI) só do CNPJ da empresa e, SE ela for do
+  // Simples, abre a janela perguntando "puro ou híbrido?" (única dúvida que nenhuma camada resolve). Para
+  // qualquer outro regime gera direto — nada a confirmar.
+  const abrirPerfilCliente = async () => {
+    if (exportProgress) return;
+    if (!mainCnpj) { exportarRelatorioAlertasHtml(); return; }
+    const emCache = consultaClientesCnpj[mainCnpj];
+    let dados: PerfilClienteReceitaDados | undefined = emCache && emCache.status === 'ok' ? emCache.dados : undefined;
+    if (!dados) {
+      setExportProgress({ atual: 0, total: 1, etapa: 'Consultando a Receita Federal (BrasilAPI)', titulo: 'Perfil do Cliente' });
+      try {
+        dados = await buscarDadosCnpj(mainCnpj, 8000);
+        const novo = dados;
+        setConsultaClientesCnpj(prev => ({ ...prev, [mainCnpj]: { status: 'ok', dados: novo } }));
+      } catch { /* sem Receita: vale o CRT da nota */ }
+      setExportProgress(null);
+    }
+    const crt = regimeTributario.crt;
+    const simplesCrt = crt === '1' || crt === '2';
+    // mesma regra do relatório: a Receita vale mais que o CRT quando discordam sobre "é Simples?"
+    let ehSimples = simplesCrt;
+    let receitaTxt = 'não consultada';
+    if (dados) {
+      if (dados.opcaoMei === true) { ehSimples = false; receitaTxt = 'MEI'; }
+      else if (dados.opcaoSimples === true) { ehSimples = true; receitaTxt = 'Optante do Simples'; }
+      else if (dados.opcaoSimples === false) { ehSimples = false; receitaTxt = 'Não optante do Simples'; }
+      else if (dados.opcaoSimples === null) { ehSimples = false; receitaTxt = 'Sem opção pelo Simples'; }
+      else receitaTxt = 'sem informação do Simples';
+    }
+    if (!ehSimples) { exportarRelatorioAlertasHtml(); return; }
+    setModoSimplesEscolhido('duvida');
+    setConfirmaSimples({ crtTxt: crt ? (crtLabel[crt] || `CRT ${crt}`) : 'sem CRT', receitaTxt, diverge: !!crt && !simplesCrt });
+  };
+
   // Relatório de Alertas (IBS/CBS + TEF): HTML autocontido, baixável (não é
   // janela de impressão como o Laudo/Mapa Fiscal) — feito pra ser anexado e
   // mandado pra analista/superior. Cada assunto vira um "tópico" (severidade
@@ -4631,7 +4694,7 @@ ${htmlNomeDuplicado}
   // cliente num só documento: quem compra dele, o que ele vende, quando vende
   // mais, e os alertas de conformidade — tudo com tópicos que minimizam/
   // maximizam, pra não afogar quem só precisa de uma visão geral primeiro.
-  const exportarRelatorioAlertasHtml = async () => {
+  const exportarRelatorioAlertasHtml = async (opcoes?: { modoSimples?: 'duvida' | 'puro' | 'hibrido' }) => {
     if (exportProgress) return; // já há uma exportação em andamento (esta ou outra)
     // Camada 2 da verificação de regime (a camada 1 é o CRT da nota): antes de
     // montar o relatório, consulta a Receita Federal (BrasilAPI) dos maiores
@@ -4678,7 +4741,11 @@ ${htmlNomeDuplicado}
       linhas?: (string | number)[][];
     };
 
-    const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Alguns emissores gravam o acento como entidade HTML literal dentro do XML ("REQUEIJ&Atilde;O");
+    // decodifica antes de escapar, senão o relatório mostra o "&Atilde;" cru.
+    const ENTIDADES: Record<string, string> = { Atilde: 'Ã', atilde: 'ã', Otilde: 'Õ', otilde: 'õ', Aacute: 'Á', aacute: 'á', Eacute: 'É', eacute: 'é', Iacute: 'Í', iacute: 'í', Oacute: 'Ó', oacute: 'ó', Uacute: 'Ú', uacute: 'ú', Acirc: 'Â', acirc: 'â', Ecirc: 'Ê', ecirc: 'ê', Ocirc: 'Ô', ocirc: 'ô', Agrave: 'À', agrave: 'à', Ccedil: 'Ç', ccedil: 'ç', Uuml: 'Ü', uuml: 'ü', quot: '"', apos: "'", nbsp: ' ' };
+    const decodeEnt = (s: string) => s.replace(/&#(\d+);/g, (_m, n) => String.fromCharCode(Number(n))).replace(/&([A-Za-z]+);/g, (m, n) => ENTIDADES[n] ?? m);
+    const esc = (s: unknown) => decodeEnt(String(s ?? '')).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const empresa = analysis?.[0]?.razaoSocial || notasSaida[0]?.razaoSocial || '';
     const periodo = periodoParaNomeArquivo();
     const hoje = new Date().toLocaleDateString('pt-BR');
@@ -4771,8 +4838,14 @@ ${htmlNomeDuplicado}
     // (4) crédito exige as duas pontas: o vendedor precisa gerar E o comprador
     //     precisa poder usar (regime regular). Fornecedor Simples puro NÃO gera
     //     crédito zero: o comprador aproveita só a parcela de IBS/CBS contida
-    //     no DAS (LC 214/2025, arts. 155 e 156) — parâmetro "parcial".
-    const REGIME_OPCOES: { key: string; label: string; gera: boolean; usa: boolean; parcial: boolean }[] = [
+    //     no DAS (LC 214/2025, art. 47, §9º, II, e LC 123/2006, art. 23, §1º-A e §2º)
+    //     — parâmetro "parcial". (Os arts. 155 e 156 da LC 214 NÃO tratam disso: um é
+    //     sobre automóvel de pessoa com deficiência, o outro sobre P&D de ICT.)
+    // (5) o app NÃO sabe se um optante do Simples escolheu o regime regular de IBS/CBS
+    //     (híbrido, LC 214 art. 41 §3º): vira "a confirmar" e o relatório mostra os dois lados.
+    const REGIME_OPCOES: { key: string; label: string; gera: boolean; usa: boolean; parcial: boolean; duvida?: boolean }[] = [
+      // "a confirmar" se comporta como puro nas contas (hipótese conservadora) e liga a comparação puro × híbrido
+      { key: 'simples_duvida', label: 'Simples Nacional (a confirmar)', gera: false, usa: false, parcial: true, duvida: true },
       { key: 'simples_puro', label: 'Simples Nacional (puro)', gera: false, usa: false, parcial: true },
       { key: 'simples_hibrido', label: 'Simples Nacional (híbrido/regular)', gera: true, usa: true, parcial: false },
       { key: 'mei', label: 'MEI', gera: false, usa: false, parcial: false },
@@ -4780,13 +4853,14 @@ ${htmlNomeDuplicado}
       { key: 'real', label: 'Lucro Real', gera: true, usa: true, parcial: false },
       { key: 'desconhecido', label: 'Não identificado', gera: false, usa: false, parcial: false },
     ];
-    const regimeKeyPorCrt = (crt: string): string => crt === '1' || crt === '2' ? 'simples_puro' : crt === '4' ? 'mei' : crt === '3' ? 'presumido' : 'desconhecido';
+    const regimeKeyPorCrt = (crt: string): string => crt === '1' || crt === '2' ? 'simples_duvida' : crt === '4' ? 'mei' : crt === '3' ? 'presumido' : 'desconhecido';
+    const ehKeySimples = (k: string) => k === 'simples_duvida' || k === 'simples_puro' || k === 'simples_hibrido';
     const labelRegime = (key: string) => REGIME_OPCOES.find(o => o.key === key)?.label || key;
     const opcoesSelectHtml = (defaultKey: string) => REGIME_OPCOES.map(o => `<option value="${o.key}"${o.key === defaultKey ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
     const numMesesRef = filterMes === 'Todos' ? Math.max(mesesDisponiveis.length, 1) : 1;
     const nl = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-    const sugestaoRegime = (cnpj: string, crt: string): { key: string; crtTxt: string; receitaTxt: string; divergencia: string } => {
+    const sugestaoRegimeBase = (cnpj: string, crt: string): { key: string; crtTxt: string; receitaTxt: string; divergencia: string } => {
       const keyCrt = regimeKeyPorCrt(crt);
       const crtTxt = crt ? (crtLabel[crt] || `CRT ${crt}`) : 'sem CRT';
       const d = cacheRegime[cnpj];
@@ -4794,7 +4868,7 @@ ${htmlNomeDuplicado}
         let keyApi: string | null = null;
         let txt = '';
         if (d.opcaoMei === true) { keyApi = 'mei'; txt = 'MEI'; }
-        else if (d.opcaoSimples === true) { keyApi = 'simples_puro'; txt = 'Optante do Simples'; }
+        else if (d.opcaoSimples === true) { keyApi = 'simples_duvida'; txt = 'Optante do Simples'; }
         else if (d.opcaoSimples === false) { keyApi = 'presumido'; txt = 'Não optante do Simples'; }
         else if (d.opcaoSimples === null) {
           // Conferido na BrasilAPI com Nestlé e PepsiCo (Regime Normal, nunca no Simples):
@@ -4805,8 +4879,8 @@ ${htmlNomeDuplicado}
           txt = d.porte && d.porte !== 'DEMAIS' ? 'Sem opção pelo Simples (confirmar)' : 'Sem opção pelo Simples';
         }
         if (keyApi) {
-          const simplesCrt = keyCrt === 'simples_puro' || keyCrt === 'mei';
-          const simplesApi = keyApi === 'simples_puro' || keyApi === 'mei';
+          const simplesCrt = ehKeySimples(keyCrt) || keyCrt === 'mei';
+          const simplesApi = ehKeySimples(keyApi) || keyApi === 'mei';
           const diverge = !!crt && simplesCrt !== simplesApi;
           return { key: keyApi, crtTxt, receitaTxt: txt, divergencia: diverge ? 'CRT da nota e Receita divergem — vale a Receita (cadastro atual)' : '' };
         }
@@ -4814,8 +4888,17 @@ ${htmlNomeDuplicado}
       }
       return { key: keyCrt, crtTxt, receitaTxt: 'não consultada', divergencia: '' };
     };
-    const celulaCamadas = (s: { crtTxt: string; receitaTxt: string; divergencia: string }) =>
-      `<div class="cam-l"><span class="cam-crt">CRT: ${esc(s.crtTxt)}</span> · <span class="cam-rf">Receita: ${esc(s.receitaTxt)}</span></div>${s.divergencia ? `<div class="cam-div">⚠ ${esc(s.divergencia)}</div>` : ''}`;
+    // Sinal de ICMS fora do DAS visto na nota. Só é alerta: o regime e o crédito seguem o padrão conservador.
+    // "ICMS por fora" NÃO prova Simples híbrido — o híbrido é opção voluntária no Portal do Simples. O único caso
+    // em que ICMS e IBS saem juntos do DAS é o excesso do sublimite de R$ 3,6 mi (LC 123, art. 13-A), e mesmo
+    // ali a CBS tende a ficar no DAS.
+    const SINAL_TXT: Record<string, string> = {
+      crt2: 'CRT 2 na nota: Simples com excesso de sublimite. A partir de 2027 o IBS sai do DAS e a CBS tende a ficar — não é o regime híbrido. Confirme com o fornecedor.',
+      cst: 'Destaca ICMS por CST apesar de ser do Simples: pode ser excesso de sublimite com CRT mal preenchido ou cadastro inconsistente. Não prova regime — confirme.',
+    };
+    const sugestaoRegime = (cnpj: string, crt: string, sinal = '') => ({ ...sugestaoRegimeBase(cnpj, crt), sinal });
+    const celulaCamadas = (s: { crtTxt: string; receitaTxt: string; divergencia: string; sinal?: string }) =>
+      `<div class="cam-l"><span class="cam-crt">CRT: ${esc(s.crtTxt)}</span> · <span class="cam-rf">Receita: ${esc(s.receitaTxt)}</span></div>${s.divergencia ? `<div class="cam-div">⚠ ${esc(s.divergencia)}</div>` : ''}${s.sinal ? `<div class="cam-div">⚠ ${esc(SINAL_TXT[s.sinal] || '')}</div>` : ''}`;
 
     const topF = perfilFornecedores.fornecedores.slice(0, 30);
     const topC = perfilClientes.clientes.slice(0, 30);
@@ -4862,29 +4945,77 @@ ${htmlNomeDuplicado}
       secoes.push(secao('sec-leituras', 'Leituras-chave', 'O que chama atenção, em linguagem direta', 'Pontos', 'figLeituras', '—',
         `<div id="insights" class="insights"></div>`, true));
 
-      // 2. Premissas e regime
-      secoes.push(secao('sec-premissas', 'Regime e premissas', 'Regime real da empresa e parâmetros — tudo editável, tudo recalcula', 'Regime', 'figPremissas', esc(labelRegime(sugEmpresa.key)),
-        `<p class="nota">Os campos já vêm com um palpite — o regime sai do CRT das notas e da consulta à Receita Federal. Troque pelo que você sabe e todas as tabelas e leituras desta página recalculam na hora.</p>
+      // 2. Premissas e regime — o que o Sequência leu, o que é estimativa e a ÚNICA pergunta
+      // que só o contador responde (como o Simples recolhe IBS/CBS). Os ids antigos continuam
+      // existindo (selRegimeEmpresa oculto, alíquotas em "ajustes avançados") porque o
+      // recalcReforma lê os mesmos campos.
+      const baseEmpresa = ehKeySimples(sugEmpresa.key) ? 'simples' : sugEmpresa.key;
+      const modoEmpresa = opcoes?.modoSimples && baseEmpresa === 'simples' ? opcoes.modoSimples : sugEmpresa.key === 'simples_puro' ? 'puro' : sugEmpresa.key === 'simples_hibrido' ? 'hibrido' : 'duvida';
+      const modoConfirmado = !!opcoes?.modoSimples && baseEmpresa === 'simples' && opcoes.modoSimples !== 'duvida';
+      const keyEmpresaEfetivo = baseEmpresa === 'simples' ? (modoEmpresa === 'puro' ? 'simples_puro' : modoEmpresa === 'hibrido' ? 'simples_hibrido' : 'simples_duvida') : sugEmpresa.key;
+      const optBase = ([['simples', 'Simples Nacional'], ['mei', 'MEI'], ['presumido', 'Lucro Presumido'], ['real', 'Lucro Real'], ['desconhecido', 'Não identificado']] as [string, string][])
+        .map(([k, l]) => `<option value="${k}"${k === baseEmpresa ? ' selected' : ''}>${esc(l)}</option>`).join('');
+      const optModo = ([['duvida', 'Ainda não sei — mostrar as duas hipóteses'], ['puro', 'Dentro do DAS, como hoje (Simples puro)'], ['hibrido', 'Por fora do DAS, no regime regular (híbrido)']] as [string, string][])
+        .map(([k, l]) => `<option value="${k}"${k === modoEmpresa ? ' selected' : ''}>${esc(l)}</option>`).join('');
+      const linhaCobertura = (m: { total: number; coberturaPct: number }, semDados: string) => m.total > 0
+        ? `Média do código cClassTrib de cada item, ponderada pelo valor · ${formatarPct(m.coberturaPct)}% do valor lido das notas${m.coberturaPct < 90 ? ' <b>(cobertura baixa: o resto entrou como alíquota cheia)</b>' : '; o resto entrou como alíquota cheia'}.`
+        : semDados;
+      secoes.push(secao('sec-premissas', 'Regime e premissas', 'O que lemos nas notas, o que é estimativa e a pergunta que precisa de você', 'Regime', 'figPremissas', esc(labelRegime(keyEmpresaEfetivo)),
+        `<p class="nota">Nem todo número aqui precisa ser preenchido. O Sequência já leu o regime nas notas e na Receita, calculou as alíquotas pelo código de cada item e adotou estimativas de mercado. <b>A única pergunta que só você responde é o passo 2</b> — e, se não souber, as duas respostas aparecem lado a lado. Tudo recalcula as tabelas e leituras da página.</p>
         <div class="campos">
-          <label><span class="rot">Regime real da empresa</span>
-            <select id="selRegimeEmpresa" class="rf-in">${opcoesSelectHtml(sugEmpresa.key)}</select>
-            <span class="aj">CRT das notas: ${esc(sugEmpresa.crtTxt)} · Receita: ${esc(sugEmpresa.receitaTxt)}${sugEmpresa.divergencia ? ` — ⚠ ${esc(sugEmpresa.divergencia)}` : ''}</span></label>
-          <label><span class="rot">Alíquota de referência CBS + IBS (%)</span>
+          <label><span class="rot">1 · Regime tributário da empresa</span>
+            <select id="selRegimeBase" class="rf-in">${optBase}</select>
+            <span class="aj">Notas (CRT): ${esc(sugEmpresa.crtTxt)} · Receita: ${esc(sugEmpresa.receitaTxt)}${sugEmpresa.divergencia ? ` — ⚠ ${esc(sugEmpresa.divergencia)}` : ''}. CRT 3 aparece como "Regime Normal": Presumido × Real não dá pra ver na nota.</span></label>
+          <label id="boxModoSimples"><span class="rot">2 · Como a empresa recolhe — ou vai recolher — IBS e CBS?</span>
+            <select id="selModoSimples" class="rf-in">${optModo}</select>
+            <span class="aj">Só vale para o Simples. Nem a nota nem a Receita informam isso: a opção pelo regime regular é feita pelo próprio contribuinte no Portal do Simples Nacional, por semestre (confira a janela vigente), e o CRT continua 1 ou 2. Pergunta pronta ao cliente: "Você optou pelo regime regular de IBS e CBS, por fora do DAS?"${modoConfirmado ? ' <b>Resposta confirmada ao gerar este relatório.</b>' : ''}</span></label>
+          <label><span class="rot">3 · Alíquota-padrão do IVA (IBS + CBS), %</span>
             <input type="text" id="simAliqReforma" class="rf-in" value="26,50" inputmode="decimal">
-            <span class="aj">estimativa para o IVA dual já implantado; a final depende de regulamentação. <button type="button" class="link" id="btnAliqDeck">usar 27,97% (CBS 9,29% + IBS 18,68%, como na apresentação)</button></span></label>
-          <label><span class="rot">Crédito parcial de fornecedor Simples puro (% da compra)</span>
-            <input type="text" id="inpParcial" class="rf-in" value="3,00" inputmode="decimal">
-            <span class="aj">estimativa — use a alíquota efetiva de IBS/CBS no DAS do fornecedor (LC 214, arts. 155 e 156)</span></label>
-          <label><span class="rot">Alíquota sobre a receita (% da cheia)</span>
-            <input type="text" id="simFatorReceita" class="rf-in" value="${nl(fatorReceitaPct)}" inputmode="decimal">
-            <span class="aj">${mixAliquotas.saidas.total > 0 ? `do mix de cClassTrib das vendas (${formatarPct(mixAliquotas.saidas.coberturaPct)}% do valor com o grupo; o resto assumido cheio)` : 'sem dados de cClassTrib — assumido cheio'}</span></label>
-          <label><span class="rot">Alíquota sobre as compras (% da cheia)</span>
-            <input type="text" id="inpFatorCompras" class="rf-in" value="${nl(fatorComprasPct)}" inputmode="decimal">
-            <span class="aj">${mixAliquotas.entradas.total > 0 ? `do mix de cClassTrib das entradas (${formatarPct(mixAliquotas.entradas.coberturaPct)}% do valor com o grupo; o resto assumido cheio)` : 'sem entradas lidas — assumido cheio'}</span></label>
+            <span class="aj">Alíquota cheia em regime pleno (a partir de 2033), antes de qualquer redução. Estimativa de referência: <button type="button" class="link" data-aliq="26,50">26,50%</button> (IBS 17,70 + CBS 8,80) ou <button type="button" class="link" data-aliq="27,97">27,97%</button> (IBS 18,68 + CBS 9,29). A definitiva depende de regulamentação.</span></label>
         </div>
+        <select id="selRegimeEmpresa" hidden>${opcoesSelectHtml(keyEmpresaEfetivo)}</select>
         <div class="narr" id="empresaNarrativa"></div>
+
+        <div id="boxComparacao" style="display:none">
+          <div class="bl-t">Se for puro × se for híbrido</div>
+          <div class="tw"><table class="t">
+            <thead><tr><th></th><th class="r">Se for puro (IBS/CBS dentro do DAS)</th><th class="r">Se for híbrido (regime regular)</th></tr></thead>
+            <tbody>
+              <tr><td>Crédito de IBS/CBS das compras listadas</td><td class="num" id="cmpCredP">—</td><td class="num" id="cmpCredH">—</td></tr>
+              <tr><td>Crédito entregue aos clientes com CNPJ</td><td class="num" id="cmpCliP">—</td><td class="num" id="cmpCliH">—</td></tr>
+              <tr><td>IBS/CBS sobre as vendas do período</td><td class="num">dentro do DAS</td><td class="num" id="cmpDebH">—</td></tr>
+              <tr><td>IBS/CBS líquido (vendas − crédito de compras)</td><td class="num">depende do DAS</td><td class="num" id="cmpLiqH">—</td></tr>
+            </tbody>
+          </table></div>
+          <div class="nota-peq" id="cmpFecho"></div>
+        </div>
+
+        <div class="bl-t">O que o Sequência leu nas notas</div>
+        <div class="tw"><table class="t">
+          <thead><tr><th></th><th class="r">Alíquota efetiva</th><th class="r">Parte da alíquota cheia</th><th>Como foi calculado</th></tr></thead>
+          <tbody>
+            <tr><td><b>Vendas</b></td><td class="num" id="aliqVendaEf">—</td><td class="num" id="aliqVendaFat">—</td><td class="t-txt">${linhaCobertura(mixAliquotas.saidas, 'Sem NF-e de saída lida: assumido alíquota cheia.')}<span id="aliqVendaAj"></span></td></tr>
+            <tr><td><b>Compras</b></td><td class="num" id="aliqCompraEf">—</td><td class="num" id="aliqCompraFat">—</td><td class="t-txt">${linhaCobertura(mixAliquotas.entradas, 'Sem NF-e de entrada lida: assumido alíquota cheia.')}<span id="aliqCompraAj"></span></td></tr>
+          </tbody>
+        </table></div>
+        <div class="nota-peq">Calculado pelo Sequência — não precisa preencher. "100% da cheia" quer dizer que nenhum item tem alíquota zero ou reduzida; "82% da cheia" quer dizer que, em média, o valor paga 82% da alíquota-padrão (o resto é zero ou reduzido). A alíquota efetiva é a alíquota-padrão × essa parte, e é ela que entra no crédito e no débito.</div>
+
+        <details class="como" id="boxAvancado"><summary>Ajustes avançados — estimativas que você pode refinar</summary>
+          <div class="campos">
+            <label><span class="rot">Crédito que fornecedor do Simples repassa (% da compra)</span>
+              <input type="text" id="inpParcial" class="rf-in" value="3,40" inputmode="decimal">
+              <span class="aj">Hipótese, não dado das notas. O fornecedor do Simples que não optou pelo regime regular só repassa o IBS/CBS que paga dentro do DAS (LC 214, art. 47, §9º, II; LC 123, art. 23, §1º-A), e a alíquota precisa vir informada na nota (LC 123, art. 23, §2º). Depende da faixa de faturamento dele. Referência de regime pleno (2033), comércio e indústria, faturamento anual até <button type="button" class="link" data-parcial="2,00">R$ 180 mil: 2,0%</button> · <button type="button" class="link" data-parcial="2,50">R$ 360 mil: 2,5%</button> · <button type="button" class="link" data-parcial="3,40">R$ 720 mil: 3,4%</button> · <button type="button" class="link" data-parcial="4,40">R$ 1,8 mi: 4,4%</button> · <button type="button" class="link" data-parcial="5,40">R$ 3,6 mi: 5,4%</button>. Serviços chegam a 3%–10%. Em 2027–2028 o crédito é bem menor (cerca de 0,6% a 1,8%) e em 2026 o Simples ainda não gera crédito. <span id="sensParcial"></span></span></label>
+            <label><span class="rot">Ajustar manualmente — alíquota sobre as vendas (% da cheia)</span>
+              <input type="text" id="simFatorReceita" class="rf-in" value="${nl(fatorReceitaPct)}" data-calc="${fatorReceitaPct.toFixed(4)}" inputmode="decimal">
+              <span class="aj">Use só se o Sequência leu pouco das notas (cobertura baixa). O valor calculado é ${nl(fatorReceitaPct)}%; <button type="button" class="link" data-fator="simFatorReceita">voltar ao calculado</button>.</span></label>
+            <label><span class="rot">Ajustar manualmente — alíquota sobre as compras (% da cheia)</span>
+              <input type="text" id="inpFatorCompras" class="rf-in" value="${nl(fatorComprasPct)}" data-calc="${fatorComprasPct.toFixed(4)}" inputmode="decimal">
+              <span class="aj">O valor calculado é ${nl(fatorComprasPct)}%; <button type="button" class="link" data-fator="inpFatorCompras">voltar ao calculado</button>. A média das compras vale igual para todos os fornecedores.</span></label>
+          </div>
+        </details>
+
         <details class="como"><summary>Como o regime é verificado — e o que nenhuma camada enxerga</summary>
-          <div class="nota">Camada 1: o CRT da nota (1 e 2 = Simples Nacional, 3 = Regime Normal, 4 = MEI). Camada 2: a consulta à Receita Federal (BrasilAPI), que diz se a empresa é optante do Simples ou MEI hoje — quando as duas divergem, vale a Receita. Nenhuma das duas enxerga se um Simples aderiu ao regime regular/híbrido (LC 214/2025, art. 41), nem se "Regime Normal" é Lucro Presumido ou Real. E o regime do cliente (quem compra) não vem na nota: só a Receita ajuda. Por isso o que está pré-preenchido é palpite, não confirmação.</div>
+          <div class="nota">Camada 1: o CRT da nota (1 e 2 = Simples Nacional, 3 = Regime Normal, 4 = MEI). Camada 2: a consulta à Receita Federal (BrasilAPI), que diz se a empresa é optante do Simples ou MEI hoje — quando as duas divergem, vale a Receita. Nenhuma das duas enxerga se um Simples optou pelo regime regular de IBS/CBS (híbrido; LC 214/2025, art. 41, §3º): essa opção é feita no Portal do Simples e o CRT da nota continua 1 ou 2. O mesmo vale para "Regime Normal" ser Presumido ou Real, e para o regime de quem compra da empresa, que não vem na nota. Por isso o que está pré-preenchido é palpite, não confirmação. A presença do grupo IBS/CBS na nota também não distingue os dois casos. O XML mostra o regime declarado pelo emitente na data da nota: não prova ICMS recolhido fora do DAS nem opção pelo regime híbrido — a falta de ICMS na nota ou no PGDAS-D pode vir de substituição tributária, isenção, serviço ou segregação de receita. Há um único sinal direto: CRT 2 (Simples com excesso de sublimite de R$ 3,6 milhões), em que ICMS, ISS e IBS saem do DAS e a CBS tende a ficar — por isso o crédito do comprador poderia ser cheio só para o IBS. Isso não é o híbrido, que é opção voluntária, semestral, feita no Portal do Simples.</div>
         </details>`, true));
 
       // 3. Cadeia: impacto por tipo de relação (a tabela-resumo)
@@ -4898,19 +5029,19 @@ ${htmlNomeDuplicado}
 
     // 4. Fornecedores
     if (topF.length > 0) {
-      const sug = topF.map(f => ({ f, s: sugestaoRegime(f.cnpj, f.crtDeclarado) }));
+      const sug = topF.map(f => ({ f, s: sugestaoRegime(f.cnpj, f.crtDeclarado, f.sinalIcmsFora) }));
       dadosParaExcel['reforma-fornecedores'] = {
         colunas: ['Fornecedor', 'CNPJ', 'CRT declarado', 'Receita (BrasilAPI)', 'Total Comprado (R$)', 'Regime sugerido'],
         linhas: sug.map(({ f, s }) => [f.nome, f.cnpj, s.crtTxt, s.receitaTxt, f.totalComprado, labelRegime(s.key)]),
       };
       secoes.push(secao('sec-fornecedores', 'Fornecedores — regime e crédito', `${topF.length === perfilFornecedores.fornecedores.length ? `${topF.length} fornecedor(es)` : `${topF.length} maiores de ${perfilFornecedores.fornecedores.length} fornecedores`} · ${esc(formatarMoeda(totalComprasTop))} em compras`, 'Crédito perdido', 'figForn', '—',
-        `<p class="nota">Comprar de fornecedor em Regime Normal devolve o IBS/CBS como crédito; comprar de Simples puro devolve só a parcela do DAS. A lista mostra quanto crédito cada fornecedor gera e onde vale renegociar. Só as NF-e de entrada anexadas entram — se faltou nota de compra, o número real é maior.</p>
+        `<p class="nota">Comprar de fornecedor em Regime Normal devolve o IBS/CBS como crédito; comprar de fornecedor do Simples que não optou pelo regime regular devolve só a parcela do DAS. A lista mostra quanto crédito cada fornecedor gera e onde vale renegociar. Só as NF-e de entrada anexadas entram — se faltou nota de compra, o número real é maior.</p>
         <div class="tw"><table class="t">
           <thead><tr><th>Fornecedor</th><th>Regime (verificação em 2 camadas)</th><th class="r">Compras (R$)</th><th class="r">Crédito estimado (R$)</th><th>Impacto e ação</th></tr></thead>
           <tbody>
             ${sug.map(({ f, s }, i) => `<tr class="rf-linha${i >= 10 ? ' extra' : ''}">
               <td><div class="ent-n">${esc(f.nome)}</div><div class="ent-s">${esc(formatCnpj(f.cnpj))} · última compra ${esc(dataFmt(f.ultimaCompra))}</div></td>
-              <td class="cam-cell" data-cnpj="${esc(f.cnpj)}" data-crt="${esc(f.crtDeclarado)}"><select class="rf-in sel-regime-fornecedor" data-total="${f.totalComprado}">${opcoesSelectHtml(s.key)}</select>${celulaCamadas(s)}</td>
+              <td class="cam-cell" data-cnpj="${esc(f.cnpj)}" data-crt="${esc(f.crtDeclarado)}"><select class="rf-in sel-regime-fornecedor" data-total="${f.totalComprado}" data-sinal="${esc(f.sinalIcmsFora)}">${opcoesSelectHtml(s.key)}</select>${celulaCamadas(s)}</td>
               <td class="num">${formatarMoeda(f.totalComprado)}</td>
               <td class="num cred-cell">—</td>
               <td class="imp-cell">—</td>
@@ -4976,10 +5107,21 @@ ${htmlNomeDuplicado}
       });
       const mixT = { colunas: ['Lado', 'Código / situação', 'Efeito na alíquota', 'Valor (R$)', '% do lado'], linhas: linhasMix };
       dadosParaExcel['reforma-mix'] = mixT;
+      const totSaidasMix = mixAliquotas.saidas.total;
+      const prodT = {
+        colunas: ['Produto', 'Código cClassTrib usado', 'Efeito na alíquota', 'Valor vendido (R$)', '% das vendas'],
+        linhas: mixAliquotas.saidas.topProdutos.map(p => [
+          p.xProd,
+          p.code === 'sem-grupo' ? 'Sem o grupo IBS/CBS' : `${p.code}${p.nome ? ` — ${p.nome}` : ''}${p.nCodigos > 1 ? ` (+${p.nCodigos - 1} outro(s) código(s))` : ''}`,
+          p.efeito, p.valor, `${formatarPct(totSaidasMix > 0 ? (p.valor / totSaidasMix) * 100 : 0)}%`,
+        ]) as (string | number)[][],
+      };
+      dadosParaExcel['reforma-produtos-class'] = prodT;
+      const nProdMulti = mixAliquotas.saidas.topProdutos.filter(p => p.nCodigos > 1).length;
       secoes.push(secao('sec-mix', 'Mix de alíquotas (cClassTrib)', 'Quanto das vendas e compras paga alíquota cheia, reduzida ou zero', 'Alíquota média das vendas', 'figMix', mixAliquotas.saidas.total > 0 ? `${formatarPct(mixAliquotas.saidas.fator * 100)}% da cheia` : '—',
         `<p class="nota">Lido direto do código cClassTrib de cada item, comparado com a tabela oficial — o app não interpreta nome de produto nem NCM. Alíquota zero e reduzida aparecem quando o emissor já classifica o item (ex.: Anexo I da LC 214/2025, cesta básica, onde está o pão francês). Item sem o grupo IBS/CBS é assumido em alíquota cheia, por isso a cobertura importa: vendas com o grupo em ${formatarPct(mixAliquotas.saidas.coberturaPct)}% do valor, compras em ${formatarPct(mixAliquotas.entradas.coberturaPct)}%.</p>
-        ${tabelaApoio(mixT)}
-        <div class="acoes">${btnExcel('reforma-mix', 'Mix de aliquotas')}</div>`, false));
+        ${subsecao('Por código de classificação', `${mixAliquotas.saidas.porCodigo.length + mixAliquotas.entradas.porCodigo.length} linha(s)`, `${tabelaApoio(mixT)}<div class="acoes">${btnExcel('reforma-mix', 'Mix de aliquotas')}</div>`, true)}
+        ${prodT.linhas.length > 0 ? subsecao('Principais produtos vendidos e o código usado', `${prodT.linhas.length} produto(s)`, `<p class="nota">Cada linha mostra o código que o sistema emissor da empresa aplica ao produto (o dominante por valor). Vale conferir se o enquadramento — zero, reduzido ou integral — corresponde ao produto: classificar a mais significa imposto pago a mais; classificar a menos expõe a empresa a autuação.${nProdMulti > 0 ? ` <b>${nProdMulti} produto(s) desta lista saem com mais de um código</b> — sinal de cadastro inconsistente.` : ''}</p>${tabelaApoio(prodT)}<div class="acoes">${btnExcel('reforma-produtos-class', 'Produtos e classificacao')}</div>`, false) : ''}`, false));
     }
 
     // 7. Simulador de preço
@@ -5018,7 +5160,7 @@ ${htmlNomeDuplicado}
       itensPr.push({
         ind: 'Sequência das notas emitidas',
         st: faltantesLiq === 0 ? 'ok' : 'atencao',
-        dado: faltantesLiq === 0 ? 'Íntegra: nenhum número faltando na sequência.' : `${faltantesLiq} número(s) faltando na sequência, sem inutilização que cubra.`,
+        dado: faltantesLiq === 0 ? 'Sequência completa: nenhum número de nota ficou sem registro.' : `${faltantesLiq.toLocaleString('pt-BR')} número(s) de nota sem registro no período (nem como inutilizado) — vale conferir.`,
         porque: 'Com cruzamento automático das notas e split payment, número que falta vira diferença de débito difícil de explicar.',
       });
       const nAutoriz = notasAnomalias.semAutorizacaoNaoContingencia.length;
@@ -5034,7 +5176,7 @@ ${htmlNomeDuplicado}
           nAutoriz ? `${nAutoriz} sem autorização` : '', nPrazo ? `${nPrazo} autorizada(s) fora do prazo` : '', nMalf ? `${nMalf} malformada(s)` : '',
           nDup ? `${nDup} número(s) duplicado(s)` : '', nHomolog ? `${nHomolog} de homologação (teste)` : '',
         ].filter(Boolean).join(' · '),
-        porque: 'Assertividade na emissão: nota fora do padrão não gera crédito confiável pro comprador e pode ser cobrada do cliente.',
+        porque: 'Assertividade na emissão: nota fora do padrão não gera crédito confiável pro comprador e pode ser questionada na fiscalização.',
       });
       if (mixAliquotas.saidas.total > 0) {
         const meses = mixAliquotas.saidas.porMes;
@@ -5069,18 +5211,18 @@ ${htmlNomeDuplicado}
         ind: 'Notas de compra (o crédito depende de ter a nota)',
         st: 'info',
         dado: `${perfilFornecedores.fornecedores.length} fornecedor(es) nas NF-e de entrada; compras identificadas equivalem a ${formatarPct(faturamentoTotal > 0 ? (perfilFornecedores.totalConsiderado / faturamentoTotal) * 100 : 0)}% da receita do período.`,
-        porque: 'Compra sem nota não gera crédito. Se o custo de mercadoria real for maior que isso, falta nota de entrada — vale confirmar com o cliente.',
+        porque: 'Compra sem nota não gera crédito. Se o custo real de mercadoria for maior que isso, falta nota de entrada — vale confirmar se todas as compras estão sendo lançadas com nota.',
       });
       itensPr.push({
         ind: 'Controle financeiro, ERP, contabilidade e contratos',
         st: 'info',
-        dado: 'Não aparecem nas notas fiscais — perguntar ao cliente.',
-        porque: 'A apresentação lista como pontos estruturais: controle financeiro profissional, ERP, contabilidade fechada em dia e contratos com cláusula de revisão de preços.',
+        dado: 'Não aparecem nas notas fiscais — vale levantar com a empresa.',
+        porque: 'São pontos estruturais da preparação: controle financeiro profissional, ERP, contabilidade fechada em dia e contratos com cláusula de revisão de preços.',
       });
       const nAtencaoPr = itensPr.filter(i => i.st === 'atencao').length;
       const tagPr = { ok: '<span class="tag tag-ok">Em dia</span>', atencao: '<span class="tag tag-media">Atenção</span>', info: '<span class="tag tag-info">Verificar</span>' };
-      secoes.push(secao('sec-prontidao', 'Prontidão para a Reforma', 'A "reforma estrutural" da apresentação, lida das auditorias que o analista já faz', 'Pontos de atenção', 'figProntidao', String(nAtencaoPr),
-        `<p class="nota">A Reforma não é só sobre alíquota: ela cobra assertividade na emissão e na obtenção das notas, rastro do pagamento e controle. Estes sinais saem das mesmas auditorias de sequência, anomalias, IBS/CBS e TEF — aqui lidos como maturidade do cliente pra Reforma.</p>
+      secoes.push(secao('sec-prontidao', 'Prontidão para a Reforma', 'Como a empresa está preparada para emitir, receber e controlar as notas', 'Pontos de atenção', 'figProntidao', String(nAtencaoPr),
+        `<p class="nota">A Reforma não é só sobre alíquota: ela cobra assertividade na emissão e na obtenção das notas, rastro do pagamento e controle. Estes sinais saem das próprias notas do período — sequência, autorização, grupo IBS/CBS, classificação e meios de pagamento — lidos como o preparo da empresa para a Reforma.</p>
         <div class="tw"><table class="t">
           <thead><tr><th>Indicador</th><th>Situação</th><th>O que o dado mostra</th><th>Por que importa na Reforma</th></tr></thead>
           <tbody>${itensPr.map(i => `<tr><td><b>${esc(i.ind)}</b></td><td>${tagPr[i.st]}</td><td class="t-txt">${esc(i.dado)}</td><td class="t-txt">${esc(i.porque)}</td></tr>`).join('')}</tbody>
@@ -5088,7 +5230,7 @@ ${htmlNomeDuplicado}
 
       // 9. Calendário da transição + roteiro da conversa (próximos passos)
       const calendario = {
-        colunas: ['Ano', 'O que muda', 'Para o cliente'],
+        colunas: ['Ano', 'O que muda', 'Para a empresa'],
         linhas: [
           ['2026', 'Ano de teste: CBS 0,9% e IBS 0,1% destacados nas notas (compensáveis); grupo IBS/CBS passa a aparecer na NF-e.', 'Adaptar o sistema emissor e o cadastro de produtos; ainda sem custo efetivo.'],
           ['2027', 'PIS e COFINS dão lugar à CBS; entra o Imposto Seletivo; o Simples Nacional passa a destacar o grupo IBS/CBS.', 'Primeira reprecificação: imposto por fora e crédito amplo.'],
@@ -5098,16 +5240,16 @@ ${htmlNomeDuplicado}
         ] as (string | number)[][],
       };
       const passos: { prazo: 'alta' | 'media' | 'info'; rotulo: string; titulo: string; texto: string }[] = [
-        { prazo: 'alta', rotulo: 'Curto prazo', titulo: 'Reprecificar', texto: 'Use o simulador por janela (2027 em diante) e revise contratos com cláusula de reajuste de preço. A apresentação aponta 7 janelas: 2026, 2027 e 2029 a 2033.' },
+        { prazo: 'alta', rotulo: 'Curto prazo', titulo: 'Reprecificar', texto: 'Use o simulador por janela (2027 em diante) e revise contratos com cláusula de reajuste de preço. São 7 janelas de reajuste ao longo da transição: 2026, 2027 e 2029 a 2033.' },
         { prazo: 'alta', rotulo: 'Curto prazo', titulo: 'Fornecedores', texto: 'Renegociar regime e preço com quem mais custa crédito e confirmar o regime dos que não foram identificados — a lista está acima.' },
-        { prazo: 'alta', rotulo: 'Curto prazo', titulo: 'Regime da empresa', texto: 'Comparar Simples, Simples híbrido, Presumido e Real com crédito amplo e imposto por fora — a apresentação pede "definir o regime adequado" pra empresa e pro cliente.' },
+        { prazo: 'alta', rotulo: 'Curto prazo', titulo: 'Regime da empresa', texto: 'Comparar Simples, Simples híbrido, Presumido e Real com crédito amplo e imposto por fora — definir o regime adequado é uma das decisões centrais da transição.' },
         { prazo: 'media', rotulo: 'Médio prazo', titulo: 'Caixa', texto: 'O IBS/CBS vem por fora no preço de compra e só volta como crédito na apuração. Desenhar o ciclo recebimento × pagamento e o efeito do split payment antes de 2027.' },
         { prazo: 'media', rotulo: 'Médio prazo', titulo: 'Controles', texto: 'ERP e controle financeiro, 100% das compras com nota e contabilidade fechada em dia — o combate à sonegação tira a margem pra informalidade.' },
-        { prazo: 'info', rotulo: 'Levantar', titulo: 'Fora das notas de mercadoria', texto: 'Aluguel, energia, telecom, frete, ativo imobilizado e empréstimos mudam com a base ampla: geram crédito (ou débito, pra quem aluga imóvel ou empresta dinheiro). Não aparecem nestas notas — perguntar ao cliente.' },
+        { prazo: 'info', rotulo: 'Levantar', titulo: 'Fora das notas de mercadoria', texto: 'Aluguel, energia, telecom, frete, ativo imobilizado e empréstimos mudam com a base ampla: geram crédito (ou débito, pra quem aluga imóvel ou empresta dinheiro). Não aparecem nestas notas — vale levantar com a empresa.' },
       ];
-      secoes.push(secao('sec-calendario', 'Calendário e próximos passos', 'Linha do tempo da transição e roteiro pra conversa com o cliente', 'Primeira janela', 'figCalendario', '2027',
+      secoes.push(secao('sec-calendario', 'Calendário e próximos passos', 'Linha do tempo da transição e próximos passos sugeridos', 'Primeira janela', 'figCalendario', '2027',
         `${subsecao('Linha do tempo da transição (2026–2033)', '5 marcos', tabelaApoio(calendario), true)}
-        ${subsecao('Roteiro da conversa com o cliente', `${passos.length} frentes`, `<div class="insights">${passos.map(p => `<div class="ins"><div class="tg"><span class="tag tag-${p.prazo}">${esc(p.rotulo)}</span></div><div class="tx"><b>${esc(p.titulo)}.</b> ${esc(p.texto)}</div></div>`).join('')}</div>`, true)}`, false));
+        ${subsecao('Próximos passos sugeridos', `${passos.length} frentes`, `<div class="insights">${passos.map(p => `<div class="ins"><div class="tg"><span class="tag tag-${p.prazo}">${esc(p.rotulo)}</span></div><div class="tx"><b>${esc(p.titulo)}.</b> ${esc(p.texto)}</div></div>`).join('')}</div>`, true)}`, false));
     }
 
     // 10. Dados de apoio (perfil bruto: quem compra, de quem compra, produtos, sazonalidade)
@@ -5235,6 +5377,7 @@ ${htmlNomeDuplicado}
   .campos input, .campos select { width:100%; padding:11px 14px; font-family:inherit; font-size:14px; color:var(--ink); background:#fff; border:1px solid var(--l1); border-radius:0; outline:none; }
   .campos input:focus, .campos select:focus, .t select:focus { border-color:var(--gold-t); }
   .t select { font-family:inherit; font-size:12.5px; color:var(--ink); background:#fff; border:1px solid var(--l1); border-radius:0; padding:6px 8px; max-width:100%; outline:none; }
+  .bl-t { font-size:13.5px; font-weight:600; color:var(--ink); padding:0 0 8px; border-bottom:1px solid var(--ink); margin:26px 0 12px; }
   .narr { border-left:3px solid var(--gold); padding:4px 0 4px 16px; font-size:13.5px; line-height:1.7; color:var(--g1); margin:6px 0 18px; max-width:780px; }
   .como summary { font-size:12px; letter-spacing:.04em; color:var(--gold-t); cursor:pointer; margin-bottom:10px; }
   .aviso { display:none; font-size:12.5px; line-height:1.6; color:var(--g1); border:1px solid var(--gold); padding:10px 14px; margin:0 0 18px; max-width:780px; }
@@ -5277,12 +5420,12 @@ ${htmlNomeDuplicado}
     <div class="h1a">Perfil e Reforma Tributária</div>
     <div class="h1b${nomeEmpresaGrande ? ' menor' : ''}">${esc(empresa)}</div>
     <div class="regua"></div>
-    <div class="lede">Retrato da empresa a partir das notas fiscais de ${esc(periodoLegivel)}: quem compra dela, de quem ela compra e quanto crédito de IBS/CBS circula nessa cadeia — para orientar o cliente sobre a Reforma Tributária e mostrar onde a conversa consultiva rende mais. A Reforma não é sobre pagamento de tributos — é sobre margem e caixa.</div>
+    <div class="lede">Retrato da empresa a partir das notas fiscais de ${esc(periodoLegivel)}: quem compra dela, de quem ela compra e quanto crédito de IBS/CBS circula nessa cadeia — e o que isso muda em margem e caixa com a Reforma Tributária. A Reforma não é sobre pagamento de tributos — é sobre margem e caixa.</div>
     ${temReforma ? `<div class="kpis">
       <div class="kpi"><div class="k-r">Faturamento do período</div><div class="k-v">${esc(formatarMoeda(faturamentoTotal))}</div><div class="k-s">${esc(formatarMoeda(receitaMensal))} por mês</div></div>
       <div class="kpi"><div class="k-r">Venda a consumidor final</div><div class="k-v">${esc(formatarPct(consumidorPct))}%</div><div class="k-s">${esc(formatarMoeda(consumidorValor))} sem CNPJ de comprador</div></div>
       <div class="kpi"><div class="k-r">Compras identificadas</div><div class="k-v">${esc(formatarMoeda(perfilFornecedores.totalConsiderado))}</div><div class="k-s">${perfilFornecedores.fornecedores.length} fornecedor(es) nas NF-e de entrada</div></div>
-      <div class="kpi dest"><div class="k-r">Crédito de IBS/CBS estimado</div><div class="k-v" id="kpiCredito">—</div><div class="k-s">sobre as compras listadas, no período</div></div>
+      <div class="kpi dest"><div class="k-r">Crédito de IBS/CBS estimado</div><div class="k-v" id="kpiCredito">—</div><div class="k-s" id="kpiCreditoSub">sobre as compras listadas, no período</div></div>
     </div>` : ''}
     <div class="barra">
       <span class="info">${secoes.length} seção(ões) · ${perfilFornecedores.fornecedores.length} fornecedor(es) · ${perfilClientes.clientes.length} cliente(s) com CNPJ · ${esc(periodoLegivel)}${totalAtencao > 0 ? ` · ${totalAtencao} pra olhar com atenção` : ''}</span>
@@ -5292,14 +5435,14 @@ ${htmlNomeDuplicado}
     ${secoes.map(s => s.html).join('')}
     <div class="natureza">
       <div class="n-r">Natureza do documento</div>
-      <div class="n-t">Este perfil é um retrato calculado a partir dos XMLs carregados e serve de apoio à conversa consultiva — não é apuração fiscal nem auditoria oficial. O regime de cada empresa vem em duas camadas (CRT da nota e consulta à Receita Federal) e é sempre um palpite editável: nenhuma das duas enxerga o regime híbrido do Simples nem Presumido × Real, e o regime do cliente não vem na nota. O mix de alíquotas é lido do código cClassTrib de cada item, sem interpretar nome de produto ou NCM; item sem o grupo IBS/CBS é assumido em alíquota cheia. As alíquotas, o crédito parcial do Simples puro (LC 214/2025, arts. 155 e 156) e a carga atual são premissas ajustáveis. Custo e despesa geral não vêm do XML fiscal, por isso o simulador para na margem disponível. As auditorias de conformidade (sequência, anomalias, IBS/CBS estrutural, TEF) ficam na própria ferramenta, para o analista.</div>
+      <div class="n-t">Este perfil é um retrato calculado a partir dos XMLs carregados e serve de apoio à conversa consultiva — não é apuração fiscal nem auditoria oficial. O regime de cada empresa vem em duas camadas (CRT da nota e consulta à Receita Federal) e é sempre um palpite editável: nenhuma das duas enxerga o regime híbrido do Simples nem Presumido × Real, e o regime de quem compra da empresa não vem na nota. O mix de alíquotas é lido do código cClassTrib de cada item, sem interpretar nome de produto ou NCM; item sem o grupo IBS/CBS é assumido em alíquota cheia. As alíquotas, o crédito parcial do Simples puro (LC 214/2025, art. 47, §9º, II) e a carga atual são premissas ajustáveis. Custo e despesa geral não vêm do XML fiscal, por isso o simulador para na margem disponível.</div>
     </div>
     <div class="rodape">Gerado em ${hoje} · Sequência Fiscal — Contador de Padarias</div>
   </div>
   <script>
-    var DADOS = ${JSON.stringify(dadosParaExcel)};
-    var REGIME_INFO = ${JSON.stringify(Object.fromEntries(REGIME_OPCOES.map(o => [o.key, { label: o.label, gera: o.gera, usa: o.usa, parcial: o.parcial }])))};
-    var RF_DATA = ${JSON.stringify({ numMeses: numMesesRef, faturamento: faturamentoTotal, consumidorValor, consumidorPct, fatorReceitaMix: mixAliquotas.saidas.total > 0 ? mixAliquotas.saidas.fator : 1, coberturaSaidas: mixAliquotas.saidas.coberturaPct, coberturaMeses: mixAliquotas.saidas.porMes, temSaidas: mixAliquotas.saidas.total > 0, empresaDiverge: sugEmpresa.divergencia ? { crt: sugEmpresa.crtTxt, receita: sugEmpresa.receitaTxt } : null })};
+    var DADOS = ${JSON.stringify(dadosParaExcel, (_k, v) => typeof v === 'string' ? decodeEnt(v) : v)};
+    var REGIME_INFO = ${JSON.stringify(Object.fromEntries(REGIME_OPCOES.map(o => [o.key, { label: o.label, gera: o.gera, usa: o.usa, parcial: o.parcial, duvida: !!o.duvida }])))};
+    var RF_DATA = ${JSON.stringify({ numMeses: numMesesRef, faturamento: faturamentoTotal, consumidorValor, consumidorPct, fatorReceitaMix: mixAliquotas.saidas.total > 0 ? mixAliquotas.saidas.fator : 1, coberturaSaidas: mixAliquotas.saidas.coberturaPct, coberturaMeses: mixAliquotas.saidas.porMes, temSaidas: mixAliquotas.saidas.total > 0, empresaDiverge: sugEmpresa.divergencia ? { crt: sugEmpresa.crtTxt, receita: sugEmpresa.receitaTxt } : null, pesoIbs: 17.7 / 26.5, comprasTotal: perfilFornecedores.totalConsiderado, nFornecedoresTotal: perfilFornecedores.fornecedores.length, temEntradas: mixAliquotas.entradas.total > 0, fatorCompras: mixAliquotas.entradas.total > 0 ? mixAliquotas.entradas.fator : 1, produtosMultiCodigo: mixAliquotas.saidas.topProdutos.filter(p => p.nCodigos > 1).length })};
     function qsa(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
     function fmtMoedaBr(v) { return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
     function fmtNumBr(v) { return v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -5311,6 +5454,16 @@ ${htmlNomeDuplicado}
       return isNaN(v) ? padrao : v;
     }
     function infoDe(key) { return REGIME_INFO[key] || REGIME_INFO.desconhecido; }
+    // os dois controles visíveis (regime + como recolhe IBS/CBS) alimentam o select oculto que o recálculo lê
+    function sincronizaRegime() {
+      var base = document.getElementById('selRegimeBase'), modo = document.getElementById('selModoSimples'), alvo = document.getElementById('selRegimeEmpresa');
+      if (!base || !alvo) return;
+      var ehSimples = base.value === 'simples';
+      var box = document.getElementById('boxModoSimples');
+      if (box) box.style.display = ehSimples ? '' : 'none';
+      var mapa = { duvida: 'simples_duvida', puro: 'simples_puro', hibrido: 'simples_hibrido' };
+      alvo.value = ehSimples ? (mapa[modo ? modo.value : 'duvida'] || 'simples_duvida') : base.value;
+    }
     function setTxt(id, txt) { var el = document.getElementById(id); if (el) el.textContent = txt; }
     function setHtml(id, h) { var el = document.getElementById(id); if (el) el.innerHTML = h; }
     function esc2(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -5321,12 +5474,17 @@ ${htmlNomeDuplicado}
       if (!empresa.usa) return tag('info', 'Sem efeito') + '<span class="imp-t">A empresa não aproveita crédito: o regime dele não muda o custo.</span>';
       if (r.key === 'desconhecido') return tag('media', 'Confirmar') + '<span class="imp-t">Regime não identificado — confirme antes de contar com o crédito.</span>';
       if (r.info.gera) return tag('ok', 'Manter') + '<span class="imp-t">Crédito cheio: volta cerca de ' + fmtMoedaBr(r.cred) + '.</span>';
+      if (r.info.duvida) {
+        var extraSinal = r.sinal === 'crt2' ? ' Sinal na nota: CRT 2 (excesso de sublimite) — se o IBS sair do DAS, o crédito de IBS seria cheio (cerca de ' + fmtMoedaBr((r.cred + r.perdido) * RF_DATA.pesoIbs) + ') e o de CBS, parcial.' : (r.sinal === 'cst' ? ' Sinal na nota: destaca ICMS por CST apesar de ser do Simples — confira o cadastro.' : '');
+        return tag('media', 'Confirmar') + '<span class="imp-t">Optante do Simples: se não aderiu ao regime regular, o crédito é parcial (cerca de ' + fmtMoedaBr(r.cred) + '); se aderiu, seria cheio (cerca de ' + fmtMoedaBr(r.cred + r.perdido) + '). Pergunte: "Você optou pelo regime regular de IBS/CBS?"' + extraSinal + '</span>';
+      }
       var p = prioDe(share);
       if (r.info.parcial) return tag(p[0], p[1]) + '<span class="imp-t">Crédito só parcial: deixa de creditar cerca de ' + fmtMoedaBr(r.perdido) + '. Renegociar preço ou pedir adesão ao regime regular.</span>';
       return tag(p[0], p[1]) + '<span class="imp-t">Sem crédito (regra do MEI a confirmar): cerca de ' + fmtMoedaBr(r.perdido) + ' de IBS/CBS vira custo. Avaliar preço ou fornecedor em Regime Normal.</span>';
     }
     function impCli(r, empresa, share) {
       if (r.key === 'desconhecido') return tag('media', 'Confirmar') + '<span class="imp-t">Regime não identificado — consulte a Receita pra saber se ele aproveita crédito.</span>';
+      if (r.info.duvida) return tag('media', 'Confirmar') + '<span class="imp-t">Cliente do Simples: se não optou pelo regime regular, não usa crédito e vender com ou sem crédito dá no mesmo; se optou, passaria a aproveitar cerca de ' + fmtMoedaBr(r.potencial) + ' de crédito entregue pela empresa.</span>';
       if (!r.info.usa) return tag('info', 'Sem efeito') + '<span class="imp-t">Não usa crédito de IBS/CBS (' + esc2(r.info.label) + '): vender com ou sem crédito dá no mesmo.</span>';
       if (empresa.gera) return tag('ok', 'Manter') + '<span class="imp-t">Aproveita e recebe crédito cheio (cerca de ' + fmtMoedaBr(r.cred) + '): no mesmo pé de um concorrente em Regime Normal.</span>';
       var p = prioDe(share);
@@ -5345,6 +5503,7 @@ ${htmlNomeDuplicado}
     // Recalcula tudo a partir do estado atual da tela: regime da empresa →
     // crédito de fornecedores → crédito entregue a clientes → cadeia, leituras e simulador.
     function recalcReforma() {
+      sincronizaRegime();
       var selEmp = document.getElementById('selRegimeEmpresa');
       var empresa = infoDe(selEmp ? selEmp.value : 'desconhecido');
       var aliqRef = numDe('simAliqReforma', 26.5) / 100;
@@ -5354,10 +5513,26 @@ ${htmlNomeDuplicado}
 
       if (selEmp) {
         var comoComprador = empresa.usa ? 'aproveita crédito de IBS/CBS das compras (quando o fornecedor gera)' : 'NÃO aproveita crédito de fornecedor (fora do regime regular de IBS/CBS)';
-        var comoVendedor = empresa.gera ? 'passa crédito cheio aos clientes que conseguem usar' : (empresa.parcial ? 'passa só crédito parcial (a parcela de IBS/CBS contida no DAS — LC 214, arts. 155 e 156)' : 'não passa crédito aos clientes');
-        setTxt('empresaNarrativa', 'Nesse regime (' + empresa.label + '), como compradora a empresa ' + comoComprador + '; como vendedora, ' + comoVendedor + '.');
+        var comoVendedor = empresa.gera ? 'passa crédito cheio aos clientes que conseguem usar' : (empresa.parcial ? 'passa só crédito parcial (a parcela de IBS/CBS contida no DAS — LC 214, art. 47, §9º, II)' : 'não passa crédito aos clientes');
+        var preambulo = empresa.duvida ? 'Sem saber se a empresa optou pelo regime regular de IBS/CBS, as tabelas abaixo partem da hipótese conservadora (Simples puro) e o quadro "Se for puro × se for híbrido" mostra o que muda. ' : '';
+        var rotuloReg = empresa.duvida ? 'Simples Nacional, hipótese: IBS/CBS dentro do DAS' : empresa.label;
+        setTxt('empresaNarrativa', preambulo + 'Nesse regime (' + rotuloReg + '), como compradora a empresa ' + comoComprador + '; como vendedora, ' + comoVendedor + '.');
         setTxt('figPremissas', empresa.label);
       }
+
+      // alíquotas efetivas lidas das notas (somente leitura; os campos de ajuste ficam em "ajustes avançados")
+      var fvPct = numDe('simFatorReceita', 100), fcPct = numDe('inpFatorCompras', 100);
+      setTxt('aliqVendaEf', fmtNumBr(aliqRef * fvPct) + '%');
+      setTxt('aliqVendaFat', fmtNumBr(fvPct) + '%');
+      setTxt('aliqCompraEf', fmtNumBr(aliqRef * fcPct) + '%');
+      setTxt('aliqCompraFat', fmtNumBr(fcPct) + '%');
+      function marcaAjuste(id, spanId, valor) {
+        var inp = document.getElementById(id);
+        var calc = inp ? parseFloat(inp.getAttribute('data-calc')) : NaN;
+        setHtml(spanId, (!isNaN(calc) && Math.abs(valor - calc) > 0.005) ? ' <b>Ajustado manualmente</b> (calculado: ' + fmtNumBr(calc) + '%).' : '');
+      }
+      marcaAjuste('simFatorReceita', 'aliqVendaAj', fvPct);
+      marcaAjuste('inpFatorCompras', 'aliqCompraAj', fcPct);
 
       // fornecedores
       var rowsF = qsa('.sel-regime-fornecedor').map(function (sel) {
@@ -5366,7 +5541,7 @@ ${htmlNomeDuplicado}
         var info = infoDe(sel.value);
         var cred = empresa.usa ? total * (info.gera ? aCompra : (info.parcial ? parcial : 0)) : 0;
         var pleno = empresa.usa ? total * aCompra : 0;
-        return { tr: tr, nome: tr.querySelector('.ent-n').textContent, total: total, key: sel.value, info: info, cred: cred, perdido: pleno - cred };
+        return { tr: tr, nome: tr.querySelector('.ent-n').textContent, total: total, key: sel.value, info: info, cred: cred, perdido: pleno - cred, sinal: sel.getAttribute('data-sinal') || '' };
       });
       var totCompras = 0, credF = 0, perdF = 0;
       rowsF.forEach(function (r) { totCompras += r.total; credF += r.cred; perdF += r.perdido; });
@@ -5392,7 +5567,8 @@ ${htmlNomeDuplicado}
         var usa = sel.value !== 'desconhecido' && info.usa;
         var cred = usa ? total * (empresa.gera ? aVenda : (empresa.parcial ? parcial : 0)) : 0;
         var pleno = usa ? total * aVenda : 0;
-        return { tr: tr, nome: tr.querySelector('.ent-n').textContent, total: total, key: sel.value, info: info, usa: usa, cred: cred, gap: pleno - cred };
+        var potencial = info.duvida ? total * (empresa.gera ? aVenda : (empresa.parcial ? parcial : 0)) : 0;
+        return { tr: tr, nome: tr.querySelector('.ent-n').textContent, total: total, key: sel.value, info: info, usa: usa, cred: cred, gap: pleno - cred, potencial: potencial };
       });
       var gapTotal = 0, credCli = 0, credCliPleno = 0;
       var bC = { aprov: { n: 0, v: 0, c: 0, g: 0 }, nao: { n: 0, v: 0, c: 0, g: 0 }, desc: { n: 0, v: 0, c: 0, g: 0 } };
@@ -5412,6 +5588,34 @@ ${htmlNomeDuplicado}
       setTxt('figCli', rowsC.length ? fmtMoedaBr(gapTotal) : '—');
       setTxt('figCadeia', fmtMoedaBr(perdF + gapTotal));
 
+      // sensibilidade da hipótese de crédito parcial do fornecedor do Simples
+      var baseParcial = 0;
+      rowsF.forEach(function (r) { if (r.info.parcial) baseParcial += r.total; });
+      setTxt('sensParcial', baseParcial > 0 ? 'Cada ponto percentual aqui muda o crédito de compras em ' + fmtMoedaBr(baseParcial / 100) + ' (compras listadas de fornecedor do Simples, se a empresa aproveita crédito).' : '');
+
+      // comparação puro × híbrido: só aparece quando a opção do Simples está em aberto
+      function credComprasSe(emp) { var s = 0; rowsF.forEach(function (r) { if (emp.usa) s += r.total * (r.info.gera ? aCompra : (r.info.parcial ? parcial : 0)); }); return s; }
+      function credClientesSe(emp) { var s = 0; rowsC.forEach(function (r) { if (r.usa) s += r.total * (emp.gera ? aVenda : (emp.parcial ? parcial : 0)); }); return s; }
+      var empP = infoDe('simples_puro'), empH = infoDe('simples_hibrido');
+      var credH = credComprasSe(empH);
+      var debH = (RF_DATA.faturamento || 0) * aVenda;
+      var boxCmp = document.getElementById('boxComparacao');
+      if (boxCmp) {
+        boxCmp.style.display = empresa.duvida ? '' : 'none';
+        if (!empresa.duvida) setTxt('kpiCreditoSub', 'sobre as compras listadas, no período');
+        setTxt('cmpCredP', fmtMoedaBr(credComprasSe(empP)));
+        setTxt('cmpCredH', fmtMoedaBr(credH));
+        setTxt('cmpCliP', fmtMoedaBr(credClientesSe(empP)));
+        setTxt('cmpCliH', fmtMoedaBr(credClientesSe(empH)));
+        setTxt('cmpDebH', fmtMoedaBr(debH));
+        setTxt('cmpLiqH', fmtMoedaBr(debH - credH));
+        if (empresa.duvida) {
+          setTxt('kpiCredito', 'a confirmar');
+          setTxt('kpiCreditoSub', fmtMoedaBr(credComprasSe(empP)) + ' se Simples puro · ' + fmtMoedaBr(credH) + ' se regime regular');
+        }
+        setHtml('cmpFecho', 'No regime regular, o IBS/CBS líquido das vendas deste período seria de cerca de <b>' + fmtMoedaBr(debH - credH) + '</b> (' + fmtMoedaBr(debH) + ' de débito menos ' + fmtMoedaBr(credH) + ' de crédito de compras)' + (credH > debH ? ' — crédito maior que o débito vira saldo credor; confira se vendas e compras cobrem o mesmo período' : '') + '. Dentro do DAS o valor depende da apuração do cliente. <b>Para fechar:</b> confirme com o cliente se ele optou pelo regime regular e marque a resposta no passo 2 — as demais tabelas passam a seguir essa resposta.');
+      }
+
       // cadeia (tabela-resumo por tipo de relação)
       var fat = RF_DATA.faturamento || 0;
       var linhas = [];
@@ -5423,9 +5627,9 @@ ${htmlNomeDuplicado}
       if (bC.desc.n > 0) linhas.push(linhaCadeia('Clientes sem regime identificado (' + bC.desc.n + ')', bC.desc.v, fat > 0 ? bC.desc.v / fat * 100 : 0, '—', 'Não dá pra saber se aproveitam crédito.', 'Consultar a Receita e confirmar o regime.'));
       if (bF.pleno.n > 0) linhas.push(linhaCadeia('Fornecedores com crédito cheio (' + bF.pleno.n + ')', bF.pleno.v, totCompras > 0 ? bF.pleno.v / totCompras * 100 : 0, fmtMoedaBr(bF.pleno.c),
         empresa.usa ? 'O IBS/CBS da compra volta integralmente como crédito.' : 'Geram crédito, mas a empresa não aproveita (' + esc2(empresa.label) + ').', empresa.usa ? 'Manter e priorizar nas compras.' : 'Avaliar migrar pro regime regular — o crédito já está disponível nesses fornecedores.'));
-      if (bF.parcial.n > 0) linhas.push(linhaCadeia('Fornecedores Simples puro (' + bF.parcial.n + ')', bF.parcial.v, totCompras > 0 ? bF.parcial.v / totCompras * 100 : 0, fmtMoedaBr(bF.parcial.c),
+      if (bF.parcial.n > 0) linhas.push(linhaCadeia('Fornecedores do Simples (' + bF.parcial.n + ')', bF.parcial.v, totCompras > 0 ? bF.parcial.v / totCompras * 100 : 0, fmtMoedaBr(bF.parcial.c),
         empresa.usa ? 'Crédito só da parcela do DAS (estimado em ' + fmtPctBr(parcial * 100) + '% da compra): deixa de creditar cerca de ' + fmtMoedaBr(bF.parcial.p) + '.' : 'Sem efeito: a empresa não aproveita crédito.',
-        empresa.usa ? 'Renegociar preço, pedir adesão ao regime regular ou migrar compras para fornecedor em Regime Normal.' : '—'));
+        empresa.usa ? 'Confirmar quem aderiu ao regime regular; para os demais, renegociar preço ou migrar compras para fornecedor em Regime Normal.' : '—'));
       if (bF.sem.n > 0) linhas.push(linhaCadeia('Fornecedores MEI (' + bF.sem.n + ')', bF.sem.v, totCompras > 0 ? bF.sem.v / totCompras * 100 : 0, fmtMoedaBr(bF.sem.c),
         empresa.usa ? 'Sem crédito (regra do MEI a confirmar): todo o IBS/CBS embutido vira custo, cerca de ' + fmtMoedaBr(bF.sem.p) + '.' : 'Sem efeito: a empresa não aproveita crédito.',
         empresa.usa ? 'Avaliar preço ou fornecedor alternativo em Regime Normal.' : '—'));
@@ -5445,7 +5649,7 @@ ${htmlNomeDuplicado}
         var aviso = document.getElementById('simAviso');
         if (!empresa.usa) {
           cred = 0;
-          if (aviso) { aviso.style.display = 'block'; aviso.textContent = 'Regime sem apuração regular de IBS/CBS (' + empresa.label + '): o tributo continua no DAS e não há crédito de compras — o crédito fica zerado aqui. Use em "Alíquota de referência" a alíquota efetiva do DAS, não a do IVA cheio.'; }
+          if (aviso) { aviso.style.display = 'block'; aviso.textContent = 'Regime sem apuração regular de IBS/CBS (' + empresa.label + '): o tributo continua no DAS e não há crédito de compras — o crédito fica zerado aqui.' + (empresa.duvida ? ' Enquanto a opção pelo regime regular não for confirmada, vale a hipótese do Simples puro.' : '') + ' Para simular o Simples puro, informe em "Alíquota-padrão do IVA" a alíquota efetiva de IBS/CBS no DAS, não a do IVA cheio.'; }
         } else if (aviso) { aviso.style.display = 'none'; aviso.textContent = ''; }
         var aEff = aVenda < 1 ? aVenda : 0;
         var margemAtual = receita * (1 - aliqAtual);
@@ -5488,12 +5692,17 @@ ${htmlNomeDuplicado}
       // leituras-chave
       var it = [];
       function ins(cls, rotulo, texto) { it.push('<div class="ins"><div class="tg">' + tag(cls, rotulo) + '</div><div class="tx">' + texto + '</div></div>'); }
-      if (RF_DATA.empresaDiverge) ins('alta', 'Regime da empresa', '<b>As notas e a Receita discordam sobre o regime da própria empresa.</b> As notas declaram "' + esc2(RF_DATA.empresaDiverge.crt) + '", mas a Receita Federal registra "' + esc2(RF_DATA.empresaDiverge.receita) + '". Antes de simular, confirme o regime real: ele muda alíquota, crédito e até a regularidade da emissão (o emissor pode estar com o CRT errado). Este relatório adotou a Receita como palpite — troque em "Regime e premissas" se for outro.');
-      if (!empresa.usa && empresa.label !== 'Não identificado') ins('alta', 'Prioridade', '<b>Regime da empresa.</b> Como ' + esc2(empresa.label) + ', a empresa não aproveita crédito de fornecedor. Vale simular a migração para o regime regular (Presumido, Real ou Simples híbrido): com crédito, o custo líquido das compras cai.');
+      if (RF_DATA.empresaDiverge) ins('alta', 'Regime da empresa', '<b>As notas e a Receita discordam sobre o regime da própria empresa.</b> As notas declaram "' + esc2(RF_DATA.empresaDiverge.crt) + '", mas a Receita Federal registra "' + esc2(RF_DATA.empresaDiverge.receita) + '". Antes de simular, confirme o regime real: ele muda alíquota, crédito e até a regularidade da emissão (o emissor pode estar com o CRT errado). Outras explicações possíveis: a empresa passou do sublimite do Simples (o correto seria CRT 2, com ICMS e IBS fora do DAS) ou foi excluída do Simples e o cadastro ainda não refletiu. Este relatório adotou a Receita como palpite — troque em "Regime e premissas" se for outro.');
+      if (empresa.duvida) ins('alta', 'Confirmar', '<b>Falta confirmar como a empresa recolhe IBS e CBS.</b> Se estiver dentro do DAS (Simples puro), não aproveita crédito de compras. Se tiver optado pelo regime regular (híbrido), o crédito de compras seria de cerca de <b>' + fmtMoedaBr(credH) + '</b> no período e o IBS/CBS sobre as vendas, cerca de <b>' + fmtMoedaBr(debH) + '</b>. Pergunte ao cliente se fez a opção no Portal do Simples e marque a resposta em "Regime e premissas".');
+      else if (!empresa.usa && empresa.label !== 'Não identificado') ins('alta', 'Prioridade', '<b>Regime da empresa.</b> Como ' + esc2(empresa.label) + ', a empresa não aproveita crédito de fornecedor. Vale simular a migração para o regime regular (Presumido, Real ou Simples híbrido): com crédito, o custo líquido das compras cai.');
       if (empresa.usa && rowsF.length) ins(perdF / Math.max(credF + perdF, 1) >= 0.2 ? 'media' : 'info', 'Crédito', '<b>Crédito de compras.</b> Cerca de <b>' + fmtMoedaBr(credF) + '</b> de IBS/CBS voltam como crédito sobre ' + fmtMoedaBr(totCompras) + ' em compras listadas. Deixa de aproveitar <b>' + fmtMoedaBr(perdF) + '</b> (' + fmtPctBr((credF + perdF) > 0 ? perdF / (credF + perdF) * 100 : 0) + '% do crédito cheio possível) por causa do regime de fornecedores.');
       if (empresa.usa && totCompras > 0 && RF_DATA.numMeses > 0) ins('media', 'Caixa', '<b>Capital de giro.</b> O IBS/CBS vem por fora no preço de compra (cerca de <b>' + fmtMoedaBr((totCompras / RF_DATA.numMeses) * aCompra) + ' por mês</b> nas compras listadas) e só volta como crédito na apuração. Com prazo de pagamento menor que o de recebimento, isso exige mais caixa — vale desenhar o ciclo recebimento × pagamento.');
       var topP = rowsF.filter(function (r) { return r.perdido > 0.005; }).sort(function (a, b) { return b.perdido - a.perdido; }).slice(0, 3);
       if (empresa.usa && topP.length) ins('alta', 'Renegociar', '<b>Fornecedores que mais custam crédito:</b> ' + topP.map(function (r) { return esc2(r.nome) + ' (' + fmtMoedaBr(r.perdido) + ')'; }).join(', ') + '. Candidatos a pedir adesão ao regime regular, desconto equivalente ao crédito perdido ou troca por fornecedor em Regime Normal.');
+      var dvF = rowsF.filter(function (r) { return r.info.duvida && r.perdido > 0.005; }).sort(function (a, b) { return b.perdido - a.perdido; });
+      if (empresa.usa && dvF.length) ins('media', 'Confirmar', '<b>' + dvF.length + ' fornecedor(es) do Simples sem confirmação do regime.</b> Se algum tiver optado pelo regime regular, o crédito sobe em até <b>' + fmtMoedaBr(dvF.reduce(function (s, r) { return s + r.perdido; }, 0)) + '</b>. Comece por: ' + dvF.slice(0, 3).map(function (r) { return esc2(r.nome) + ' (' + fmtMoedaBr(r.perdido) + ')'; }).join(', ') + '.');
+      var sbF = rowsF.filter(function (r) { return r.sinal; });
+      if (sbF.length && (empresa.usa || empresa.duvida)) ins('media', 'Alerta', '<b>' + sbF.length + ' fornecedor(es) com sinal de ICMS fora do DAS na nota</b> (CRT 2 ou ICMS destacado em emitente do Simples): ' + sbF.slice(0, 3).map(function (r) { return esc2(r.nome); }).join(', ') + '. No excesso do sublimite de R$ 3,6 milhões o IBS sai do DAS, mas a CBS tende a ficar — não é o regime híbrido, e o crédito poderia ser cheio só para o IBS. Confirme com o fornecedor antes de contar com isso.');
       if (gapTotal > 0.005 && !empresa.gera) ins('media', 'Risco comercial', '<b>Clientes que aproveitam crédito</b> recebem só ' + fmtMoedaBr(credCli) + ' dos ' + fmtMoedaBr(credCliPleno) + ' possíveis: pagam cerca de <b>' + fmtMoedaBr(gapTotal) + '</b> a mais, líquido, que comprando de concorrente em Regime Normal.');
       var nDesc = bF.desc.n + bC.desc.n;
       if (nDesc > 0) ins('media', 'Confirmar regime', '<b>' + nDesc + ' cadastro(s) sem regime identificado</b> (fornecedores e clientes). Use "Atualizar consulta à Receita Federal" nas tabelas ou confirme direto — enquanto isso, ficam fora do crédito.');
@@ -5501,6 +5710,14 @@ ${htmlNomeDuplicado}
       if (nDiv > 0) ins('media', 'Divergência', '<b>' + nDiv + ' cadastro(s) em que o CRT da nota e a Receita divergem</b> (vale a Receita). Vale conferir se o fornecedor ou cliente mudou de regime.');
       if (RF_DATA.consumidorValor > 0) ins('info', 'Consumidor final', '<b>' + fmtPctBr(RF_DATA.consumidorPct) + '% das vendas</b> (' + fmtMoedaBr(RF_DATA.consumidorValor) + ') são a consumidor final: crédito não entra nessa venda — o que decide é quanto do imposto por fora o cliente aceita no preço (veja o simulador).');
       if (RF_DATA.temSaidas && RF_DATA.fatorReceitaMix < 0.995) ins('info', 'Alíquota reduzida', 'Em média a receita paga <b>' + fmtPctBr(RF_DATA.fatorReceitaMix * 100) + '% da alíquota cheia</b>: há itens com alíquota zero ou reduzida no cClassTrib das vendas.');
+      if (RF_DATA.comprasTotal > 0 && rowsF.length >= 5) {
+        var top5 = rowsF.slice().sort(function (a, b) { return b.total - a.total; }).slice(0, 5);
+        var somaTop5 = top5.reduce(function (s, r) { return s + r.total; }, 0);
+        var pctTop5 = somaTop5 / RF_DATA.comprasTotal * 100;
+        if (pctTop5 >= 40) ins(pctTop5 >= 60 ? 'media' : 'info', 'Concentração', '<b>Os 5 maiores fornecedores concentram ' + fmtPctBr(pctTop5) + '% das compras</b> (' + fmtMoedaBr(somaTop5) + ' de ' + fmtMoedaBr(RF_DATA.comprasTotal) + ', entre ' + RF_DATA.nFornecedoresTotal + ' fornecedores). Negociar regime, preço e prazo com eles move o crédito e o caixa mais do que qualquer outra frente: ' + top5.map(function (r) { return esc2(r.nome); }).join(', ') + '.');
+      }
+      if (RF_DATA.temEntradas && RF_DATA.fatorCompras < 0.99) ins('info', 'Compras', 'Em média as compras pagam <b>' + fmtPctBr(RF_DATA.fatorCompras * 100) + '% da alíquota cheia</b>: parte dos itens comprados já vem com alíquota zero ou reduzida. O crédito sobre esses itens é menor — e o cálculo acima já considera isso (campo de fator das compras em "Regime e premissas").');
+      if (RF_DATA.produtosMultiCodigo > 0) ins('media', 'Classificação', '<b>' + RF_DATA.produtosMultiCodigo + ' dos maiores produtos vendidos saem com mais de um código cClassTrib</b> nas notas do período. O mesmo produto deveria ter um enquadramento único — veja a lista em "Mix de alíquotas".');
       if (RF_DATA.temSaidas && RF_DATA.coberturaSaidas < 90) {
         var mesesCob = RF_DATA.coberturaMeses || [];
         var ultimoCob = mesesCob.length ? mesesCob[mesesCob.length - 1] : null;
@@ -5513,11 +5730,11 @@ ${htmlNomeDuplicado}
     // Segunda camada de verificação do regime: Receita Federal via BrasilAPI,
     // atualização por clique, uma consulta de cada vez, com timeout — a Receita
     // prevalece sobre o CRT quando divergem em "é Simples?".
-    function chaveCrt(crt) { return crt === '1' || crt === '2' ? 'simples_puro' : crt === '4' ? 'mei' : crt === '3' ? 'presumido' : 'desconhecido'; }
-    function ehSimplesKey(k) { return k === 'simples_puro' || k === 'mei'; }
+    function chaveCrt(crt) { return crt === '1' || crt === '2' ? 'simples_duvida' : crt === '4' ? 'mei' : crt === '3' ? 'presumido' : 'desconhecido'; }
+    function ehSimplesKey(k) { return k === 'simples_duvida' || k === 'simples_puro' || k === 'simples_hibrido' || k === 'mei'; }
     function mapeiaApi(d) {
       if (d.opcao_pelo_mei === true) return { key: 'mei', txt: 'MEI' };
-      if (d.opcao_pelo_simples === true) return { key: 'simples_puro', txt: 'Optante do Simples' };
+      if (d.opcao_pelo_simples === true) return { key: 'simples_duvida', txt: 'Optante do Simples' };
       if (d.opcao_pelo_simples === false) return { key: 'presumido', txt: 'Não optante do Simples' };
       if (d.opcao_pelo_simples === null || d.opcao_pelo_simples === undefined) return { key: 'presumido', txt: d.porte && d.porte !== 'DEMAIS' ? 'Sem opção pelo Simples (confirmar)' : 'Sem opção pelo Simples' };
       return null;
@@ -5571,8 +5788,9 @@ ${htmlNomeDuplicado}
       });
       var campoCred = document.getElementById('simCredito');
       if (campoCred) campoCred.addEventListener('input', function () { campoCred.setAttribute('data-manual', '1'); recalcReforma(); });
-      var btnDeck = document.getElementById('btnAliqDeck');
-      if (btnDeck) btnDeck.addEventListener('click', function () { var c = document.getElementById('simAliqReforma'); if (c) { c.value = '27,97'; recalcReforma(); } });
+      qsa('[data-aliq]').forEach(function (b) { b.addEventListener('click', function () { var c = document.getElementById('simAliqReforma'); if (c) { c.value = b.getAttribute('data-aliq'); recalcReforma(); } }); });
+      qsa('[data-parcial]').forEach(function (b) { b.addEventListener('click', function () { var c = document.getElementById('inpParcial'); if (c) { c.value = b.getAttribute('data-parcial'); recalcReforma(); } }); });
+      qsa('[data-fator]').forEach(function (b) { b.addEventListener('click', function () { var c = document.getElementById(b.getAttribute('data-fator')); if (c) { c.value = fmtNumBr(parseFloat(c.getAttribute('data-calc'))); recalcReforma(); } }); });
       var btnAuto = document.getElementById('btnCreditoAuto');
       if (btnAuto && campoCred) btnAuto.addEventListener('click', function () { campoCred.removeAttribute('data-manual'); recalcReforma(); });
       qsa('.btn-consulta-rf').forEach(function (btn) {
@@ -5591,6 +5809,8 @@ ${htmlNomeDuplicado}
       var bE = document.getElementById('btnExpandir'), bR = document.getElementById('btnRecolher');
       if (bE) bE.addEventListener('click', function () { qsa('details.sec').forEach(function (d) { d.open = true; }); });
       if (bR) bR.addEventListener('click', function () { qsa('details.sec').forEach(function (d) { d.open = false; }); });
+      // ao imprimir ou salvar em PDF, tudo precisa estar aberto — senão sai só o cabeçalho das seções fechadas
+      window.addEventListener('beforeprint', function () { qsa('details').forEach(function (d) { d.open = true; }); });
       recalcReforma();
     })();
     function baixarExcelTopico(id, nomeBase) {
@@ -8409,6 +8629,80 @@ ${htmlNomeDuplicado}
 
       {showEasterEgg && <EasterEggGame onClose={() => setShowEasterEgg(false)} />}
 
+      {/* Confirmação de Simples puro × híbrido — só aparece ao gerar o Perfil do Cliente de empresa do Simples */}
+      <AnimatePresence>
+        {confirmaSimples && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] backdrop-blur-sm flex items-center justify-center p-6"
+            style={{background: 'rgba(10,14,35,0.6)'}}
+            onClick={() => setConfirmaSimples(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              onClick={e => e.stopPropagation()}
+              className="bg-white dark:bg-slate-900 rounded-xl shadow-2xl w-full max-w-xl max-h-[85vh] overflow-y-auto p-6"
+            >
+              <div className="flex items-start justify-between mb-1">
+                <h3 className="font-serif text-base font-semibold text-slate-800 dark:text-slate-100">
+                  Como a empresa recolhe IBS e CBS?
+                </h3>
+                <button onClick={() => setConfirmaSimples(null)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0" title="Cancelar">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                Notas (CRT): <strong>{confirmaSimples.crtTxt}</strong> · Receita: <strong>{confirmaSimples.receitaTxt}</strong>
+                {confirmaSimples.diverge && ' — as notas e a Receita divergem; vale a Receita.'}
+              </p>
+              <p className="text-sm text-slate-600 dark:text-slate-300 mb-4 leading-relaxed">
+                A empresa é do Simples Nacional. O Sequência não consegue ver se ela optou pelo regime regular de IBS/CBS (híbrido): nem a nota (o CRT continua 1 ou 2) nem a Receita informam isso. A resposta muda o crédito de compras e o IBS/CBS das vendas, e já sai fechada no relatório.
+              </p>
+              <div className="space-y-2 mb-4">
+                {([
+                  ['puro', 'Dentro do DAS, como hoje (Simples puro)', 'IBS/CBS seguem na guia única; a empresa não toma crédito cheio das compras.'],
+                  ['hibrido', 'Por fora do DAS, no regime regular (híbrido)', 'A empresa optou — ou vai optar — pelo regime regular: débito nas vendas e crédito nas compras.'],
+                  ['duvida', 'Ainda não sei — mostrar as duas hipóteses', 'O relatório traz um quadro "se for puro × se for híbrido" com os valores lado a lado.'],
+                ] as ['puro' | 'hibrido' | 'duvida', string, string][]).map(([k, titulo, desc]) => (
+                  <label
+                    key={k}
+                    className={cn('flex items-start gap-3 p-3 border cursor-pointer transition-colors', modoSimplesEscolhido === k ? 'border-slate-800 dark:border-slate-200 bg-slate-50 dark:bg-slate-800' : 'border-slate-200 dark:border-slate-700 hover:border-slate-400')}
+                  >
+                    <input type="radio" name="modoSimples" className="mt-1" checked={modoSimplesEscolhido === k} onChange={() => setModoSimplesEscolhido(k)} />
+                    <span>
+                      <span className="block text-sm font-semibold text-slate-800 dark:text-slate-100">{titulo}</span>
+                      <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">{desc}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-400 mb-4 leading-relaxed">
+                Pergunta pronta ao cliente: "Você optou pelo regime regular de IBS e CBS, por fora do DAS?" A opção é feita no Portal do Simples Nacional, por semestre — confira a janela vigente. Dá para trocar a resposta depois, dentro do relatório.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setConfirmaSimples(null)}
+                  className="px-4 py-2 text-sm text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-slate-400 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => { const modo = modoSimplesEscolhido; setConfirmaSimples(null); exportarRelatorioAlertasHtml({ modoSimples: modo }); }}
+                  className="px-4 py-2 text-sm font-semibold text-white transition-colors"
+                  style={{background: '#17150F'}}
+                >
+                  Gerar Perfil do Cliente
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Auditoria de Regime Modal */}
       <AnimatePresence>
         {showAuditoriaRegime && (
@@ -8717,7 +9011,7 @@ ${htmlNomeDuplicado}
               <div className="flex items-center gap-3 no-print">
                 <ThemeToggle />
                 <button
-                  onClick={exportarRelatorioAlertasHtml}
+                  onClick={abrirPerfilCliente}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all shrink-0"
                   style={{background: 'rgba(201,162,39,0.18)', border: '1px solid rgba(201,162,39,0.5)', color: '#C9A227'}}
                   title="Baixa o perfil do cliente em HTML (clientes, fornecedores, produtos, sazonalidade e Reforma Tributária: regime, créditos e simulação) — tópicos expansíveis, pra orientar o cliente"
@@ -11698,7 +11992,7 @@ ${htmlNomeDuplicado}
                       </div>
                       <div className="flex items-center gap-4 no-print">
                         <button
-                          onClick={exportarRelatorioAlertasHtml}
+                          onClick={abrirPerfilCliente}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
                           title="Baixa o Perfil do Cliente em HTML (clientes, fornecedores, produtos, sazonalidade e Reforma Tributária) — tópicos expansíveis, pra orientar o cliente"
                         >
@@ -12238,7 +12532,7 @@ ${htmlNomeDuplicado}
                           {copiedResumoTEF ? 'Copiado!' : 'Copiar Resumo'}
                         </button>
                         <button
-                          onClick={exportarRelatorioAlertasHtml}
+                          onClick={abrirPerfilCliente}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
                           title="Baixa o Perfil do Cliente em HTML (clientes, fornecedores, produtos, sazonalidade e Reforma Tributária) — tópicos expansíveis, pra orientar o cliente"
                         >
