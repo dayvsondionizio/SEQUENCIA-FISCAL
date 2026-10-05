@@ -3708,12 +3708,13 @@ ${secoesPorCodigo}
   type MixLado = {
     total: number; comGrupo: number; coberturaPct: number; fator: number;
     porCodigo: { code: string; nome: string; efeito: string; valor: number }[];
+    porMes: { mes: string; pct: number }[];
   };
   const mixAliquotas = useMemo(() => {
-    const lado = () => ({ total: 0, comGrupo: 0, somaFator: 0, codigos: new Map<string, { nome: string; efeito: string; valor: number }>() });
+    const lado = () => ({ total: 0, comGrupo: 0, somaFator: 0, codigos: new Map<string, { nome: string; efeito: string; valor: number }>(), meses: new Map<string, { total: number; comGrupo: number }>() });
     const acum = { saidas: lado(), entradas: lado() };
     if (!mainCnpj) {
-      const vazio: MixLado = { total: 0, comGrupo: 0, coberturaPct: 0, fator: 1, porCodigo: [] };
+      const vazio: MixLado = { total: 0, comGrupo: 0, coberturaPct: 0, fator: 1, porCodigo: [], porMes: [] };
       return { saidas: vazio, entradas: vazio };
     }
     const PESO_IBS = 17.7 / 26.5;
@@ -3731,6 +3732,11 @@ ${secoesPorCodigo}
         const v = det.vProd;
         if (!(v > 0)) return;
         a!.total += v;
+        const mesChave = (xml.data || '').slice(0, 7);
+        const mm = a!.meses.get(mesChave) || { total: 0, comGrupo: 0 };
+        mm.total += v;
+        if (det.temIbsCbs) mm.comGrupo += v;
+        a!.meses.set(mesChave, mm);
         if (!det.temIbsCbs) {
           a!.somaFator += v;
           const sem = a!.codigos.get('sem-grupo') || { nome: 'Item sem o grupo IBS/CBS (assumido em alíquota cheia)', efeito: 'Integral (suposição)', valor: 0 };
@@ -3759,6 +3765,10 @@ ${secoesPorCodigo}
       coberturaPct: a.total > 0 ? (a.comGrupo / a.total) * 100 : 0,
       fator: a.total > 0 ? a.somaFator / a.total : 1,
       porCodigo: Array.from(a.codigos.entries()).map(([code, c]) => ({ code, ...c })).sort((x, y) => y.valor - x.valor),
+      porMes: Array.from(a.meses.entries())
+        .filter(([chave]) => chave.length === 7)
+        .sort(([x], [y]) => x.localeCompare(y))
+        .map(([chave, m]) => ({ mes: getMonthYear(chave), pct: m.total > 0 ? (m.comGrupo / m.total) * 100 : 0 })),
     });
     return { saidas: fecha(acum.saidas), entradas: fecha(acum.entradas) };
   }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
@@ -4629,9 +4639,10 @@ ${htmlNomeDuplicado}
     // uma de cada vez, com timeout e teto de tempo, e o que falhar vira "não
     // consultada" no relatório (nunca trava nem derruba a exportação).
     const alvosConsulta = Array.from(new Set([
+      mainCnpj || '', // o regime da própria empresa também tem as duas camadas (CRT + Receita)
       ...perfilFornecedores.fornecedores.slice(0, 30).map(f => f.cnpj),
       ...perfilClientes.clientes.slice(0, 30).map(c => c.cnpj),
-    ])).filter(c => !!c && c !== mainCnpj);
+    ])).filter(c => !!c);
     const cacheRegime: Record<string, PerfilClienteReceitaDados> = {};
     (Object.entries(consultaClientesCnpj) as [string, { status: string; dados?: PerfilClienteReceitaDados }][]).forEach(([c, v]) => { if (v.status === 'ok' && v.dados) cacheRegime[c] = v.dados; });
     const formatCnpj = (c: string) =>
@@ -4814,6 +4825,7 @@ ${htmlNomeDuplicado}
     const consumidorValor = Math.max(faturamentoTotal - perfilClientes.totalConsiderado, 0);
     const consumidorPct = faturamentoTotal > 0 ? (consumidorValor / faturamentoTotal) * 100 : 0;
     const totalComprasTop = topF.reduce((s, f) => s + f.totalComprado, 0);
+    const sugEmpresa = sugestaoRegime(mainCnpj || '', regimeTributario.crt);
 
     // tabelas minimalistas (estilo Coopera): sem fundo, hairlines, números à direita
     const tabelaApoio = (t: { colunas?: string[]; linhas?: (string | number)[][] }, limite = 300) => {
@@ -4851,15 +4863,15 @@ ${htmlNomeDuplicado}
         `<div id="insights" class="insights"></div>`, true));
 
       // 2. Premissas e regime
-      secoes.push(secao('sec-premissas', 'Regime e premissas', 'Regime real da empresa e parâmetros — tudo editável, tudo recalcula', 'Regime', 'figPremissas', esc(regimeTributario.label || 'a definir'),
+      secoes.push(secao('sec-premissas', 'Regime e premissas', 'Regime real da empresa e parâmetros — tudo editável, tudo recalcula', 'Regime', 'figPremissas', esc(labelRegime(sugEmpresa.key)),
         `<p class="nota">Os campos já vêm com um palpite — o regime sai do CRT das notas e da consulta à Receita Federal. Troque pelo que você sabe e todas as tabelas e leituras desta página recalculam na hora.</p>
         <div class="campos">
           <label><span class="rot">Regime real da empresa</span>
-            <select id="selRegimeEmpresa" class="rf-in">${opcoesSelectHtml(regimeKeyPorCrt(regimeTributario.crt))}</select>
-            <span class="aj">palpite pelo CRT das notas: ${esc(regimeTributario.label || 'não identificado')}</span></label>
+            <select id="selRegimeEmpresa" class="rf-in">${opcoesSelectHtml(sugEmpresa.key)}</select>
+            <span class="aj">CRT das notas: ${esc(sugEmpresa.crtTxt)} · Receita: ${esc(sugEmpresa.receitaTxt)}${sugEmpresa.divergencia ? ` — ⚠ ${esc(sugEmpresa.divergencia)}` : ''}</span></label>
           <label><span class="rot">Alíquota de referência CBS + IBS (%)</span>
             <input type="text" id="simAliqReforma" class="rf-in" value="26,50" inputmode="decimal">
-            <span class="aj">estimativa para o IVA dual já implantado; a final depende de regulamentação</span></label>
+            <span class="aj">estimativa para o IVA dual já implantado; a final depende de regulamentação. <button type="button" class="link" id="btnAliqDeck">usar 27,97% (CBS 9,29% + IBS 18,68%, como na apresentação)</button></span></label>
           <label><span class="rot">Crédito parcial de fornecedor Simples puro (% da compra)</span>
             <input type="text" id="inpParcial" class="rf-in" value="3,00" inputmode="decimal">
             <span class="aj">estimativa — use a alíquota efetiva de IBS/CBS no DAS do fornecedor (LC 214, arts. 155 e 156)</span></label>
@@ -4995,7 +5007,110 @@ ${htmlNomeDuplicado}
         </table></div>`, false));
     }
 
-    // 8. Dados de apoio (perfil bruto: quem compra, de quem compra, produtos, sazonalidade)
+    // 8. Prontidão para a Reforma — a "reforma estrutural" da apresentação (obtenção e
+    // emissão de NFs, controle de informações, contabilidade, contratos), lida dos
+    // sinais que as auditorias do analista já produzem. O que o XML não enxerga entra
+    // como "perguntar ao cliente" em vez de ser chutado.
+    if (temReforma) {
+      type Prontidao = { ind: string; st: 'ok' | 'atencao' | 'info'; dado: string; porque: string };
+      const itensPr: Prontidao[] = [];
+      const faltantesLiq = (analysis || []).reduce((s, x) => s + x.faltantes.length, 0);
+      itensPr.push({
+        ind: 'Sequência das notas emitidas',
+        st: faltantesLiq === 0 ? 'ok' : 'atencao',
+        dado: faltantesLiq === 0 ? 'Íntegra: nenhum número faltando na sequência.' : `${faltantesLiq} número(s) faltando na sequência, sem inutilização que cubra.`,
+        porque: 'Com cruzamento automático das notas e split payment, número que falta vira diferença de débito difícil de explicar.',
+      });
+      const nAutoriz = notasAnomalias.semAutorizacaoNaoContingencia.length;
+      const nPrazo = notasAnomalias.foraDoPrazo.length;
+      const nMalf = notasAnomalias.malformadas.length;
+      const nDup = notasAnomalias.numeroDuplicado.length;
+      const nHomolog = notasHomologacao.total;
+      const nProblemas = nAutoriz + nPrazo + nMalf + nDup + nHomolog;
+      itensPr.push({
+        ind: 'Notas fora do padrão',
+        st: nProblemas === 0 ? 'ok' : 'atencao',
+        dado: nProblemas === 0 ? 'Nenhuma nota sem autorização, fora do prazo, malformada, duplicada ou de homologação.' : [
+          nAutoriz ? `${nAutoriz} sem autorização` : '', nPrazo ? `${nPrazo} autorizada(s) fora do prazo` : '', nMalf ? `${nMalf} malformada(s)` : '',
+          nDup ? `${nDup} número(s) duplicado(s)` : '', nHomolog ? `${nHomolog} de homologação (teste)` : '',
+        ].filter(Boolean).join(' · '),
+        porque: 'Assertividade na emissão: nota fora do padrão não gera crédito confiável pro comprador e pode ser cobrada do cliente.',
+      });
+      if (mixAliquotas.saidas.total > 0) {
+        const meses = mixAliquotas.saidas.porMes;
+        const ultimo = meses[meses.length - 1];
+        const ehSimplesEmp = regimeTributario.isSimples || regimeTributario.isMei;
+        itensPr.push({
+          ind: 'Grupo IBS/CBS na nota (sistema emissor adaptado)',
+          st: ehSimplesEmp ? 'info' : (ultimo && ultimo.pct >= 99 ? 'ok' : 'atencao'),
+          dado: `${meses.map(m => `${m.mes}: ${formatarPct(m.pct)}%`).join(' · ')} do valor das vendas com o grupo preenchido.`,
+          porque: ehSimplesEmp ? 'Simples Nacional só passa a ser obrigado em 01/01/2027 (Ato Conjunto RFB/CGIBS nº 4/2026).' : 'Obrigatório nas NF-e desde 03/08/2026 (Ato Conjunto RFB/CGIBS nº 4/2026) — mês anterior a isso sem o grupo é esperado.',
+        });
+      }
+      if (auditoriaClassTrib.totalItens > 0) {
+        const nErros = auditoriaClassTrib.problemas.length;
+        itensPr.push({
+          ind: 'Classificação tributária (cClassTrib)',
+          st: nErros > 0 || auditoriaClassTrib.cclassTribUnicoSuspeito ? 'atencao' : 'ok',
+          dado: nErros > 0 ? `${nErros} inconsistência(s) em ${auditoriaClassTrib.totalItens} itens conferidos contra a tabela oficial.` : auditoriaClassTrib.cclassTribUnicoSuspeito ? `Um único código em todo o período, apesar de ${auditoriaClassTrib.ncmsDistintos} NCMs distintos no cadastro.` : `${auditoriaClassTrib.totalItens} itens conferidos, sem inconsistência estrutural.`,
+          porque: 'Classificar errado muda o imposto: item de alíquota zero saindo como integral gera imposto pago a mais; o contrário gera risco de autuação.',
+        });
+      }
+      if (auditoriaPagamento.totalCartao > 0) {
+        const pctInt = (auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100;
+        itensPr.push({
+          ind: 'Meios de pagamento (rastreabilidade)',
+          st: pctInt >= 95 && auditoriaPagamento.totalFalsoTef === 0 ? 'ok' : 'atencao',
+          dado: `${formatarPct(pctInt)}% das vendas em cartão integradas ao TEF · ${auditoriaPagamento.totalNaoIntegrado} em POS manual · ${auditoriaPagamento.totalFalsoTef} falso TEF.`,
+          porque: 'O split payment separa o imposto na liquidação do pagamento: venda sem rastro de pagamento fica sem como provar o débito recolhido.',
+        });
+      }
+      itensPr.push({
+        ind: 'Notas de compra (o crédito depende de ter a nota)',
+        st: 'info',
+        dado: `${perfilFornecedores.fornecedores.length} fornecedor(es) nas NF-e de entrada; compras identificadas equivalem a ${formatarPct(faturamentoTotal > 0 ? (perfilFornecedores.totalConsiderado / faturamentoTotal) * 100 : 0)}% da receita do período.`,
+        porque: 'Compra sem nota não gera crédito. Se o custo de mercadoria real for maior que isso, falta nota de entrada — vale confirmar com o cliente.',
+      });
+      itensPr.push({
+        ind: 'Controle financeiro, ERP, contabilidade e contratos',
+        st: 'info',
+        dado: 'Não aparecem nas notas fiscais — perguntar ao cliente.',
+        porque: 'A apresentação lista como pontos estruturais: controle financeiro profissional, ERP, contabilidade fechada em dia e contratos com cláusula de revisão de preços.',
+      });
+      const nAtencaoPr = itensPr.filter(i => i.st === 'atencao').length;
+      const tagPr = { ok: '<span class="tag tag-ok">Em dia</span>', atencao: '<span class="tag tag-media">Atenção</span>', info: '<span class="tag tag-info">Verificar</span>' };
+      secoes.push(secao('sec-prontidao', 'Prontidão para a Reforma', 'A "reforma estrutural" da apresentação, lida das auditorias que o analista já faz', 'Pontos de atenção', 'figProntidao', String(nAtencaoPr),
+        `<p class="nota">A Reforma não é só sobre alíquota: ela cobra assertividade na emissão e na obtenção das notas, rastro do pagamento e controle. Estes sinais saem das mesmas auditorias de sequência, anomalias, IBS/CBS e TEF — aqui lidos como maturidade do cliente pra Reforma.</p>
+        <div class="tw"><table class="t">
+          <thead><tr><th>Indicador</th><th>Situação</th><th>O que o dado mostra</th><th>Por que importa na Reforma</th></tr></thead>
+          <tbody>${itensPr.map(i => `<tr><td><b>${esc(i.ind)}</b></td><td>${tagPr[i.st]}</td><td class="t-txt">${esc(i.dado)}</td><td class="t-txt">${esc(i.porque)}</td></tr>`).join('')}</tbody>
+        </table></div>`, false));
+
+      // 9. Calendário da transição + roteiro da conversa (próximos passos)
+      const calendario = {
+        colunas: ['Ano', 'O que muda', 'Para o cliente'],
+        linhas: [
+          ['2026', 'Ano de teste: CBS 0,9% e IBS 0,1% destacados nas notas (compensáveis); grupo IBS/CBS passa a aparecer na NF-e.', 'Adaptar o sistema emissor e o cadastro de produtos; ainda sem custo efetivo.'],
+          ['2027', 'PIS e COFINS dão lugar à CBS; entra o Imposto Seletivo; o Simples Nacional passa a destacar o grupo IBS/CBS.', 'Primeira reprecificação: imposto por fora e crédito amplo.'],
+          ['2028', 'Sem mudança de alíquota.', 'Ano pra ajustar preços, contratos e fornecedores.'],
+          ['2029 a 2032', 'IBS sobe 10%, 20%, 30% e 40% da alíquota final, enquanto ICMS e ISS caem na mesma proporção; benefícios fiscais são afetados.', 'Uma janela de reprecificação por ano.'],
+          ['2033', 'Sistema consolidado: IBS e CBS plenos; ICMS, ISS, PIS e COFINS extintos.', 'Regime final — preços e margens já recalibrados.'],
+        ] as (string | number)[][],
+      };
+      const passos: { prazo: 'alta' | 'media' | 'info'; rotulo: string; titulo: string; texto: string }[] = [
+        { prazo: 'alta', rotulo: 'Curto prazo', titulo: 'Reprecificar', texto: 'Use o simulador por janela (2027 em diante) e revise contratos com cláusula de reajuste de preço. A apresentação aponta 7 janelas: 2026, 2027 e 2029 a 2033.' },
+        { prazo: 'alta', rotulo: 'Curto prazo', titulo: 'Fornecedores', texto: 'Renegociar regime e preço com quem mais custa crédito e confirmar o regime dos que não foram identificados — a lista está acima.' },
+        { prazo: 'alta', rotulo: 'Curto prazo', titulo: 'Regime da empresa', texto: 'Comparar Simples, Simples híbrido, Presumido e Real com crédito amplo e imposto por fora — a apresentação pede "definir o regime adequado" pra empresa e pro cliente.' },
+        { prazo: 'media', rotulo: 'Médio prazo', titulo: 'Caixa', texto: 'O IBS/CBS vem por fora no preço de compra e só volta como crédito na apuração. Desenhar o ciclo recebimento × pagamento e o efeito do split payment antes de 2027.' },
+        { prazo: 'media', rotulo: 'Médio prazo', titulo: 'Controles', texto: 'ERP e controle financeiro, 100% das compras com nota e contabilidade fechada em dia — o combate à sonegação tira a margem pra informalidade.' },
+        { prazo: 'info', rotulo: 'Levantar', titulo: 'Fora das notas de mercadoria', texto: 'Aluguel, energia, telecom, frete, ativo imobilizado e empréstimos mudam com a base ampla: geram crédito (ou débito, pra quem aluga imóvel ou empresta dinheiro). Não aparecem nestas notas — perguntar ao cliente.' },
+      ];
+      secoes.push(secao('sec-calendario', 'Calendário e próximos passos', 'Linha do tempo da transição e roteiro pra conversa com o cliente', 'Primeira janela', 'figCalendario', '2027',
+        `${subsecao('Linha do tempo da transição (2026–2033)', '5 marcos', tabelaApoio(calendario), true)}
+        ${subsecao('Roteiro da conversa com o cliente', `${passos.length} frentes`, `<div class="insights">${passos.map(p => `<div class="ins"><div class="tg"><span class="tag tag-${p.prazo}">${esc(p.rotulo)}</span></div><div class="tx"><b>${esc(p.titulo)}.</b> ${esc(p.texto)}</div></div>`).join('')}</div>`, true)}`, false));
+    }
+
+    // 10. Dados de apoio (perfil bruto: quem compra, de quem compra, produtos, sazonalidade)
     const ordemApoio: Area[] = ['perfil', 'fornecedores', 'ranking', 'sazonalidade'];
     const apoioSubs = topicos.filter(t => ordemApoio.includes(t.area)).sort((a, b) => ordemApoio.indexOf(a.area) - ordemApoio.indexOf(b.area));
     if (apoioSubs.length > 0) {
@@ -5012,7 +5127,8 @@ ${htmlNomeDuplicado}
         : (mesesDisponiveis[0] || periodo);
     const rotuloNav: Record<string, string> = {
       'sec-leituras': 'Leituras', 'sec-premissas': 'Regime', 'sec-cadeia': 'Cadeia', 'sec-fornecedores': 'Fornecedores',
-      'sec-clientes': 'Clientes', 'sec-mix': 'Mix', 'sec-simulador': 'Simulador', 'sec-apoio': 'Apoio',
+      'sec-clientes': 'Clientes', 'sec-mix': 'Mix', 'sec-simulador': 'Simulador', 'sec-prontidao': 'Prontidão',
+      'sec-calendario': 'Calendário', 'sec-apoio': 'Apoio',
     };
 
     const html = `<!DOCTYPE html>
@@ -5161,7 +5277,7 @@ ${htmlNomeDuplicado}
     <div class="h1a">Perfil e Reforma Tributária</div>
     <div class="h1b${nomeEmpresaGrande ? ' menor' : ''}">${esc(empresa)}</div>
     <div class="regua"></div>
-    <div class="lede">Retrato da empresa a partir das notas fiscais de ${esc(periodoLegivel)}: quem compra dela, de quem ela compra e quanto crédito de IBS/CBS circula nessa cadeia — para orientar o cliente sobre a Reforma Tributária e mostrar onde a conversa consultiva rende mais.</div>
+    <div class="lede">Retrato da empresa a partir das notas fiscais de ${esc(periodoLegivel)}: quem compra dela, de quem ela compra e quanto crédito de IBS/CBS circula nessa cadeia — para orientar o cliente sobre a Reforma Tributária e mostrar onde a conversa consultiva rende mais. A Reforma não é sobre pagamento de tributos — é sobre margem e caixa.</div>
     ${temReforma ? `<div class="kpis">
       <div class="kpi"><div class="k-r">Faturamento do período</div><div class="k-v">${esc(formatarMoeda(faturamentoTotal))}</div><div class="k-s">${esc(formatarMoeda(receitaMensal))} por mês</div></div>
       <div class="kpi"><div class="k-r">Venda a consumidor final</div><div class="k-v">${esc(formatarPct(consumidorPct))}%</div><div class="k-s">${esc(formatarMoeda(consumidorValor))} sem CNPJ de comprador</div></div>
@@ -5183,7 +5299,7 @@ ${htmlNomeDuplicado}
   <script>
     var DADOS = ${JSON.stringify(dadosParaExcel)};
     var REGIME_INFO = ${JSON.stringify(Object.fromEntries(REGIME_OPCOES.map(o => [o.key, { label: o.label, gera: o.gera, usa: o.usa, parcial: o.parcial }])))};
-    var RF_DATA = ${JSON.stringify({ numMeses: numMesesRef, faturamento: faturamentoTotal, consumidorValor, consumidorPct, fatorReceitaMix: mixAliquotas.saidas.total > 0 ? mixAliquotas.saidas.fator : 1, coberturaSaidas: mixAliquotas.saidas.coberturaPct, temSaidas: mixAliquotas.saidas.total > 0 })};
+    var RF_DATA = ${JSON.stringify({ numMeses: numMesesRef, faturamento: faturamentoTotal, consumidorValor, consumidorPct, fatorReceitaMix: mixAliquotas.saidas.total > 0 ? mixAliquotas.saidas.fator : 1, coberturaSaidas: mixAliquotas.saidas.coberturaPct, coberturaMeses: mixAliquotas.saidas.porMes, temSaidas: mixAliquotas.saidas.total > 0, empresaDiverge: sugEmpresa.divergencia ? { crt: sugEmpresa.crtTxt, receita: sugEmpresa.receitaTxt } : null })};
     function qsa(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
     function fmtMoedaBr(v) { return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
     function fmtNumBr(v) { return v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -5359,8 +5475,12 @@ ${htmlNomeDuplicado}
         } else if (resumo && receita > 0) {
           var subiu = preco100 - receita;
           var pctUp = (preco100 / receita - 1) * 100;
-          resumo.innerHTML = 'Para manter a margem de hoje, o preço médio precisa ' + (subiu >= 0 ? 'subir ' : 'cair ') + '<b>' + fmtPctBr(Math.abs(pctUp)) + '%</b> (' + fmtMoedaBr(Math.abs(subiu)) + ' por mês).' +
-            (aliqAtual === 0 ? '<small>A alíquota atual está em 0%: informe a carga de hoje (DAS, Presumido ou Real) pra comparação fazer sentido.</small>' : '');
+          // com a carga atual em 0% a conta compara contra "não pagar nada hoje" — número sem sentido,
+          // então a manchete só aparece depois que a alíquota atual é informada
+          resumo.innerHTML = aliqAtual === 0
+            ? 'Informe a alíquota atual sobre a receita (DAS, Presumido ou Real) pra ver quanto o preço precisa subir.<small>Enquanto ela está em 0%, a tabela abaixo compara contra "não pagar imposto hoje" e não deve ser lida como resultado.</small>'
+            : 'Para manter a margem de hoje, o preço médio precisa ' + (subiu >= 0 ? 'subir ' : 'cair ') + '<b>' + fmtPctBr(Math.abs(pctUp)) + '%</b> (' + fmtMoedaBr(Math.abs(subiu)) + ' por mês).';
+          corpo.style.opacity = aliqAtual === 0 ? '0.4' : '1';
           setTxt('figSim', aliqAtual === 0 ? '—' : (subiu >= 0 ? '+' : '−') + fmtPctBr(Math.abs(pctUp)) + '%');
         }
       }
@@ -5368,8 +5488,10 @@ ${htmlNomeDuplicado}
       // leituras-chave
       var it = [];
       function ins(cls, rotulo, texto) { it.push('<div class="ins"><div class="tg">' + tag(cls, rotulo) + '</div><div class="tx">' + texto + '</div></div>'); }
+      if (RF_DATA.empresaDiverge) ins('alta', 'Regime da empresa', '<b>As notas e a Receita discordam sobre o regime da própria empresa.</b> As notas declaram "' + esc2(RF_DATA.empresaDiverge.crt) + '", mas a Receita Federal registra "' + esc2(RF_DATA.empresaDiverge.receita) + '". Antes de simular, confirme o regime real: ele muda alíquota, crédito e até a regularidade da emissão (o emissor pode estar com o CRT errado). Este relatório adotou a Receita como palpite — troque em "Regime e premissas" se for outro.');
       if (!empresa.usa && empresa.label !== 'Não identificado') ins('alta', 'Prioridade', '<b>Regime da empresa.</b> Como ' + esc2(empresa.label) + ', a empresa não aproveita crédito de fornecedor. Vale simular a migração para o regime regular (Presumido, Real ou Simples híbrido): com crédito, o custo líquido das compras cai.');
       if (empresa.usa && rowsF.length) ins(perdF / Math.max(credF + perdF, 1) >= 0.2 ? 'media' : 'info', 'Crédito', '<b>Crédito de compras.</b> Cerca de <b>' + fmtMoedaBr(credF) + '</b> de IBS/CBS voltam como crédito sobre ' + fmtMoedaBr(totCompras) + ' em compras listadas. Deixa de aproveitar <b>' + fmtMoedaBr(perdF) + '</b> (' + fmtPctBr((credF + perdF) > 0 ? perdF / (credF + perdF) * 100 : 0) + '% do crédito cheio possível) por causa do regime de fornecedores.');
+      if (empresa.usa && totCompras > 0 && RF_DATA.numMeses > 0) ins('media', 'Caixa', '<b>Capital de giro.</b> O IBS/CBS vem por fora no preço de compra (cerca de <b>' + fmtMoedaBr((totCompras / RF_DATA.numMeses) * aCompra) + ' por mês</b> nas compras listadas) e só volta como crédito na apuração. Com prazo de pagamento menor que o de recebimento, isso exige mais caixa — vale desenhar o ciclo recebimento × pagamento.');
       var topP = rowsF.filter(function (r) { return r.perdido > 0.005; }).sort(function (a, b) { return b.perdido - a.perdido; }).slice(0, 3);
       if (empresa.usa && topP.length) ins('alta', 'Renegociar', '<b>Fornecedores que mais custam crédito:</b> ' + topP.map(function (r) { return esc2(r.nome) + ' (' + fmtMoedaBr(r.perdido) + ')'; }).join(', ') + '. Candidatos a pedir adesão ao regime regular, desconto equivalente ao crédito perdido ou troca por fornecedor em Regime Normal.');
       if (gapTotal > 0.005 && !empresa.gera) ins('media', 'Risco comercial', '<b>Clientes que aproveitam crédito</b> recebem só ' + fmtMoedaBr(credCli) + ' dos ' + fmtMoedaBr(credCliPleno) + ' possíveis: pagam cerca de <b>' + fmtMoedaBr(gapTotal) + '</b> a mais, líquido, que comprando de concorrente em Regime Normal.');
@@ -5379,7 +5501,11 @@ ${htmlNomeDuplicado}
       if (nDiv > 0) ins('media', 'Divergência', '<b>' + nDiv + ' cadastro(s) em que o CRT da nota e a Receita divergem</b> (vale a Receita). Vale conferir se o fornecedor ou cliente mudou de regime.');
       if (RF_DATA.consumidorValor > 0) ins('info', 'Consumidor final', '<b>' + fmtPctBr(RF_DATA.consumidorPct) + '% das vendas</b> (' + fmtMoedaBr(RF_DATA.consumidorValor) + ') são a consumidor final: crédito não entra nessa venda — o que decide é quanto do imposto por fora o cliente aceita no preço (veja o simulador).');
       if (RF_DATA.temSaidas && RF_DATA.fatorReceitaMix < 0.995) ins('info', 'Alíquota reduzida', 'Em média a receita paga <b>' + fmtPctBr(RF_DATA.fatorReceitaMix * 100) + '% da alíquota cheia</b>: há itens com alíquota zero ou reduzida no cClassTrib das vendas.');
-      if (RF_DATA.temSaidas && RF_DATA.coberturaSaidas < 90) ins('media', 'Cobertura', 'Só <b>' + fmtPctBr(RF_DATA.coberturaSaidas) + '%</b> do valor das vendas tem o grupo IBS/CBS preenchido; o resto foi assumido em alíquota cheia, então o mix é em parte suposição.');
+      if (RF_DATA.temSaidas && RF_DATA.coberturaSaidas < 90) {
+        var mesesCob = RF_DATA.coberturaMeses || [];
+        var ultimoCob = mesesCob.length ? mesesCob[mesesCob.length - 1] : null;
+        ins('media', 'Cobertura', 'Só <b>' + fmtPctBr(RF_DATA.coberturaSaidas) + '%</b> do valor das vendas tem o grupo IBS/CBS preenchido' + (mesesCob.length > 1 ? ' (' + mesesCob.map(function (m) { return m.mes + ': ' + fmtPctBr(m.pct) + '%'; }).join(' · ') + ')' : '') + '; o resto foi assumido em alíquota cheia, então o mix é em parte suposição.' + (ultimoCob && ultimoCob.pct >= 99 ? ' O mês mais recente já está completo — a falta é de antes da obrigatoriedade (03/08/2026).' : ''));
+      }
       setHtml('insights', it.length ? it.join('') : '<div class="nota">Sem pontos de atenção com as premissas atuais.</div>');
       setTxt('figLeituras', String(it.length));
     }
@@ -5445,6 +5571,8 @@ ${htmlNomeDuplicado}
       });
       var campoCred = document.getElementById('simCredito');
       if (campoCred) campoCred.addEventListener('input', function () { campoCred.setAttribute('data-manual', '1'); recalcReforma(); });
+      var btnDeck = document.getElementById('btnAliqDeck');
+      if (btnDeck) btnDeck.addEventListener('click', function () { var c = document.getElementById('simAliqReforma'); if (c) { c.value = '27,97'; recalcReforma(); } });
       var btnAuto = document.getElementById('btnCreditoAuto');
       if (btnAuto && campoCred) btnAuto.addEventListener('click', function () { campoCred.removeAttribute('data-manual'); recalcReforma(); });
       qsa('.btn-consulta-rf').forEach(function (btn) {
@@ -9889,20 +10017,266 @@ ${htmlNomeDuplicado}
                 </div>
               )}
 
-              {/* Quando a empresa só vende por NFC-e, o card de baixo não aparece — sem
-                  isso aqui, some sem explicação nenhuma e parece bug (já confundiu
-                  analista, achando que quebrou). */}
-              {perfilClientes.vendeSoPorNfce && (
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-violet-300 rounded-xl p-5 flex items-start gap-3">
-                  <Users className="w-5 h-5 text-violet-400 shrink-0 mt-0.5" />
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    <strong className="text-slate-700 dark:text-slate-200">Perfil de Clientes não se aplica aqui.</strong> As vendas desse período são por NFC-e (consumidor final) — o destinatário quase nunca tem CNPJ, então não existe "cliente" pra identificar e perfilar. Isso é esperado pra um negócio de varejo/balcão, não um erro.
+              {/* Corpo em duas colunas: filtros/utilitários à esquerda, auditoria ao centro */}
+              <div className="flex flex-col lg:flex-row gap-8 items-start">
+                <aside className="w-full lg:w-72 shrink-0 lg:sticky lg:top-6 space-y-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+                  <div
+                    onClick={() => (periodoAnalise.diasDetalhados?.length ?? 0) > 0 && setShowDaysDetail(!showDaysDetail)}
+                    onKeyDown={e => { if ((periodoAnalise.diasDetalhados?.length ?? 0) > 0 && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setShowDaysDetail(!showDaysDetail); } }}
+                    role={(periodoAnalise.diasDetalhados?.length ?? 0) > 0 ? 'button' : undefined}
+                    tabIndex={(periodoAnalise.diasDetalhados?.length ?? 0) > 0 ? 0 : undefined}
+                    className={cn(
+                      "group bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700 transition-all",
+                      (periodoAnalise.diasDetalhados?.length ?? 0) > 0 && "cursor-pointer hover:border-slate-300 dark:hover:border-slate-600"
+                    )}
+                  >
+                    <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Período Analisado</div>
+                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100 mt-2">
+                    {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
+                  </div>
+                  <div className="flex items-center justify-between text-xs font-semibold text-slate-400 dark:text-slate-500 mt-2">
+                    <span>{periodoAnalise.totalDias} dias · {periodoAnalise.totalNotas ?? 0} notas</span>
+                    {periodoAnalise.diasDetalhados && periodoAnalise.diasDetalhados.length > 0 && (
+                      <div title="Ver detalhes" className="inline-flex items-center justify-center shrink-0">
+                        <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 group-hover:text-slate-500 transition-all duration-300", showDaysDetail && "rotate-90")} />
+                      </div>
+                    )}
                   </div>
                 </div>
-              )}
+
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                  <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide mb-3">Pesquisar Notas de Saída</div>
+                  <div className="flex flex-col gap-2">
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-4 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={notaSearchQuery}
+                        onChange={(e) => setNotaSearchQuery(e.target.value)}
+                        placeholder={`Buscar por ${notaSearchCampo === 'Item' ? 'produto' : notaSearchCampo === 'Ncm' ? 'NCM' : notaSearchCampo.toLowerCase()}...`}
+                        className="w-full pl-11 pr-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      />
+                    </div>
+                    <select
+                      value={notaSearchCampo}
+                      onChange={(e) => setNotaSearchCampo(e.target.value as typeof notaSearchCampo)}
+                      className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="Numero">Só Número</option>
+                      <option value="Chave">Só Chave</option>
+                      <option value="Cliente">Só Cliente</option>
+                      <option value="Item">Produto</option>
+                      <option value="Ncm">NCM</option>
+                      <option value="Data">Só Data</option>
+                      <option value="Valor">Só Valor</option>
+                    </select>
+                    <select
+                      value={filterNotaModelo}
+                      onChange={(e) => setFilterNotaModelo(e.target.value)}
+                      className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="Todos">Todos os modelos</option>
+                      {modelosDisponiveis.map(modelo => (
+                        <option key={modelo} value={modelo}>
+                          {modelo === '55' ? 'NF-e (55)' : modelo === '65' ? 'NFC-e (65)' : `Modelo ${modelo}`}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={filterNotaSituacao}
+                      onChange={(e) => setFilterNotaSituacao(e.target.value)}
+                      className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="Todas">Todas as situações</option>
+                      <option value="Válidas">Somente válidas</option>
+                      <option value="Canceladas">Somente canceladas</option>
+                      <option value="Inutilizadas">Somente inutilizadas</option>
+                      <option value="SemAutorizacao">Sem autorização</option>
+                      <option value="ForaDoPrazo">Autorizada fora do prazo</option>
+                    </select>
+                    {cfopsDisponiveis.length > 0 && (
+                      <select
+                        value={filterNotaCfop}
+                        onChange={(e) => setFilterNotaCfop(e.target.value)}
+                        className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      >
+                        <option value="Todos">Todos os CFOPs</option>
+                        {cfopsDisponiveis.map(cfop => (
+                          <option key={cfop} value={cfop}>{cfop}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+
+                {/* SPED Fiscal card — compacto, abre para a direita */}
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden no-print">
+                  <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide px-6 pt-5 pb-3 flex items-center justify-between">
+                    SPED Fiscal
+                    {spedData && (
+                      <button
+                        onClick={() => spedInputRef.current?.click()}
+                        className="text-[11px] font-normal normal-case text-slate-400 hover:text-slate-600 transition-colors"
+                        title="Anexar SPED de outro mês (ou substituir o do mesmo mês) sem reiniciar a análise"
+                      >
+                        Anexar +
+                      </button>
+                    )}
+                  </div>
+
+                  {Object.keys(spedEntries).length > 0 && (
+                    <div className="px-6 pb-1 text-[10px] text-slate-400">
+                      SPED carregado: {Object.keys(spedEntries).join(', ')}
+                    </div>
+                  )}
+
+                  {!spedData ? (
+                    <div className="px-6 pb-5 flex flex-col gap-3">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                        {Object.keys(spedEntries).length > 0
+                          ? `Nenhum SPED anexado para ${filterMes} ainda — anexe o SPED dessa competência para cruzar com os XMLs.`
+                          : 'Anexe o SPED Fiscal para cruzar com os XMLs e identificar faltantes.'}
+                      </p>
+                      <button
+                        onClick={() => spedInputRef.current?.click()}
+                        className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-700 transition-colors"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        Anexar SPED (.txt)
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setSpedCardOpen(v => !v)}
+                      className="w-full flex items-center justify-between px-6 pb-5 text-left group"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs text-slate-500 truncate">{spedData.razaoSocial}</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">{spedCrossRef?.periodo}</div>
+                        <div className="flex gap-2 mt-2 flex-wrap">
+                          <span className="text-[11px] font-semibold text-slate-600">{spedCrossRef?.spedSaidasTotal} saídas</span>
+                          {(spedCrossRef?.saidaFaltantes.length ?? 0) > 0 && (
+                            <span className="text-[11px] font-semibold text-amber-600">
+                              ⚠ {spedCrossRef?.saidaFaltantes.length} sem XML
+                            </span>
+                          )}
+                          {(spedCrossRef?.xmlsNaoDeclarados.length ?? 0) > 0 && (
+                            <span className="text-[11px] font-semibold text-red-600">
+                              ⚠ {spedCrossRef?.xmlsNaoDeclarados.length} não declarados
+                            </span>
+                          )}
+                          {(spedCrossRef?.mesesFora.length ?? 0) > 0 && (
+                            <span className="text-[11px] font-semibold text-orange-600">
+                              ⚠ XMLs fora do período
+                            </span>
+                          )}
+                          {(spedCrossRef?.adicionados.length ?? 0) > 0 && (
+                            <span className="text-[11px] font-semibold text-blue-600">
+                              +{spedCrossRef?.adicionados.length} adicionados
+                            </span>
+                          )}
+                          {(spedCrossRef?.saidaFaltantes.length ?? 0) === 0 &&
+                           (spedCrossRef?.xmlsNaoDeclarados.length ?? 0) === 0 &&
+                           (spedCrossRef?.mesesFora.length ?? 0) === 0 &&
+                           (spedCrossRef?.adicionados.length ?? 0) === 0 && (
+                            <span className="text-[11px] font-semibold text-emerald-600">✓ Todos com XML</span>
+                          )}
+                        </div>
+                      </div>
+                      <ChevronRight className={cn(
+                        'w-5 h-5 text-slate-300 group-hover:text-slate-500 shrink-0 ml-3 transition-transform duration-300',
+                        spedCardOpen && 'rotate-90'
+                      )} />
+                    </button>
+                  )}
+
+                  <input
+                    type="file"
+                    ref={spedInputRef}
+                    accept=".txt"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const text = await file.text();
+                      const sped = parseSped(text, file.name);
+                      if (sped && spedTemPeriodoValido(sped)) {
+                        setSpedEntries(prev => upsertSpedManual(prev, sped));
+                        setSpedCardFiltro('Todas');
+                        setSpedSearch('');
+                        setSpedCardOpen(true);
+                      } else if (sped) {
+                        alert(`Não foi possível ler a data de início desse SPED ("${file.name}") — o arquivo pode estar corrompido ou fora do padrão esperado. Peça pro cliente reenviar.`);
+                      }
+                      e.target.value = '';
+                    }}
+                  />
+                </div>
+
+                {/* Perfil de Clientes (NF-e) — compacto, abre para a direita (mesma lógica do SPED Fiscal) */}
+                {perfilClientes.clientes.length > 0 && (
+                  <button
+                    onClick={() => setShowPerfilClientes(v => !v)}
+                    className="group w-full text-left bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 border-l-4 border-l-violet-400 overflow-hidden no-print hover:border-slate-300 dark:hover:border-slate-600 transition-colors"
+                  >
+                    <div className="px-6 py-5 flex items-center justify-between">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide flex items-center gap-2">
+                          <Users className="w-4 h-4 text-violet-500 shrink-0" />
+                          Perfil de Clientes
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+                          <strong className="text-slate-700 dark:text-slate-200">{perfilClientes.clientes.length} cliente(s)</strong> com CNPJ (NF-e)
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">{formatarMoeda(perfilClientes.totalConsiderado)} em vendas</div>
+                      </div>
+                      <ChevronRight className={cn('w-5 h-5 text-slate-300 group-hover:text-slate-500 shrink-0 ml-3 transition-transform duration-300', showPerfilClientes && 'rotate-90')} />
+                    </div>
+                  </button>
+                )}
+
+                {/* Quando a empresa só vende por NFC-e o Perfil de Clientes não existe — sem este aviso
+                    o card some calado e parece bug (já confundiu analista). */}
+                {perfilClientes.vendeSoPorNfce && (
+                  <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 border-l-4 border-l-violet-300 px-6 py-5 no-print">
+                    <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide flex items-center gap-2">
+                      <Users className="w-4 h-4 text-violet-400 shrink-0" />
+                      Perfil de Clientes
+                    </div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
+                      Não se aplica: as vendas do período são por NFC-e (consumidor final) e o destinatário quase nunca tem CNPJ. É esperado pra varejo/balcão, não um erro.
+                    </div>
+                  </div>
+                )}
+
+                {/* Perfil de Fornecedores (NF-e de Entrada) — compacto, abre para a direita */}
+                {perfilFornecedores.fornecedores.length > 0 && (
+                  <button
+                    onClick={() => setShowPerfilFornecedores(v => !v)}
+                    className="group w-full text-left bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 border-l-4 border-l-amber-400 overflow-hidden no-print hover:border-slate-300 dark:hover:border-slate-600 transition-colors"
+                  >
+                    <div className="px-6 py-5 flex items-center justify-between">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide flex items-center gap-2">
+                          <Package className="w-4 h-4 text-amber-500 shrink-0" />
+                          Perfil de Fornecedores
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+                          <strong className="text-slate-700 dark:text-slate-200">{perfilFornecedores.fornecedores.length} fornecedor(es)</strong> (NF-e de entrada)
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">{formatarMoeda(perfilFornecedores.totalConsiderado)} em compras</div>
+                      </div>
+                      <ChevronRight className={cn('w-5 h-5 text-slate-300 group-hover:text-slate-500 shrink-0 ml-3 transition-transform duration-300', showPerfilFornecedores && 'rotate-90')} />
+                    </div>
+                  </button>
+                )}
+              </aside>
+
+              {/* Main content */}
+              <div className="flex-1 min-w-0 space-y-8">
 
               {/* Card: Perfil de Clientes (NF-e) — NFC-e fica de fora, ver nota no useMemo */}
-              {perfilClientes.clientes.length > 0 && (() => {
+              {showPerfilClientes && perfilClientes.clientes.length > 0 && (() => {
                 const q = perfilClientesBusca.trim().toLowerCase();
                 const filtrados = !q ? perfilClientes.clientes : perfilClientes.clientes.filter(c =>
                   c.nome.toLowerCase().includes(q) || c.cnpj.includes(q)
@@ -9925,10 +10299,11 @@ ${htmlNomeDuplicado}
                         </div>
                       </div>
                       <button
-                        onClick={() => setShowPerfilClientes(!showPerfilClientes)}
-                        className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
+                        onClick={() => setShowPerfilClientes(false)}
+                        className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 transition-colors shrink-0 no-print"
+                        title="Fechar"
                       >
-                        {showPerfilClientes ? 'Ocultar' : 'Ver detalhes'}
+                        <X className="w-4 h-4" />
                       </button>
                     </div>
 
@@ -10078,7 +10453,7 @@ ${htmlNomeDuplicado}
 
               {/* Card: Perfil de Fornecedores (NF-e de entrada) — espelho do Perfil de
                   Clientes, ver nota no useMemo perfilFornecedores */}
-              {perfilFornecedores.fornecedores.length > 0 && (() => {
+              {showPerfilFornecedores && perfilFornecedores.fornecedores.length > 0 && (() => {
                 const q = perfilFornecedoresBusca.trim().toLowerCase();
                 const filtrados = !q ? perfilFornecedores.fornecedores : perfilFornecedores.fornecedores.filter(f =>
                   f.nome.toLowerCase().includes(q) || f.cnpj.includes(q)
@@ -10101,10 +10476,11 @@ ${htmlNomeDuplicado}
                         </div>
                       </div>
                       <button
-                        onClick={() => setShowPerfilFornecedores(!showPerfilFornecedores)}
-                        className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
+                        onClick={() => setShowPerfilFornecedores(false)}
+                        className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 transition-colors shrink-0 no-print"
+                        title="Fechar"
                       >
-                        {showPerfilFornecedores ? 'Ocultar' : 'Ver detalhes'}
+                        <X className="w-4 h-4" />
                       </button>
                     </div>
 
@@ -10431,206 +10807,6 @@ ${htmlNomeDuplicado}
                   </div>
                 );
               })()}
-
-              {/* Corpo em duas colunas: filtros/utilitários à esquerda, auditoria ao centro */}
-              <div className="flex flex-col lg:flex-row gap-8 items-start">
-                <aside className="w-full lg:w-72 shrink-0 lg:sticky lg:top-6 space-y-6">
-                  <div
-                    onClick={() => (periodoAnalise.diasDetalhados?.length ?? 0) > 0 && setShowDaysDetail(!showDaysDetail)}
-                    onKeyDown={e => { if ((periodoAnalise.diasDetalhados?.length ?? 0) > 0 && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setShowDaysDetail(!showDaysDetail); } }}
-                    role={(periodoAnalise.diasDetalhados?.length ?? 0) > 0 ? 'button' : undefined}
-                    tabIndex={(periodoAnalise.diasDetalhados?.length ?? 0) > 0 ? 0 : undefined}
-                    className={cn(
-                      "group bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700 transition-all",
-                      (periodoAnalise.diasDetalhados?.length ?? 0) > 0 && "cursor-pointer hover:border-slate-300 dark:hover:border-slate-600"
-                    )}
-                  >
-                    <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Período Analisado</div>
-                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100 mt-2">
-                    {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
-                  </div>
-                  <div className="flex items-center justify-between text-xs font-semibold text-slate-400 dark:text-slate-500 mt-2">
-                    <span>{periodoAnalise.totalDias} dias · {periodoAnalise.totalNotas ?? 0} notas</span>
-                    {periodoAnalise.diasDetalhados && periodoAnalise.diasDetalhados.length > 0 && (
-                      <div title="Ver detalhes" className="inline-flex items-center justify-center shrink-0">
-                        <ChevronRight className={cn("w-6 h-6 text-slate-300 dark:text-slate-600 group-hover:text-slate-500 transition-all duration-300", showDaysDetail && "rotate-90")} />
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                  <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide mb-3">Pesquisar Notas de Saída</div>
-                  <div className="flex flex-col gap-2">
-                    <div className="relative">
-                      <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-4 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        value={notaSearchQuery}
-                        onChange={(e) => setNotaSearchQuery(e.target.value)}
-                        placeholder={`Buscar por ${notaSearchCampo === 'Item' ? 'produto' : notaSearchCampo === 'Ncm' ? 'NCM' : notaSearchCampo.toLowerCase()}...`}
-                        className="w-full pl-11 pr-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                      />
-                    </div>
-                    <select
-                      value={notaSearchCampo}
-                      onChange={(e) => setNotaSearchCampo(e.target.value as typeof notaSearchCampo)}
-                      className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                    >
-                      <option value="Numero">Só Número</option>
-                      <option value="Chave">Só Chave</option>
-                      <option value="Cliente">Só Cliente</option>
-                      <option value="Item">Produto</option>
-                      <option value="Ncm">NCM</option>
-                      <option value="Data">Só Data</option>
-                      <option value="Valor">Só Valor</option>
-                    </select>
-                    <select
-                      value={filterNotaModelo}
-                      onChange={(e) => setFilterNotaModelo(e.target.value)}
-                      className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                    >
-                      <option value="Todos">Todos os modelos</option>
-                      {modelosDisponiveis.map(modelo => (
-                        <option key={modelo} value={modelo}>
-                          {modelo === '55' ? 'NF-e (55)' : modelo === '65' ? 'NFC-e (65)' : `Modelo ${modelo}`}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={filterNotaSituacao}
-                      onChange={(e) => setFilterNotaSituacao(e.target.value)}
-                      className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                    >
-                      <option value="Todas">Todas as situações</option>
-                      <option value="Válidas">Somente válidas</option>
-                      <option value="Canceladas">Somente canceladas</option>
-                      <option value="Inutilizadas">Somente inutilizadas</option>
-                      <option value="SemAutorizacao">Sem autorização</option>
-                      <option value="ForaDoPrazo">Autorizada fora do prazo</option>
-                    </select>
-                    {cfopsDisponiveis.length > 0 && (
-                      <select
-                        value={filterNotaCfop}
-                        onChange={(e) => setFilterNotaCfop(e.target.value)}
-                        className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                      >
-                        <option value="Todos">Todos os CFOPs</option>
-                        {cfopsDisponiveis.map(cfop => (
-                          <option key={cfop} value={cfop}>{cfop}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                </div>
-
-                {/* SPED Fiscal card — compacto, abre para a direita */}
-                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden no-print">
-                  <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide px-6 pt-5 pb-3 flex items-center justify-between">
-                    SPED Fiscal
-                    {spedData && (
-                      <button
-                        onClick={() => spedInputRef.current?.click()}
-                        className="text-[11px] font-normal normal-case text-slate-400 hover:text-slate-600 transition-colors"
-                        title="Anexar SPED de outro mês (ou substituir o do mesmo mês) sem reiniciar a análise"
-                      >
-                        Anexar +
-                      </button>
-                    )}
-                  </div>
-
-                  {Object.keys(spedEntries).length > 0 && (
-                    <div className="px-6 pb-1 text-[10px] text-slate-400">
-                      SPED carregado: {Object.keys(spedEntries).join(', ')}
-                    </div>
-                  )}
-
-                  {!spedData ? (
-                    <div className="px-6 pb-5 flex flex-col gap-3">
-                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                        {Object.keys(spedEntries).length > 0
-                          ? `Nenhum SPED anexado para ${filterMes} ainda — anexe o SPED dessa competência para cruzar com os XMLs.`
-                          : 'Anexe o SPED Fiscal para cruzar com os XMLs e identificar faltantes.'}
-                      </p>
-                      <button
-                        onClick={() => spedInputRef.current?.click()}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-700 transition-colors"
-                      >
-                        <Upload className="w-3.5 h-3.5" />
-                        Anexar SPED (.txt)
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setSpedCardOpen(v => !v)}
-                      className="w-full flex items-center justify-between px-6 pb-5 text-left group"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-xs text-slate-500 truncate">{spedData.razaoSocial}</div>
-                        <div className="text-[11px] text-slate-400 mt-0.5">{spedCrossRef?.periodo}</div>
-                        <div className="flex gap-2 mt-2 flex-wrap">
-                          <span className="text-[11px] font-semibold text-slate-600">{spedCrossRef?.spedSaidasTotal} saídas</span>
-                          {(spedCrossRef?.saidaFaltantes.length ?? 0) > 0 && (
-                            <span className="text-[11px] font-semibold text-amber-600">
-                              ⚠ {spedCrossRef?.saidaFaltantes.length} sem XML
-                            </span>
-                          )}
-                          {(spedCrossRef?.xmlsNaoDeclarados.length ?? 0) > 0 && (
-                            <span className="text-[11px] font-semibold text-red-600">
-                              ⚠ {spedCrossRef?.xmlsNaoDeclarados.length} não declarados
-                            </span>
-                          )}
-                          {(spedCrossRef?.mesesFora.length ?? 0) > 0 && (
-                            <span className="text-[11px] font-semibold text-orange-600">
-                              ⚠ XMLs fora do período
-                            </span>
-                          )}
-                          {(spedCrossRef?.adicionados.length ?? 0) > 0 && (
-                            <span className="text-[11px] font-semibold text-blue-600">
-                              +{spedCrossRef?.adicionados.length} adicionados
-                            </span>
-                          )}
-                          {(spedCrossRef?.saidaFaltantes.length ?? 0) === 0 &&
-                           (spedCrossRef?.xmlsNaoDeclarados.length ?? 0) === 0 &&
-                           (spedCrossRef?.mesesFora.length ?? 0) === 0 &&
-                           (spedCrossRef?.adicionados.length ?? 0) === 0 && (
-                            <span className="text-[11px] font-semibold text-emerald-600">✓ Todos com XML</span>
-                          )}
-                        </div>
-                      </div>
-                      <ChevronRight className={cn(
-                        'w-5 h-5 text-slate-300 group-hover:text-slate-500 shrink-0 ml-3 transition-transform duration-300',
-                        spedCardOpen && 'rotate-90'
-                      )} />
-                    </button>
-                  )}
-
-                  <input
-                    type="file"
-                    ref={spedInputRef}
-                    accept=".txt"
-                    className="hidden"
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      const text = await file.text();
-                      const sped = parseSped(text, file.name);
-                      if (sped && spedTemPeriodoValido(sped)) {
-                        setSpedEntries(prev => upsertSpedManual(prev, sped));
-                        setSpedCardFiltro('Todas');
-                        setSpedSearch('');
-                        setSpedCardOpen(true);
-                      } else if (sped) {
-                        alert(`Não foi possível ler a data de início desse SPED ("${file.name}") — o arquivo pode estar corrompido ou fora do padrão esperado. Peça pro cliente reenviar.`);
-                      }
-                      e.target.value = '';
-                    }}
-                  />
-                </div>
-              </aside>
-
-              {/* Main content */}
-              <div className="flex-1 min-w-0 space-y-8">
 
               {/* SPED Fiscal — card expandido (abre para a direita) */}
               {spedCardOpen && spedData && spedCrossRef && (() => {
