@@ -11767,6 +11767,7 @@ ${htmlNomeDuplicado}
                         <table className="w-full text-xs">
                           <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
                             <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                              <th className="py-1.5 pr-3">Tipo</th>
                               <th className="py-1.5 pr-3">Série</th>
                               <th className="py-1.5 pr-3">Nº</th>
                               <th className="py-1.5 pr-3">Data</th>
@@ -11779,6 +11780,7 @@ ${htmlNomeDuplicado}
                           <tbody>
                             {notasAnomalias.malformadas.map((xml, i) => (
                               <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                <td className="py-1.5 pr-3 font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">{xml.modelo === '65' ? 'NFC-e' : xml.modelo === '55' ? 'NF-e' : (xml.modelo ? `Mod. ${xml.modelo}` : '—')}</td>
                                 <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{xml.serie}</td>
                                 <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{xml.numero}</td>
                                 <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
