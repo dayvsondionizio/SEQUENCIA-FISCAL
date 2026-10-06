@@ -160,6 +160,16 @@ interface ExtractionErrorEntry {
   downloadUrl?: string;
   downloadName?: string;
 }
+// Laço do Outubro Rosa (prevenção ao câncer de mama). Aparece só em outubro: ver uso no cabeçalho.
+function LacoRosa({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" role="img" aria-label="Outubro Rosa" className={className} fill="none" stroke="url(#lacoRosaGrad)" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+      <defs><linearGradient id="lacoRosaGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#F9A8D4" /><stop offset="1" stopColor="#DB2777" /></linearGradient></defs>
+      <title>Outubro Rosa — prevenção ao câncer de mama</title>
+      <path d="M8 21.5 L12 13 L16.2 5.5 C17 1 7 1 7.8 5.5 L12 13 L16 21.5" />
+    </svg>
+  );
+}
 interface DetExtract {
   cProd: string; xProd: string; ncm: string; cest: string; cfop: string; vProd: number; qCom: number; uCom: string;
   cEan: string; cBenef: string;
@@ -9001,7 +9011,7 @@ ${htmlNomeDuplicado}
             />
             <div className="hidden md:block w-px h-12 print:h-10 bg-white/15" />
             <div>
-              <h1 className="font-serif text-3xl print:text-2xl font-semibold tracking-tight text-white mb-0.5 print:mb-0.5">Sequência Fiscal</h1>
+              <h1 className="font-serif text-3xl print:text-2xl font-semibold tracking-tight text-white mb-0.5 print:mb-0.5 flex items-center gap-2.5">Sequência Fiscal{new Date().getMonth() === 9 && <LacoRosa className="w-7 h-7 shrink-0" />}</h1>
               <p className="font-medium text-[0.95rem] print:text-sm" style={{color: 'rgba(201,162,39,0.8)'}}>Auditoria de Sequência de Vendas e Saídas</p>
             </div>
           </div>
