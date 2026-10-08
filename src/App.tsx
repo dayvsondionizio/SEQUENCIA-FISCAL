@@ -4908,7 +4908,7 @@ ${htmlNomeDuplicado}
     };
     const sugestaoRegime = (cnpj: string, crt: string, sinal = '') => ({ ...sugestaoRegimeBase(cnpj, crt), sinal });
     const celulaCamadas = (s: { crtTxt: string; receitaTxt: string; divergencia: string; sinal?: string }) =>
-      `<div class="cam-l"><span class="cam-crt">CRT: ${esc(s.crtTxt)}</span> · <span class="cam-rf">Receita: ${esc(s.receitaTxt)}</span></div>${s.divergencia ? `<div class="cam-div">⚠ ${esc(s.divergencia)}</div>` : ''}${s.sinal ? `<div class="cam-div">⚠ ${esc(SINAL_TXT[s.sinal] || '')}</div>` : ''}`;
+      `<div class="cam-l"><span class="cam-crt">CRT: ${esc(s.crtTxt)}</span> · <span class="cam-rf">Receita: ${esc(s.receitaTxt)}</span></div>${s.divergencia ? `<div class="cam-div">⚠ ${esc(s.divergencia)}</div>` : ''}${s.sinal ? `<div class="cam-sin">⚠ ${esc(SINAL_TXT[s.sinal] || '')}</div>` : ''}`;
 
     const topF = perfilFornecedores.fornecedores.slice(0, 30);
     const topC = perfilClientes.clientes.slice(0, 30);
@@ -5368,7 +5368,7 @@ ${htmlNomeDuplicado}
   .ent-s { font-size:11px; color:var(--g2); margin-top:2px; }
   .cam-cell { min-width:185px; max-width:230px; font-size:11.5px; color:var(--g2); }
   .cam-l { margin-top:6px; }
-  .cam-div { color:var(--gold-t); font-weight:600; margin-top:4px; }
+  .cam-div, .cam-sin { color:var(--gold-t); font-weight:600; margin-top:4px; }
   .imp-cell { min-width:230px; font-size:12px; line-height:1.55; color:var(--g1); }
   .imp-t { display:block; margin-top:5px; }
   tr.rf-cons td { background:transparent; }
@@ -5435,7 +5435,7 @@ ${htmlNomeDuplicado}
       <div class="kpi"><div class="k-r">Faturamento do período</div><div class="k-v">${esc(formatarMoeda(faturamentoTotal))}</div><div class="k-s">${esc(formatarMoeda(receitaMensal))} por mês</div></div>
       <div class="kpi"><div class="k-r">Venda a consumidor final</div><div class="k-v">${esc(formatarPct(consumidorPct))}%</div><div class="k-s">${esc(formatarMoeda(consumidorValor))} sem CNPJ de comprador</div></div>
       <div class="kpi"><div class="k-r">Compras identificadas</div><div class="k-v">${esc(formatarMoeda(perfilFornecedores.totalConsiderado))}</div><div class="k-s">${perfilFornecedores.fornecedores.length} fornecedor(es) nas NF-e de entrada</div></div>
-      <div class="kpi dest"><div class="k-r">Crédito de IBS/CBS estimado</div><div class="k-v" id="kpiCredito">—</div><div class="k-s" id="kpiCreditoSub">sobre as compras listadas, no período</div></div>
+      <div class="kpi dest"><div class="k-r">Crédito de IBS/CBS estimado</div><div class="k-v" id="kpiCredito">—</div><div class="k-s" id="kpiCreditoSub">sobre as compras listadas, no período, em regime pleno</div></div>
     </div>` : ''}
     <div class="barra">
       <span class="info">${secoes.length} seção(ões) · ${perfilFornecedores.fornecedores.length} fornecedor(es) · ${perfilClientes.clientes.length} cliente(s) com CNPJ · ${esc(periodoLegivel)}${totalAtencao > 0 ? ` · ${totalAtencao} pra olhar com atenção` : ''}</span>
@@ -5612,7 +5612,7 @@ ${htmlNomeDuplicado}
       var boxCmp = document.getElementById('boxComparacao');
       if (boxCmp) {
         boxCmp.style.display = empresa.duvida ? '' : 'none';
-        if (!empresa.duvida) setTxt('kpiCreditoSub', 'sobre as compras listadas, no período');
+        if (!empresa.duvida) setTxt('kpiCreditoSub', 'sobre as compras listadas, no período, em regime pleno');
         setTxt('cmpCredP', fmtMoedaBr(credComprasSe(empP)));
         setTxt('cmpCredH', fmtMoedaBr(credH));
         setTxt('cmpCliP', fmtMoedaBr(credClientesSe(empP)));
@@ -5731,7 +5731,8 @@ ${htmlNomeDuplicado}
       if (RF_DATA.temSaidas && RF_DATA.coberturaSaidas < 90) {
         var mesesCob = RF_DATA.coberturaMeses || [];
         var ultimoCob = mesesCob.length ? mesesCob[mesesCob.length - 1] : null;
-        ins('media', 'Cobertura', 'Só <b>' + fmtPctBr(RF_DATA.coberturaSaidas) + '%</b> do valor das vendas tem o grupo IBS/CBS preenchido' + (mesesCob.length > 1 ? ' (' + mesesCob.map(function (m) { return m.mes + ': ' + fmtPctBr(m.pct) + '%'; }).join(' · ') + ')' : '') + '; o resto foi assumido em alíquota cheia, então o mix é em parte suposição.' + (ultimoCob && ultimoCob.pct >= 99 ? ' O mês mais recente já está completo — a falta é de antes da obrigatoriedade (03/08/2026).' : ''));
+        var ehSimplesBase = (document.getElementById('selRegimeBase') || {}).value === 'simples';
+        ins(ehSimplesBase ? 'info' : 'media', 'Cobertura', 'Só <b>' + fmtPctBr(RF_DATA.coberturaSaidas) + '%</b> do valor das vendas tem o grupo IBS/CBS preenchido' + (mesesCob.length > 1 ? ' (' + mesesCob.map(function (m) { return m.mes + ': ' + fmtPctBr(m.pct) + '%'; }).join(' · ') + ')' : '') + '; o resto foi assumido em alíquota cheia, então o mix é em parte suposição.' + (ultimoCob && ultimoCob.pct >= 99 ? ' O mês mais recente já está completo — a falta é de antes da obrigatoriedade (03/08/2026).' : '') + (ehSimplesBase ? ' Para o Simples Nacional isso é esperado: o grupo IBS/CBS só passa a ser obrigatório em 01/01/2027.' : ''));
       }
       setHtml('insights', it.length ? it.join('') : '<div class="nota">Sem pontos de atenção com as premissas atuais.</div>');
       setTxt('figLeituras', String(it.length));
