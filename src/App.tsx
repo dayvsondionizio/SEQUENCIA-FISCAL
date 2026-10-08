@@ -831,6 +831,12 @@ function diaDaSemana(dataYMD: string): number {
   return new Date(Date.UTC(y, (m || 1) - 1, d || 1)).getUTCDay();
 }
 
+// Tipo do documento para as tabelas de notas: modelo 65 = NFC-e, 55 = NF-e; sem o campo, deduz do modelo
+// embutido na chave de acesso (posições 21 e 22).
+function tipoDocNota(n?: { modelo?: string; chave?: string } | null): string {
+  const mod = n?.modelo || (n?.chave && /^\d{44}$/.test(n.chave) ? n.chave.slice(20, 22) : '');
+  return mod === '65' ? 'NFC-e' : mod === '55' ? 'NF-e' : mod ? `Mod. ${mod}` : '—';
+}
 function getMonthYear(dateStr?: string) {
   if (!dateStr || dateStr.length < 7) return '';
   const parts = dateStr.split('-');
@@ -8822,6 +8828,7 @@ ${htmlNomeDuplicado}
                         <table className="w-full text-xs">
                           <thead>
                             <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                              <th className="py-1.5 pr-3">Tipo</th>
                               <th className="py-1.5 pr-3">Série</th>
                               <th className="py-1.5 pr-3">Nº</th>
                               <th className="py-1.5 pr-3">Data</th>
@@ -8831,6 +8838,7 @@ ${htmlNomeDuplicado}
                           <tbody>
                             {auditoriaRegime.semCrt.slice(0, 20).map((n, i) => (
                               <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                <td className="py-1.5 pr-3 font-semibold whitespace-nowrap text-slate-700 dark:text-slate-300">{tipoDocNota(n)}</td>
                                 <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.serie}</td>
                                 <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero}</td>
                                 <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
@@ -8896,6 +8904,7 @@ ${htmlNomeDuplicado}
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                            <th className="py-1.5 pr-3">Tipo</th>
                             <th className="py-1.5 pr-3">Série</th>
                             <th className="py-1.5 pr-3">Nº</th>
                             <th className="py-1.5 pr-3">Data</th>
@@ -8912,6 +8921,7 @@ ${htmlNomeDuplicado}
                             })
                             .map((n, i) => (
                               <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                <td className="py-1.5 pr-3 font-semibold whitespace-nowrap text-slate-700 dark:text-slate-300">{tipoDocNota(n)}</td>
                                 <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.serie}</td>
                                 <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero}</td>
                                 <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
@@ -11679,6 +11689,7 @@ ${htmlNomeDuplicado}
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-amber-50">
                                 <tr className="text-left text-amber-600 font-bold border-b border-amber-200">
+                                  <th className="py-1.5 pr-3">Tipo</th>
                                   <th className="py-1.5 pr-3">Série</th>
                                   <th className="py-1.5 pr-3">Nº</th>
                                   <th className="py-1.5 pr-3">Data</th>
@@ -11689,6 +11700,7 @@ ${htmlNomeDuplicado}
                               <tbody>
                                 {notasAnomalias.semProtocolo.map((xml, i) => (
                                   <tr key={i} className="border-b border-amber-100 last:border-0">
+                                    <td className="py-1.5 pr-3 font-semibold whitespace-nowrap text-slate-700 dark:text-slate-300">{tipoDocNota(xml)}</td>
                                     <td className="py-1.5 pr-3 font-mono text-amber-800">{xml.serie}</td>
                                     <td className="py-1.5 pr-3 font-mono text-amber-800">{xml.numero}</td>
                                     <td className="py-1.5 pr-3 text-amber-700">{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
@@ -11699,7 +11711,7 @@ ${htmlNomeDuplicado}
                               </tbody>
                               <tfoot>
                                 <tr>
-                                  <td colSpan={4} className="py-2 font-black text-amber-700 text-xs">Total excluído</td>
+                                  <td colSpan={5} className="py-2 font-black text-amber-700 text-xs">Total excluído</td>
                                   <td className="py-2 text-right font-black text-amber-700">
                                     {formatarMoeda(notasAnomalias.semProtocolo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                                   </td>
@@ -11719,7 +11731,7 @@ ${htmlNomeDuplicado}
                             {notasAnomalias.numeroDuplicado.map((grupo, i) => (
                               <div key={i} className="bg-white rounded-lg border border-amber-200 p-3">
                                 <div className="text-xs font-bold text-amber-700 mb-2">
-                                  Série {grupo[0].serie} · Nº {grupo[0].numero}
+                                  {tipoDocNota(grupo[0])} · Série {grupo[0].serie} · Nº {grupo[0].numero}
                                 </div>
                                 <div className="space-y-1">
                                   {grupo.map((xml, j) => (
@@ -11880,6 +11892,7 @@ ${htmlNomeDuplicado}
                         <table className="w-full text-xs">
                           <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
                             <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                              <th className="py-1.5 pr-3">Tipo</th>
                               <th className="py-1.5 pr-3">Série</th>
                               <th className="py-1.5 pr-3">Nº</th>
                               <th className="py-1.5 pr-3">Data</th>
@@ -11890,6 +11903,7 @@ ${htmlNomeDuplicado}
                           <tbody>
                             {notasAnomalias.semAutorizacaoNaoContingencia.map((xml, i) => (
                               <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                <td className="py-1.5 pr-3 font-semibold whitespace-nowrap text-slate-700 dark:text-slate-300">{tipoDocNota(xml)}</td>
                                 <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{xml.serie}</td>
                                 <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{xml.numero}</td>
                                 <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{xml.data ? new Date(xml.data).toLocaleDateString('pt-BR') : '—'}</td>
@@ -11907,7 +11921,7 @@ ${htmlNomeDuplicado}
                           </tbody>
                           <tfoot>
                             <tr>
-                              <td colSpan={4} className="py-2 font-black text-slate-600 dark:text-slate-300 text-xs">Total excluído</td>
+                              <td colSpan={5} className="py-2 font-black text-slate-600 dark:text-slate-300 text-xs">Total excluído</td>
                               <td className="py-2 text-right font-black text-slate-700 dark:text-slate-200">
                                 {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                               </td>
@@ -11954,6 +11968,7 @@ ${htmlNomeDuplicado}
                       <table className="w-full text-xs">
                         <thead className="sticky top-0 bg-orange-50">
                           <tr className="text-left text-orange-600 font-bold border-b border-orange-200">
+                            <th className="py-1.5 pr-3">Tipo</th>
                             <th className="py-1.5 pr-3">Série</th>
                             <th className="py-1.5 pr-3">Nº</th>
                             <th className="py-1.5 pr-3">Emissão</th>
@@ -11968,6 +11983,7 @@ ${htmlNomeDuplicado}
                             const diffMin = (emi && rec) ? Math.round((rec.getTime() - emi.getTime()) / 60_000) : null;
                             return (
                               <tr key={i} className="border-b border-orange-100 last:border-0">
+                                <td className="py-1.5 pr-3 font-semibold whitespace-nowrap text-slate-700 dark:text-slate-300">{tipoDocNota(xml)}</td>
                                 <td className="py-1.5 pr-3 font-mono text-orange-800">{xml.serie}</td>
                                 <td className="py-1.5 pr-3 font-mono text-orange-800">{xml.numero}</td>
                                 <td className="py-1.5 pr-3 text-orange-700">{emi ? emi.toLocaleString('pt-BR') : '—'}</td>
@@ -11986,7 +12002,7 @@ ${htmlNomeDuplicado}
                         </tbody>
                         <tfoot>
                           <tr>
-                            <td colSpan={4} className="py-2 font-black text-orange-700 text-xs">Total incluído no faturamento</td>
+                            <td colSpan={5} className="py-2 font-black text-orange-700 text-xs">Total incluído no faturamento</td>
                             <td className="py-2 text-right font-black text-orange-700">
                               {formatarMoeda(notasAnomalias.foraDoPrazo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                             </td>
@@ -12059,6 +12075,7 @@ ${htmlNomeDuplicado}
                               <table className="w-full text-xs">
                                 <thead className="sticky top-0 bg-white dark:bg-slate-900">
                                   <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                    <th className="py-1.5 pr-3">Tipo</th>
                                     <th className="py-1.5 pr-3">Série</th>
                                     <th className="py-1.5 pr-3">Nº</th>
                                     <th className="py-1.5 pr-3">Data</th>
@@ -12068,6 +12085,7 @@ ${htmlNomeDuplicado}
                                 <tbody>
                                   {auditoriaIbsCbs.amostraSemGrupo.map((n, i) => (
                                     <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                      <td className="py-1.5 pr-3 font-semibold whitespace-nowrap text-slate-700 dark:text-slate-300">{tipoDocNota(n)}</td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.serie}</td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero}</td>
                                       <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
@@ -12095,6 +12113,7 @@ ${htmlNomeDuplicado}
                               <table className="w-full text-xs">
                                 <thead className="sticky top-0 bg-white dark:bg-slate-900">
                                   <tr className="text-left text-slate-400 dark:text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                                    <th className="py-1.5 pr-3">Tipo</th>
                                     <th className="py-1.5 pr-3">Série</th>
                                     <th className="py-1.5 pr-3">Nº</th>
                                     <th className="py-1.5 pr-3">Data</th>
@@ -12104,6 +12123,7 @@ ${htmlNomeDuplicado}
                                 <tbody>
                                   {auditoriaIbsCbs.amostraComGrupo.map((n, i) => (
                                     <tr key={n.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                      <td className="py-1.5 pr-3 font-semibold whitespace-nowrap text-slate-700 dark:text-slate-300">{tipoDocNota(n)}</td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.serie}</td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.numero}</td>
                                       <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.data ? new Date(n.data).toLocaleDateString('pt-BR') : '—'}</td>
@@ -12732,6 +12752,7 @@ ${htmlNomeDuplicado}
                               <table className="w-full text-xs">
                                 <thead className="sticky top-0 bg-white dark:bg-slate-900">
                                   <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                                    <th className="py-1.5 pr-3">Tipo</th>
                                     <th className="py-1.5 pr-3">Série</th>
                                     <th className="py-1.5 pr-3">Nº</th>
                                     <th className="py-1.5 pr-3">Data</th>
@@ -12750,6 +12771,7 @@ ${htmlNomeDuplicado}
                                     .slice(0, 50)
                                     .map((n, i) => (
                                       <tr key={`${n.xml.chave || i}-${n.tPagNome}`} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                        <td className="py-1.5 pr-3 font-semibold whitespace-nowrap text-slate-700 dark:text-slate-300">{tipoDocNota(n.xml)}</td>
                                         <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.xml.serie}</td>
                                         <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.xml.numero}</td>
                                         <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.xml.data ? new Date(n.xml.data).toLocaleDateString('pt-BR') : '—'}</td>
@@ -12806,6 +12828,7 @@ ${htmlNomeDuplicado}
                               <table className="w-full text-xs">
                                 <thead className="sticky top-0 bg-white dark:bg-slate-900">
                                   <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                                    <th className="py-1.5 pr-3">Tipo</th>
                                     <th className="py-1.5 pr-3">Série</th>
                                     <th className="py-1.5 pr-3">Nº</th>
                                     <th className="py-1.5 pr-3">Data</th>
@@ -12817,6 +12840,7 @@ ${htmlNomeDuplicado}
                                 <tbody>
                                   {auditoriaPagamento.notasForaDoEscopo.map((n, i) => (
                                     <tr key={n.xml.chave || i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                      <td className="py-1.5 pr-3 font-semibold whitespace-nowrap text-slate-700 dark:text-slate-300">{tipoDocNota(n.xml)}</td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.xml.serie}</td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{n.xml.numero}</td>
                                       <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{n.xml.data ? new Date(n.xml.data).toLocaleDateString('pt-BR') : '—'}</td>
@@ -12844,6 +12868,7 @@ ${htmlNomeDuplicado}
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-white dark:bg-slate-900">
                                 <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                                  <th className="py-1.5 pr-3">Tipo</th>
                                   <th className="py-1.5 pr-3">Série</th>
                                   <th className="py-1.5 pr-3">Nº</th>
                                   <th className="py-1.5 pr-3">Data</th>
@@ -12857,6 +12882,7 @@ ${htmlNomeDuplicado}
                               <tbody>
                                 {auditoriaPagamento.problemas.map((p, i) => (
                                   <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                    <td className="py-1.5 pr-3 font-semibold whitespace-nowrap text-slate-700 dark:text-slate-300">{tipoDocNota(p.xml)}</td>
                                     <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{p.xml.serie}</td>
                                     <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{p.xml.numero}</td>
                                     <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400">{p.xml.data ? new Date(p.xml.data).toLocaleDateString('pt-BR') : '—'}</td>
