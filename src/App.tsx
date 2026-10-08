@@ -2235,10 +2235,12 @@ export default function App() {
       return problemas.length > 0 ? problemas.join('; ') : null;
     };
 
+    const noMes = (xml: XmlData) => filterMes === 'Todos' || getMonthYear(xml.data) === filterMes;
     const saidas = xmlList.filter(xml =>
       xml.tipo === 'nfe' &&
       xml.emitCnpj === mainCnpj &&
       xml.tpNF !== '0' &&
+      noMes(xml) &&
       !(xml.chave && chavesCanceladas.has(xml.chave))
     );
 
@@ -2253,6 +2255,7 @@ export default function App() {
       xml.tipo === 'nfe' &&
       xml.emitCnpj === mainCnpj &&
       xml.tpNF !== '0' &&
+      noMes(xml) &&
       xml.isCancelamento
     ).map(xml => ({
       ...xml,
@@ -2349,7 +2352,7 @@ export default function App() {
     }));
 
     return { semProtocolo, semProtocoloAbatidas, foraDoPrazo, numeroDuplicado, semAutorizacaoNaoContingencia: semAutorizacaoComFlag, malformadas };
-  }, [xmlList, inutilizacoes, chavesCanceladas, mainCnpj]);
+  }, [xmlList, inutilizacoes, chavesCanceladas, mainCnpj, filterMes]);
 
   // Regime tributário do emitente principal, lido do <CRT> (Código de Regime
   // Tributário): 1/2 = Simples Nacional, 3 = Regime Normal. Simples Nacional
@@ -5929,6 +5932,7 @@ ${htmlNomeDuplicado}
   const periodoAnalise = useMemo(() => {
     const datas = xmlList
       .filter(xml => !mainCnpj || xml.emitCnpj === mainCnpj) // Only count client's sales/saídas
+      .filter(xml => filterMes === 'Todos' || getMonthYear(xml.data) === filterMes)
       .map(xml => xml.data ? xml.data.substring(0, 10) : '')
       .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
       .sort();
@@ -5995,7 +5999,7 @@ ${htmlNomeDuplicado}
       diasComContagem,
       diasDetalhadosComContagem,
     };
-  }, [xmlList, mainCnpj]);
+  }, [xmlList, mainCnpj, filterMes]);
 
   const mesesDisponiveis = useMemo(() => {
     const months = new Set<string>();
@@ -6145,7 +6149,17 @@ ${htmlNomeDuplicado}
   const exportFilteredXmls = async (partes?: number) => {
     let filteredXmls = xmlList;
     if (filterMes !== 'Todos') {
-      filteredXmls = xmlList.filter(xml => getMonthYear(xml.data) === filterMes);
+      // Eventos (cancelamento, carta de correção) e consultas trazem a data do EVENTO — um cancelamento feito em
+      // outubro de uma nota de setembro cairia fora do mês. Por isso seguem o mês de emissão da nota a que se
+      // referem, lido do AAMM da chave de acesso (posições 3 a 6).
+      const mesDaChave = (chave?: string) => chave && /^\d{44}$/.test(chave) ? getMonthYear(`20${chave.slice(2, 4)}-${chave.slice(4, 6)}`) : '';
+      filteredXmls = xmlList.filter(xml => {
+        if (xml.tipo !== 'nfe') {
+          const mesNota = mesDaChave(xml.chave);
+          if (mesNota) return mesNota === filterMes;
+        }
+        return getMonthYear(xml.data) === filterMes;
+      });
     }
 
     let filteredInuts = inutilizacoes;
