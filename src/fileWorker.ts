@@ -9,6 +9,7 @@
 // é uma cópia literal do que já existe em App.tsx — não mude uma sem mudar a outra.
 
 import JSZip from 'jszip';
+import { listarNomesRepetidos, entradaVirtual } from './zipDuplicados';
 import { DOMParser } from '@xmldom/xmldom';
 import type { XmlData, SpedData, SourceMetadata } from './App';
 
@@ -442,10 +443,20 @@ async function processZipRecursively(
 
   try {
     const zip = await JSZip.loadAsync(archiveData);
-    for (const name of Object.keys(zip.files)) {
-      const entry = zip.files[name];
+    // O JSZip guarda uma entrada por nome — dois arquivos com o mesmo caminho dentro do ZIP (ex.: dois
+    // "AUTORIZADAS.zip") perdiam um deles em silêncio. Aqui todas as ocorrências de nome repetido são lidas.
+    const bytesZip = archiveData instanceof Uint8Array ? archiveData : new Uint8Array(archiveData);
+    const repetidos = listarNomesRepetidos(bytesZip, zip.files);
+    const itens: { name: string; entry: any; idx: number }[] = [];
+    for (const nome of Object.keys(zip.files)) {
+      const rep = repetidos.get(nome);
+      if (rep) rep.forEach((o, idx) => itens.push({ name: nome, entry: entradaVirtual(o), idx }));
+      else itens.push({ name: nome, entry: zip.files[nome], idx: 0 });
+    }
+    for (const { name, entry, idx } of itens) {
       if (entry.dir) continue;
-      const uniqueName = `${currentPath}::${name}`;
+      const sufixo = idx > 0 ? `#${idx + 1}` : '';
+      const uniqueName = `${currentPath}::${name}${sufixo}`;
       const baseName = name.split('/').pop() || name;
 
       if (!name.toLowerCase().endsWith('.zip') && !name.toLowerCase().endsWith('.rar')) {
@@ -483,7 +494,8 @@ async function processZipRecursively(
           } else { results.localNonXmlCount++; }
         } catch (e) { results.localNonXmlCount++; }
       } else {
-        const innerArchiveName = baseName;
+        // a 2ª, 3ª... ocorrência do mesmo nome ganha "(2)", "(3)" pra não colidir no caminho dos XMLs de dentro
+        const innerArchiveName = idx > 0 ? baseName.replace(/(\.[^./]+)?$/, (ext) => ` (${idx + 1})${ext}`) : baseName;
         const innerArchiveData = await entry.async('uint8array');
         const antesCount = results.localTotalCount;
         const antesPending = pendingArchives.length;
