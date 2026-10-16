@@ -170,6 +170,16 @@ function LacoRosa({ className = '' }: { className?: string }) {
     </svg>
   );
 }
+// Selo no título dos cards de anomalia: diz, sem precisar abrir o card, se as notas dele estão ou não somadas
+// no "Total de Saídas Auditadas (Válidas)".
+function SeloTotal({ tipo }: { tipo: 'dentro' | 'fora' | 'parcial' }) {
+  const cfg = tipo === 'dentro'
+    ? { txt: 'No total', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800', title: 'Estas notas estão somadas no Total de Saídas Auditadas' }
+    : tipo === 'fora'
+      ? { txt: 'Fora do total', cls: 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-800', title: 'Estas notas NÃO estão somadas no Total de Saídas Auditadas' }
+      : { txt: 'Parte fora do total', cls: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800', title: 'Parte destas notas não está somada no Total de Saídas Auditadas — veja o detalhe' };
+  return <span title={cfg.title} className={`inline-block self-center px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${cfg.cls}`}>{cfg.txt}</span>;
+}
 interface DetExtract {
   cProd: string; xProd: string; ncm: string; cest: string; cfop: string; vProd: number; qCom: number; uCom: string;
   cEan: string; cBenef: string;
@@ -4370,7 +4380,7 @@ ${htmlNomeDuplicado}
   // (3) Nota de homologação (tpAmb=2) misturada no lote de produção — não tem
   // validade fiscal nenhuma e infla o faturamento auditado silenciosamente.
   const notasHomologacao = useMemo(() => {
-    const vazio = { total: 0, amostra: [] as XmlData[] };
+    const vazio = { total: 0, valor: 0, amostra: [] as XmlData[] };
     if (!mainCnpj) return vazio;
     const saidas = xmlList.filter(xml =>
       xml.tipo === 'nfe' && xml.emitCnpj === mainCnpj && xml.tpNF !== '0' && xml.rawXml &&
@@ -4383,7 +4393,7 @@ ${htmlNomeDuplicado}
       // tpAmb DENTRO de <ide> — o protNFe tem um tpAmb próprio que não é este
       if (getNotaExtract(xml)?.tpAmb === '2') afetadas.push(xml);
     });
-    return { total: afetadas.length, amostra: afetadas.slice(0, 10) };
+    return { total: afetadas.length, valor: afetadas.reduce((acc, x) => acc + (parseFloat(x.valor || '0') || 0), 0), amostra: afetadas.slice(0, 10) };
   }, [xmlList, filterMes]);
 
   // Responsável Técnico (<infRespTec>): identifica quem desenvolve/mantém o
@@ -5927,8 +5937,19 @@ ${htmlNomeDuplicado}
       if (notaSearchCampo === 'Numero') return (nota.numero || '').toLowerCase().includes(query);
       if (notaSearchCampo === 'Chave') return (nota.chave || '').toLowerCase().includes(query);
       if (notaSearchCampo === 'Cliente') return [nota.destNome, nota.destCnpj].some(c => c && c.toLowerCase().includes(query));
-      if (notaSearchCampo === 'Data') return (nota.data || '').toLowerCase().includes(query);
-      if (notaSearchCampo === 'Valor') return (nota.valor || '').toLowerCase().includes(query);
+      if (notaSearchCampo === 'Data') {
+        // o XML guarda ISO (2026-09-11T...); na tela a data aparece como 11/09/2026 — aceita as duas formas
+        const dataBR = nota.data ? new Date(nota.data).toLocaleDateString('pt-BR') : '';
+        return (nota.data || '').toLowerCase().includes(query) || dataBR.includes(query);
+      }
+      if (notaSearchCampo === 'Valor') {
+        // o XML guarda "356.40"; na tela o valor aparece como "R$ 356,40" — aceita as duas formas (e "1.234,56")
+        const numero = parseFloat(nota.valor || '');
+        const emBR = isNaN(numero) ? '' : numero.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const qCru = query.replace(/r\$|\s/g, '');
+        const qXml = qCru.includes(',') ? qCru.replace(/\./g, '').replace(',', '.') : qCru;
+        return (nota.valor || '').includes(qXml) || emBR.includes(qCru);
+      }
       if (notaSearchCampo === 'Item') return buscaItem();
       if (notaSearchCampo === 'Ncm') return buscaNcm();
       return false;
@@ -10997,8 +11018,9 @@ ${htmlNomeDuplicado}
                         <Briefcase className="w-5 h-5 text-blue-500" />
                         <div>
                           <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Notas de Serviço (NFS-e)</div>
+                          <SeloTotal tipo="fora" />
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            <strong className="text-slate-700 dark:text-slate-200">{nfseList.length} nota(s)</strong> · {formatarMoeda(valorTotal)} — TEF e IBS/CBS acima são só pra NF-e/NFC-e; sequência da NFS-e é auditada abaixo
+                            <strong className="text-slate-700 dark:text-slate-200">{nfseList.length} nota(s)</strong> · {formatarMoeda(valorTotal)} (fora do Total de Saídas Auditadas, que soma só NF-e/NFC-e) — TEF e IBS/CBS acima são só pra NF-e/NFC-e; sequência da NFS-e é auditada abaixo
                           </div>
                         </div>
                       </div>
@@ -11656,16 +11678,17 @@ ${htmlNomeDuplicado}
                       <div>
                         <div className="flex items-baseline gap-3">
                           <div className="text-sm font-bold text-amber-700 tracking-wide">Contingência Não Regularizada</div>
+                          <SeloTotal tipo={notasAnomalias.semProtocolo.length > 0 ? 'fora' : 'dentro'} />
                           {notasAnomalias.semProtocolo.length > 0 && (
                             <div className="text-sm font-bold text-amber-700">{formatarMoeda(notasAnomalias.semProtocolo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
                           )}
                         </div>
                         <div className="text-xs text-amber-600 mt-0.5">
                           {notasAnomalias.semProtocolo.length > 0 && (
-                            <span>{notasAnomalias.semProtocolo.length} nota(s) emitida(s) offline sem autorização SEFAZ{notasAnomalias.numeroDuplicado.length > 0 ? ' · ' : ''}</span>
+                            <span>{notasAnomalias.semProtocolo.length} nota(s) emitida(s) offline sem autorização SEFAZ — fora do Total de Saídas Auditadas{notasAnomalias.numeroDuplicado.length > 0 ? ' · ' : ''}</span>
                           )}
                           {notasAnomalias.numeroDuplicado.length > 0 && (
-                            <span>{notasAnomalias.numeroDuplicado.length} número(s) com chave duplicada</span>
+                            <span>{notasAnomalias.numeroDuplicado.length} número(s) com chave duplicada — as autorizadas entram no Total de Saídas Auditadas</span>
                           )}
                         </div>
                       </div>
@@ -11683,7 +11706,7 @@ ${htmlNomeDuplicado}
                       {notasAnomalias.semProtocolo.length > 0 && (
                         <div>
                           <div className="text-xs font-black text-amber-700 uppercase tracking-wider mb-2">
-                            Emitidas em Contingência sem Autorização SEFAZ — excluídas do total válido
+                            Emitidas em Contingência sem Autorização SEFAZ — fora do Total de Saídas Auditadas
                           </div>
                           <div className="overflow-x-auto overflow-y-auto max-h-72">
                             <table className="w-full text-xs">
@@ -11767,6 +11790,7 @@ ${htmlNomeDuplicado}
                       <div>
                         <div className="flex items-baseline gap-3">
                           <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Notas Malformadas</div>
+                          <SeloTotal tipo={excluidas.length > 0 && paraConferir.length > 0 ? 'parcial' : excluidas.length > 0 ? 'fora' : 'dentro'} />
                           {valorExcluido > 0 && (
                             <div className="text-sm font-bold text-rose-600 dark:text-rose-400">
                               {formatarMoeda(valorExcluido)} excluído
@@ -11774,9 +11798,9 @@ ${htmlNomeDuplicado}
                           )}
                         </div>
                         <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                          {excluidas.length > 0 && <>{excluidas.length} cancelamento(s) disfarçado(s) (excluída{excluidas.length > 1 ? 's' : ''} do total válido)</>}
+                          {excluidas.length > 0 && <>{excluidas.length} cancelamento(s) disfarçado(s) (fora do Total de Saídas Auditadas)</>}
                           {excluidas.length > 0 && paraConferir.length > 0 && ' · '}
-                          {paraConferir.length > 0 && <>{paraConferir.length} pra conferir (continua{paraConferir.length > 1 ? 'm' : ''} contando no faturamento)</>}
+                          {paraConferir.length > 0 && <>{paraConferir.length} pra conferir (continua{paraConferir.length > 1 ? 'm' : ''} no Total de Saídas Auditadas)</>}
                         </div>
                       </div>
                     </div>
@@ -11863,12 +11887,13 @@ ${htmlNomeDuplicado}
                       <div>
                         <div className="flex items-baseline gap-3">
                           <div className="text-sm font-bold text-slate-600 dark:text-slate-300 tracking-wide">Sem Autorização</div>
+                          <SeloTotal tipo="fora" />
                           <div className="text-sm font-bold text-slate-700 dark:text-slate-200">
                             {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                           </div>
                         </div>
                         <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                          {notasAnomalias.semAutorizacaoNaoContingencia.length} nota(s) sem protocolo SEFAZ e sem flag de contingência — excluídas do total válido
+                          {notasAnomalias.semAutorizacaoNaoContingencia.length} nota(s) sem protocolo SEFAZ e sem flag de contingência — fora do Total de Saídas Auditadas
                         </div>
                       </div>
                     </div>
@@ -11883,7 +11908,7 @@ ${htmlNomeDuplicado}
                   {showSemAutorizacao && (
                     <div>
                       <div className="text-xs font-black text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-2">
-                        Emitidas sem autorização SEFAZ — excluídas do total válido
+                        Emitidas sem autorização SEFAZ — fora do Total de Saídas Auditadas
                       </div>
                       <div className="mb-3 text-xs text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2">
                         <span className="font-bold">Por que caiu aqui:</span> o XML dessas notas não tem o bloco <code className="font-mono">&lt;protNFe&gt;</code> (com <code className="font-mono">nProt</code>/<code className="font-mono">cStat</code>) — só o pedido de emissão assinado, sem a resposta de autorização do SEFAZ anexada. Isso costuma acontecer quando o sistema do emissor exporta o XML da nota separado do protocolo. Não significa necessariamente que a nota foi rejeitada: baixe o XML completo direto do portal do SEFAZ (ou do sistema emissor) pra confirmar — se ele vier com <code className="font-mono">cStat 100</code>, é só substituir o arquivo.
@@ -11948,10 +11973,11 @@ ${htmlNomeDuplicado}
                       <div>
                         <div className="flex items-baseline gap-3">
                           <div className="text-sm font-bold text-orange-700 tracking-wide">Contingência Regularizada Fora do Prazo</div>
+                          <SeloTotal tipo="dentro" />
                           <div className="text-sm font-bold text-orange-700">{formatarMoeda(notasAnomalias.foraDoPrazo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
                         </div>
                         <div className="text-xs text-orange-600 mt-0.5">
-                          {notasAnomalias.foraDoPrazo.length} nota(s) emitida(s) offline e autorizada(s) pelo SEFAZ com atraso superior a 30 min — incluídas no faturamento
+                          {notasAnomalias.foraDoPrazo.length} nota(s) emitida(s) offline e autorizada(s) pelo SEFAZ com atraso superior a 30 min — incluídas no Total de Saídas Auditadas
                         </div>
                       </div>
                     </div>
@@ -12913,7 +12939,8 @@ ${htmlNomeDuplicado}
               {notasHomologacao.total > 0 && (
                 <div className="bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 rounded-xl p-4 text-sm text-rose-800 dark:text-rose-300">
                   <span className="font-bold">⚠ {notasHomologacao.total} nota(s) de AMBIENTE DE HOMOLOGAÇÃO (teste) misturada(s) no movimento.</span>{' '}
-                  Nota emitida com tpAmb=2 não tem validade fiscal — não é venda de verdade e não deveria estar no lote. Confira a configuração do sistema emissor.
+                  Nota emitida com tpAmb=2 não tem validade fiscal — não é venda de verdade e não deveria estar no lote. Confira a configuração do sistema emissor.{' '}
+                  <strong>Estão somadas no Total de Saídas Auditadas ({formatarMoeda(notasHomologacao.valor)})</strong> — se não forem vendas reais, o total está a mais nesse valor.
                   <span className="block mt-1 text-xs opacity-80">
                     {notasHomologacao.amostra.map(n => `${n.serie}/${n.numero}`).join(', ')}{notasHomologacao.total > notasHomologacao.amostra.length ? ` e mais ${notasHomologacao.total - notasHomologacao.amostra.length}…` : ''}
                   </span>
@@ -13835,7 +13862,7 @@ ${htmlNomeDuplicado}
                   {notasAnomalias.semAutorizacaoNaoContingencia.length > 0 && (
                     <div className="mb-4">
                       <div className="text-sm font-bold text-slate-700 mb-2">
-                        Sem protocolo SEFAZ e sem contingência — excluídas do total válido ({notasAnomalias.semAutorizacaoNaoContingencia.length}) — {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
+                        Sem protocolo SEFAZ e sem contingência — fora do Total de Saídas Auditadas ({notasAnomalias.semAutorizacaoNaoContingencia.length}) — {formatarMoeda(notasAnomalias.semAutorizacaoNaoContingencia.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}
                       </div>
                       <div className="text-xs text-slate-600 mb-2">Por que caiu aqui: o XML não tem o bloco &lt;protNFe&gt; (nProt/cStat) — só o pedido de emissão, sem a resposta de autorização do SEFAZ anexada. Confirme baixando o XML completo do portal do SEFAZ antes de considerar a nota irregular.</div>
                       <table>
