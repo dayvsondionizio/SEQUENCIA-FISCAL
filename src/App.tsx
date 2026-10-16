@@ -8,6 +8,7 @@ import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import { CCLASSTRIB_TABELA, CCLASSTRIB_VERSAO } from './cclasstribTabela';
 import { LOGO_CONTADOR_PADARIAS_B64 } from './logoContadorPadarias';
+import Joguinhos from './jogos';
 import { createExtractorFromData } from 'node-unrar-js';
 // @ts-ignore
 // Usando CDN para garantir que o motor WASM seja carregado corretamente em qualquer ambiente
@@ -52,7 +53,8 @@ import {
   Database,
   Building2,
   Sparkles,
-  Info
+  Info,
+  CalendarDays
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -1324,160 +1326,6 @@ function SpedValidationPanel({ spedData, crossRef, onClose }: SpedValidationPane
           <p className="mt-2 text-xs text-emerald-700">
             Todas as {spedSaidasTotal} saídas declaradas no SPED têm XML carregado. Nenhum faltante.
           </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Easter egg — jogo simples pra passar o tempo enquanto o processamento
-// roda em segundo plano (não interfere nele, é só decorativo). Clique/
-// espaço pra pular as inutilizações (retângulos escuros) que vêm voando;
-// pontuação sobe com a distância. Canvas puro, sem dependências novas.
-function EasterEggGame({ onClose }: { onClose: () => void }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [score, setScore] = useState(0);
-  const [best, setBest] = useState(0);
-  const [gameOver, setGameOver] = useState(false);
-  const stateRef = useRef({
-    playerY: 150,
-    velocity: 0,
-    jumping: false,
-    obstacles: [] as { x: number; w: number; h: number }[],
-    speed: 4,
-    frame: 0,
-    dist: 0,
-    over: false,
-  });
-
-  const jumpOrRestart = () => {
-    const s = stateRef.current;
-    if (s.over) {
-      s.playerY = 150; s.velocity = 0; s.jumping = false; s.obstacles = [];
-      s.speed = 4; s.frame = 0; s.dist = 0; s.over = false;
-      setGameOver(false);
-      setScore(0);
-      return;
-    }
-    if (!s.jumping) {
-      s.jumping = true;
-      s.velocity = -9.5;
-    }
-  };
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const GROUND_Y = 150;
-    const PLAYER_X = 36;
-    const PLAYER_SIZE = 22;
-    let raf = 0;
-
-    const loop = () => {
-      const s = stateRef.current;
-      const W = canvas.width, H = canvas.height;
-      ctx.clearRect(0, 0, W, H);
-
-      // fundo
-      ctx.fillStyle = '#FCFBF8';
-      ctx.fillRect(0, 0, W, H);
-      ctx.strokeStyle = '#E5E0D6';
-      ctx.beginPath();
-      ctx.moveTo(0, GROUND_Y + PLAYER_SIZE);
-      ctx.lineTo(W, GROUND_Y + PLAYER_SIZE);
-      ctx.stroke();
-
-      if (!s.over) {
-        s.frame++;
-        s.dist++;
-        if (s.frame % 90 === 0) s.speed = Math.min(s.speed + 0.4, 11);
-
-        // física do pulo
-        s.velocity += 0.55;
-        s.playerY += s.velocity;
-        if (s.playerY > GROUND_Y) { s.playerY = GROUND_Y; s.velocity = 0; s.jumping = false; }
-
-        // spawn de obstáculo
-        if (s.frame % Math.max(45, Math.floor(90 - s.speed * 4)) === 0) {
-          s.obstacles.push({ x: W, w: 16 + Math.random() * 10, h: 20 + Math.random() * 16 });
-        }
-        s.obstacles.forEach(o => { o.x -= s.speed; });
-        s.obstacles = s.obstacles.filter(o => o.x + o.w > 0);
-
-        // colisão (AABB simples)
-        for (const o of s.obstacles) {
-          const px1 = PLAYER_X, px2 = PLAYER_X + PLAYER_SIZE;
-          const py1 = s.playerY, py2 = s.playerY + PLAYER_SIZE;
-          const ox1 = o.x, ox2 = o.x + o.w;
-          const oy1 = GROUND_Y + PLAYER_SIZE - o.h, oy2 = GROUND_Y + PLAYER_SIZE;
-          if (px2 > ox1 && px1 < ox2 && py2 > oy1 && py1 < oy2) {
-            s.over = true;
-            setGameOver(true);
-            setBest(b => Math.max(b, Math.floor(s.dist / 8)));
-          }
-        }
-        setScore(Math.floor(s.dist / 8));
-      }
-
-      // jogador (trigo dourado)
-      ctx.fillStyle = '#C9A227';
-      ctx.beginPath();
-      ctx.roundRect(PLAYER_X, s.playerY, PLAYER_SIZE, PLAYER_SIZE, 6);
-      ctx.fill();
-
-      // obstáculos
-      ctx.fillStyle = '#423C2C';
-      s.obstacles.forEach(o => {
-        ctx.beginPath();
-        ctx.roundRect(o.x, GROUND_Y + PLAYER_SIZE - o.h, o.w, o.h, 3);
-        ctx.fill();
-      });
-
-      raf = requestAnimationFrame(loop);
-    };
-
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jumpOrRestart(); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
-  return (
-    <div
-      className="fixed inset-0 z-[200] backdrop-blur-sm flex flex-col items-center justify-center p-6"
-      style={{background: 'rgba(23,21,15,0.85)'}}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div className="bg-[#FCFBF8] rounded-2xl p-5 shadow-2xl" style={{width: 'min(92vw, 420px)'}}>
-        <div className="flex items-center justify-between mb-3">
-          <div className="font-serif font-semibold text-[#17150F]">Pulando as Inutilizações</div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors" title="Fechar">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <canvas
-          ref={canvasRef}
-          width={370}
-          height={176}
-          onClick={jumpOrRestart}
-          className="w-full rounded-lg border border-[#E5E0D6] cursor-pointer touch-none"
-        />
-        <div className="flex items-center justify-between mt-3 text-sm">
-          <span className="text-slate-500">Espaço, ↑ ou clique pra pular</span>
-          <span className="font-bold text-[#9A7B12]">Pontos: {score} · Recorde: {best}</span>
-        </div>
-        {gameOver && (
-          <div className="mt-3 text-center">
-            <p className="text-sm text-slate-600 mb-2">Bateu numa inutilização! Clique no jogo pra tentar de novo.</p>
-          </div>
         )}
       </div>
     </div>
@@ -8749,7 +8597,7 @@ ${htmlNomeDuplicado}
         )}
       </AnimatePresence>
 
-      {showEasterEgg && <EasterEggGame onClose={() => setShowEasterEgg(false)} />}
+      {showEasterEgg && <Joguinhos onClose={() => setShowEasterEgg(false)} processando={isProcessing || !!exportProgress} />}
 
       {/* Confirmação de Simples puro × híbrido — só aparece ao gerar o Perfil do Cliente de empresa do Simples */}
       <AnimatePresence>
@@ -10811,7 +10659,26 @@ ${htmlNomeDuplicado}
                   <>
                     <section className={cn(card, '-order-2 grid lg:grid-cols-[1.35fr_1fr] overflow-hidden')}>
                       <div className="p-7">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">Total de saídas auditadas · válidas</div>
+                        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">Total de saídas auditadas · válidas</div>
+                          {/* mesmo filtro de mês da seção Séries (filterMes): todos os números desta tela já seguem ele */}
+                          {mesesDisponiveis.length > 1 && (
+                            <label className="no-print inline-flex items-center gap-2 text-[12px] text-slate-500 dark:text-slate-400">
+                              <CalendarDays className="w-4 h-4" aria-hidden="true" />
+                              <span className="sr-only">Mês da análise</span>
+                              <select
+                                value={filterMes}
+                                onChange={(e) => setFilterMes(e.target.value)}
+                                className={cn('rounded-lg border px-2.5 py-1.5 text-[13px] font-medium bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-400/50', filterMes !== 'Todos' ? 'border-blue-400 text-blue-700 dark:border-blue-500 dark:text-blue-300' : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200')}
+                              >
+                                <option value="Todos">Todos os meses</option>
+                                {mesesDisponiveis.map(m => (
+                                  <option key={m} value={m}>{m}</option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
+                        </div>
                         <div className="font-serif text-[52px] leading-none tracking-tight text-slate-900 dark:text-slate-100 mt-3 mb-3 tabular-nums">
                           <span className="text-[26px] text-slate-400 mr-1.5 align-[14px]">R$</span>{faturamentoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </div>
