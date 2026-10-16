@@ -45,7 +45,14 @@ import {
   Users,
   Package,
   TrendingUp,
-  Landmark
+  Landmark,
+  LayoutDashboard,
+  Hash,
+  Percent,
+  Database,
+  Building2,
+  Sparkles,
+  Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -160,6 +167,23 @@ interface ExtractionErrorEntry {
   downloadUrl?: string;
   downloadName?: string;
 }
+// Seções do visual novo (menu lateral). Cada bloco da tela leva data-secao; o CSS esconde os da seção inativa.
+type SecaoApp = 'visao' | 'series' | 'alertas' | 'notas' | 'pagamentos' | 'clientes' | 'fornecedores' | 'produtos' | 'ibscbs' | 'sped' | 'nfse';
+const TITULO_SECAO: Record<SecaoApp, string> = {
+  visao: 'Visão geral', series: 'Séries e sequência', alertas: 'Alertas', notas: 'Notas de saída', pagamentos: 'Pagamentos (TEF)',
+  clientes: 'Clientes', fornecedores: 'Fornecedores', produtos: 'Produtos e sazonalidade', ibscbs: 'IBS/CBS', sped: 'SPED Fiscal', nfse: 'NFS-e',
+};
+
+// Visual: publica a altura do cabeçalho em --altura-topo para a marca do menu lateral ocupar a mesma faixa.
+function medirTopo(el: HTMLElement | null) {
+  if (!el || typeof ResizeObserver === 'undefined') return;
+  const medir = () => document.documentElement.style.setProperty('--altura-topo', `${el.getBoundingClientRect().height}px`);
+  medir();
+  const ro = new ResizeObserver(medir);
+  ro.observe(el);
+  return () => ro.disconnect();
+}
+
 // Laço do Outubro Rosa (prevenção ao câncer de mama). Aparece só em outubro: ver uso no cabeçalho.
 function LacoRosa({ className = '' }: { className?: string }) {
   return (
@@ -1665,7 +1689,7 @@ export default function App() {
   const ThemeToggle = () => (
     <button
       onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
-      className="flex items-center gap-2 px-3 py-2 rounded-lg text-white text-sm font-bold transition-all no-print shrink-0"
+      className="flex items-center gap-2 px-3 py-2 rounded-lg text-white/80 hover:text-white text-sm font-semibold transition-colors no-print shrink-0 bg-transparent! border-transparent! hover:bg-white/10!"
       style={{background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(201,162,39,0.35)'}}
       title={theme === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
     >
@@ -1770,6 +1794,8 @@ export default function App() {
   const [downloadingDanfeChave, setDownloadingDanfeChave] = useState<string | null>(null);
   const [notasSelecionadas, setNotasSelecionadas] = useState<Set<string>>(new Set());
   const [showSelecionadas, setShowSelecionadas] = useState(false);
+  const [secao, setSecao] = useState<SecaoApp>('visao');
+  const [mostrarEmpresa, setMostrarEmpresa] = useState(false);
   const [baixandoLote, setBaixandoLote] = useState<{ tipo: 'danfe' | 'xml'; atual: number; total: number } | null>(null);
   const [copiedCnpjIdx, setCopiedCnpjIdx] = useState<number | null>(null);
 
@@ -8260,7 +8286,51 @@ ${htmlNomeDuplicado}
     }
   }, [analystName, analysis]);
 
+  // Visual novo: o menu lateral troca a seção ativa e abre o card correspondente (os blocos são os mesmos de antes;
+  // o CSS em index.css esconde os que não pertencem à seção ativa).
+  const irParaSecao = (s: SecaoApp) => {
+    setSecao(s);
+    setMostrarEmpresa(false);
+    if (s === 'clientes') setShowPerfilClientes(true);
+    if (s === 'fornecedores') setShowPerfilFornecedores(true);
+    if (s === 'ibscbs') setShowAuditoriaIbsCbs(true);
+    if (s === 'pagamentos') setShowAuditoriaPagamento(true);
+    if (s === 'nfse') setShowNfse(true);
+    if (s === 'sped') setSpedCardOpen(true);
+    if (s === 'produtos') { setMapaFiscalDesbloqueado(true); setShowMapaFiscal(true); }
+    window.scrollTo({ top: 0 });
+  };
+  type ItemMenu = { id: string; nome: string; icone: React.ComponentType<{ className?: string }>; badge?: number; acao?: () => void };
+  const montarMenu = (): { titulo: string; itens: ItemMenu[] }[] => {
+    const nAlertas = [notasAnomalias.semProtocolo.length, notasAnomalias.semAutorizacaoNaoContingencia.length, notasAnomalias.malformadas.length,
+      notasAnomalias.foraDoPrazo.length, notasAnomalias.numeroDuplicado.length, notasHomologacao.total].filter(n => n > 0).length;
+    const auditoria: ItemMenu[] = [
+      { id: 'visao', nome: 'Visão geral', icone: LayoutDashboard },
+      { id: 'series', nome: 'Séries e sequência', icone: Hash },
+      { id: 'alertas', nome: 'Alertas', icone: AlertTriangle, badge: nAlertas || undefined },
+      { id: 'notas', nome: 'Notas de saída', icone: FileText },
+    ];
+    if (auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0) auditoria.push({ id: 'pagamentos', nome: 'Pagamentos (TEF)', icone: CreditCard });
+    const perfil: ItemMenu[] = [];
+    if (perfilClientes.clientes.length > 0) perfil.push({ id: 'clientes', nome: 'Clientes', icone: Users });
+    if (perfilFornecedores.fornecedores.length > 0) perfil.push({ id: 'fornecedores', nome: 'Fornecedores', icone: Package });
+    if (mapaFiscal) perfil.push({ id: 'produtos', nome: 'Produtos e sazonalidade', icone: TrendingUp });
+    const reforma: ItemMenu[] = [];
+    if (auditoriaIbsCbs.totalNotas > 0) reforma.push({ id: 'ibscbs', nome: 'IBS/CBS', icone: Percent });
+    reforma.push({ id: 'perfil-html', nome: 'Perfil do Cliente (HTML)', icone: Sparkles, acao: abrirPerfilCliente });
+    const arquivos: ItemMenu[] = [{ id: 'sped', nome: 'SPED Fiscal', icone: Database }];
+    if (nfseList.length > 0) arquivos.push({ id: 'nfse', nome: 'NFS-e', icone: Receipt });
+    return [
+      { titulo: 'Auditoria', itens: auditoria },
+      ...(perfil.length ? [{ titulo: 'Perfil', itens: perfil }] : []),
+      { titulo: 'Reforma Tributária', itens: reforma },
+      { titulo: 'Arquivos', itens: arquivos },
+    ];
+  };
+
   const reset = () => {
+    setSecao('visao');
+    setMostrarEmpresa(false);
     // node-unrar-js (WASM) e o libarchive.js carregado via CDN mantêm um
     // singleton por aba inteira — a memória linear do WASM só cresce, nunca
     // encolhe, e o worker do libarchive.js também é reaproveitado. Resetar só
@@ -8866,7 +8936,7 @@ ${htmlNomeDuplicado}
                                 <td className="py-1.5">
                                   <button
                                     onClick={() => baixarXmlEvidencia(n)}
-                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-transparent text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:border-slate-900 hover:text-slate-900 dark:hover:border-slate-300 dark:hover:text-white transition-colors"
                                   >
                                     <Download className="w-3 h-3" />
                                     XML
@@ -8950,7 +9020,7 @@ ${htmlNomeDuplicado}
                                 <td className="py-1.5">
                                   <button
                                     onClick={() => baixarXmlEvidencia(n)}
-                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-transparent text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:border-slate-900 hover:text-slate-900 dark:hover:border-slate-300 dark:hover:text-white transition-colors"
                                   >
                                     <Download className="w-3 h-3" />
                                     XML
@@ -9044,32 +9114,96 @@ ${htmlNomeDuplicado}
         )}
       </AnimatePresence>
 
+      {/* Menu lateral (visual novo): cada item mostra uma seção da análise — os blocos continuam os mesmos */}
+      {analysis && (
+        <aside className="no-print hidden lg:flex fixed inset-y-0 left-0 z-40 w-[248px] flex-col px-3.5 pb-4" style={{ background: '#17150F', color: '#BDB5A4' }}>
+          {/* Marca: ocupa a mesma faixa do cabeçalho ao lado (altura em --altura-topo) e a linha dourada continua por baixo */}
+          <div className="relative -mx-3.5 px-6 shrink-0 flex flex-col justify-center" style={{ height: 'var(--altura-topo, 136px)' }}>
+            {/* nome (com o laço, quando houver) centralizado como um conjunto sob o logo */}
+            <div className="self-start flex flex-col items-center gap-3">
+              <img src="/logo-sf.png" alt="Contador de Padarias" className="h-[72px] w-auto max-w-full object-contain select-none cursor-pointer" onClick={() => setMapaFiscalDesbloqueado(v => !v)} />
+              <div className="flex items-center gap-1.5">
+                <span className="font-serif text-[24px] leading-tight tracking-tight whitespace-nowrap" style={{ color: '#F3EFE6' }}>Sequência Fiscal</span>
+                {new Date().getMonth() === 9 && <LacoRosa className="w-6 h-6 shrink-0 -rotate-[14deg]" />}
+              </div>
+            </div>
+            <div className="absolute inset-x-0 bottom-0 h-[3px]" style={{ background: 'linear-gradient(90deg, transparent, #C9A227 45%)' }} />
+          </div>
+          <nav className="mt-2 flex-1 overflow-y-auto pr-1" aria-label="Seções da análise">
+            {montarMenu().map(grupo => (
+              <div key={grupo.titulo}>
+                <div className="px-2.5 pt-4 pb-1.5 text-[10.5px] uppercase tracking-[0.12em]" style={{ color: '#7D7565' }}>{grupo.titulo}</div>
+                {grupo.itens.map(item => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => item.acao ? item.acao() : irParaSecao(item.id as SecaoApp)}
+                    aria-current={secao === item.id ? 'page' : undefined}
+                    className={cn('w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13.5px] text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-[#C9A227]/60', secao === item.id ? 'bg-[rgba(201,162,39,0.14)] text-[#F0D27A] font-medium [&>svg]:opacity-100' : 'hover:bg-white/5 hover:text-[#F3EFE6]')}
+                  >
+                    <item.icone className="w-4 h-4 shrink-0 opacity-80" />
+                    <span className="truncate">{item.nome}</span>
+                    {item.badge ? <span className="ml-auto text-[11px] font-semibold px-1.5 rounded-full" style={{ background: 'rgba(238,113,134,0.16)', color: '#F29AAA' }}>{item.badge}</span> : null}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </nav>
+        </aside>
+      )}
+
       {/* Header */}
-      <header className="text-white relative print:shadow-none" style={{background: '#17150F', boxShadow: '0 12px 32px -12px rgba(23,21,15,0.45)'}}>
-        <div className="absolute inset-x-0 bottom-0 h-[3px] print:hidden" style={{background: 'linear-gradient(90deg, transparent, #C9A227 20%, #C9A227 80%, transparent)'}} />
-        <div className="max-w-[1920px] mx-auto px-6 pt-8 pb-14 print:px-4 print:py-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-          <div className="flex items-center gap-5 print:gap-4">
+      <header ref={medirTopo} className="text-white relative print:shadow-none" style={{background: '#17150F', boxShadow: '0 1px 0 rgba(23,21,15,0.06), 0 10px 24px -18px rgba(23,21,15,0.35)'}}>
+        {!analysis && (
+          <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden print:hidden">
+            <div className="absolute -top-40 -right-24 w-[560px] h-[560px] rounded-full" style={{background: 'radial-gradient(closest-side, rgba(201,162,39,0.14), transparent)'}} />
+            <div className="absolute -bottom-48 -left-32 w-[420px] h-[420px] rounded-full" style={{background: 'radial-gradient(closest-side, rgba(240,210,122,0.06), transparent)'}} />
+          </div>
+        )}
+        <div className="absolute inset-x-0 bottom-0 h-[3px] print:hidden" style={{background: analysis ? 'linear-gradient(90deg, #C9A227, #C9A227 80%, transparent)' : 'linear-gradient(90deg, transparent, #C9A227 20%, #C9A227 80%, transparent)'}} />
+        <div className={cn("max-w-[1920px] mx-auto px-6 print:px-4 print:py-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6", analysis ? "py-4 lg:pl-[284px] flex-wrap" : "relative pt-10 pb-20 md:pt-14 md:pb-24")}>
+          <div className={cn("flex flex-col sm:flex-row items-start sm:items-center gap-5 sm:gap-8 print:gap-4", analysis && "hidden")}>
             <img
               src="/logo-sf.png"
               alt="Contador de Padarias"
-              className="h-16 print:h-14 object-contain select-none"
+              className="h-20 md:h-24 print:h-14 object-contain select-none"
               onClick={() => setMapaFiscalDesbloqueado(v => !v)}
             />
-            <div className="hidden md:block w-px h-12 print:h-10 bg-white/15" />
-            <div>
-              <h1 className="font-serif text-3xl print:text-2xl font-semibold tracking-tight text-white mb-0.5 print:mb-0.5 flex items-center gap-2.5">Sequência Fiscal{new Date().getMonth() === 9 && <LacoRosa className="w-10 h-10 -my-3 shrink-0 -rotate-[14deg]" />}</h1>
-              <p className="font-medium text-[0.95rem] print:text-sm" style={{color: 'rgba(201,162,39,0.8)'}}>Auditoria de Sequência de Vendas e Saídas</p>
+            <div className="hidden md:block w-px h-24 print:h-10 bg-linear-to-b from-transparent via-[#C9A227]/50 to-transparent" />
+            <div className="min-w-0">
+              <h1 className="font-serif text-4xl md:text-5xl lg:text-[56px] lg:leading-[1.02] print:text-2xl font-medium tracking-tight text-white mb-2 print:mb-0.5 flex items-center gap-3">Sequência Fiscal{new Date().getMonth() === 9 && <LacoRosa className="w-10 h-10 md:w-12 md:h-12 -my-3 shrink-0 -rotate-[14deg]" />}</h1>
+              <p className="font-medium text-base md:text-lg print:text-sm" style={{color: 'rgba(201,162,39,0.9)'}}>Auditoria de Sequência de Vendas e Saídas</p>
+              <div className="mt-6 flex flex-wrap gap-2 print:hidden">
+                <span className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[12px] font-medium text-white/80 bg-white/[0.04] border border-white/10"><Hash className="w-3.5 h-3.5 text-[#C9A227]" />Sequência de numeração</span>
+                <span className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[12px] font-medium text-white/80 bg-white/[0.04] border border-white/10"><FileSearch className="w-3.5 h-3.5 text-[#C9A227]" />Notas faltantes e inutilizadas</span>
+                <span className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[12px] font-medium text-white/80 bg-white/[0.04] border border-white/10"><Ban className="w-3.5 h-3.5 text-[#C9A227]" />Cancelamentos</span>
+                <span className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[12px] font-medium text-white/80 bg-white/[0.04] border border-white/10"><Clock className="w-3.5 h-3.5 text-[#C9A227]" />Contingência</span>
+                <span className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[12px] font-medium text-white/80 bg-white/[0.04] border border-white/10"><Percent className="w-3.5 h-3.5 text-[#C9A227]" />IBS/CBS</span>
+                <span className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[12px] font-medium text-white/80 bg-white/[0.04] border border-white/10"><CreditCard className="w-3.5 h-3.5 text-[#C9A227]" />Pagamentos TEF</span>
+                <span className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[12px] font-medium text-white/80 bg-white/[0.04] border border-white/10"><Database className="w-3.5 h-3.5 text-[#C9A227]" />SPED Fiscal</span>
+                <span className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[12px] font-medium text-white/80 bg-white/[0.04] border border-white/10"><Receipt className="w-3.5 h-3.5 text-[#C9A227]" />NFS-e</span>
+              </div>
             </div>
           </div>
 
           {analysis && (
-            <div className="flex flex-col items-end gap-3 no-print">
+            <div className="min-w-0 flex-1">
+              <h1 className="font-serif text-[26px] font-medium tracking-tight text-white leading-tight">{TITULO_SECAO[secao]}</h1>
+              <div className="lg:hidden mt-3 flex gap-2 overflow-x-auto pb-1">
+                {montarMenu().flatMap(g => g.itens).filter(i => !i.acao).map(i => (
+                  <button key={i.id} type="button" onClick={() => irParaSecao(i.id as SecaoApp)} className={cn('shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold border', secao === i.id ? 'bg-[#C9A227] text-[#17150F] border-[#C9A227]' : 'border-white/15 text-white/80')}>{i.nome}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {analysis && (
+            <div className="relative flex flex-col items-end gap-3 no-print">
               <div className="flex items-center gap-3 no-print">
                 <ThemeToggle />
                 <button
                   onClick={abrirPerfilCliente}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all shrink-0"
-                  style={{background: 'rgba(201,162,39,0.18)', border: '1px solid rgba(201,162,39,0.5)', color: '#C9A227'}}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all shrink-0 hover:brightness-110 active:scale-[0.98]"
+                  style={{background: '#C9A227', border: '1px solid #C9A227', color: '#17150F'}}
                   title="Baixa o perfil do cliente em HTML (clientes, fornecedores, produtos, sazonalidade e Reforma Tributária: regime, créditos e simulação) — tópicos expansíveis, pra orientar o cliente"
                 >
                   <Users className="w-4 h-4" />
@@ -9084,17 +9218,19 @@ ${htmlNomeDuplicado}
                   Nova Análise
                 </button>
               </div>
-              {analysis.length > 0 && (
+            </div>
+          )}
+          {analysis && analysis.length > 0 && (
               <motion.div
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                className="backdrop-blur-md rounded-xl p-5 flex flex-col gap-1 min-w-[360px] shadow-2xl"
-                style={{background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(201,162,39,0.2)'}}
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="basis-full w-full rounded-xl px-5 py-3 no-print"
+                style={{background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(201,162,39,0.18)'}}
               >
-                <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-                  <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Empresa:</span>
+                <div className="grid grid-flow-col grid-rows-[auto_auto] auto-cols-max gap-x-5 gap-y-0.5 text-sm overflow-x-auto [scrollbar-width:thin]">
+                  <span className="font-semibold uppercase text-[10px] self-start tracking-wider" style={{color: 'rgba(255,255,255,0.55)'}}>Empresa:</span>
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-white font-bold text-base truncate min-w-0">{analysis[0].razaoSocial}</span>
+                    <span className="text-white font-semibold text-sm truncate min-w-0 max-w-[260px]">{analysis[0].razaoSocial}</span>
                     <button
                       onClick={() => copiarCampoHeader('empresa', analysis[0].razaoSocial)}
                       className="shrink-0 transition-colors"
@@ -9105,9 +9241,9 @@ ${htmlNomeDuplicado}
                     </button>
                   </div>
 
-                  <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>CNPJ:</span>
+                  <span className="font-semibold uppercase text-[10px] self-start tracking-wider" style={{color: 'rgba(255,255,255,0.55)'}}>CNPJ:</span>
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-mono text-base" style={{color: 'rgba(255,255,255,0.85)'}}>{analysis[0].cnpj}</span>
+                    <span className="font-mono text-[13px]" style={{color: 'rgba(255,255,255,0.85)'}}>{analysis[0].cnpj}</span>
                     <button
                       onClick={() => copiarCampoHeader('cnpj', analysis[0].cnpj)}
                       className="shrink-0 transition-colors"
@@ -9118,9 +9254,9 @@ ${htmlNomeDuplicado}
                     </button>
                   </div>
 
-                  <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>IE:</span>
+                  <span className="font-semibold uppercase text-[10px] self-start tracking-wider" style={{color: 'rgba(255,255,255,0.55)'}}>IE:</span>
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-mono text-base" style={{color: 'rgba(255,255,255,0.85)'}}>{analysis[0].ie}</span>
+                    <span className="font-mono text-[13px]" style={{color: 'rgba(255,255,255,0.85)'}}>{analysis[0].ie}</span>
                     <button
                       onClick={() => copiarCampoHeader('ie', analysis[0].ie)}
                       className="shrink-0 transition-colors"
@@ -9131,20 +9267,20 @@ ${htmlNomeDuplicado}
                     </button>
                   </div>
 
-                  <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Meses:</span>
+                  <span className="font-semibold uppercase text-[10px] self-start tracking-wider" style={{color: 'rgba(255,255,255,0.55)'}}>Meses:</span>
                   <div className="min-w-0 overflow-x-auto whitespace-nowrap font-bold text-sm leading-snug pb-0.5" style={{color: '#C9A227'}} title={mesesDisponiveis.join(', ')}>
                     {mesesDisponiveis.length === 0 ? 'N/A' : mesesDisponiveis.join(', ')}
                   </div>
 
                   {regimeTributario.label && (
                     <>
-                      <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Regime:</span>
+                      <span className="font-semibold uppercase text-[10px] self-start tracking-wider" style={{color: 'rgba(255,255,255,0.55)'}}>Regime:</span>
                       <div className="flex items-center gap-1.5">
                         <span
                           className="inline-flex items-center w-fit px-2.5 py-0.5 rounded-full text-xs font-bold"
                           style={(regimeTributario.isSimples || regimeTributario.isMei)
                             ? {background: 'rgba(201,162,39,0.15)', color: '#C9A227', border: '1px solid rgba(201,162,39,0.35)'}
-                            : {background: 'rgba(148,163,184,0.15)', color: '#CBD5E1', border: '1px solid rgba(148,163,184,0.3)'}}
+                            : {background: 'rgba(243,239,230,0.08)', color: '#E6E0D3', border: '1px solid rgba(243,239,230,0.2)'}}
                         >
                           {regimeTributario.label}
                         </span>
@@ -9167,7 +9303,7 @@ ${htmlNomeDuplicado}
                     </>
                   )}
 
-                  <span className="font-bold uppercase text-[11px] self-center tracking-wide" style={{color: 'rgba(255,255,255,0.55)'}}>Receita Federal:</span>
+                  <span className="font-semibold uppercase text-[10px] self-start tracking-wider" style={{color: 'rgba(255,255,255,0.55)'}}>Receita Federal:</span>
                   <div className="flex items-center gap-2 flex-wrap no-print">
                     {receitaConsultaStatus === 'idle' && !receitaConsulta && (
                       <button
@@ -9201,7 +9337,7 @@ ${htmlNomeDuplicado}
                         </span>
                         <span
                           className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold"
-                          style={{background: 'rgba(148,163,184,0.15)', color: '#CBD5E1', border: '1px solid rgba(148,163,184,0.3)'}}
+                          style={{background: 'rgba(243,239,230,0.08)', color: '#E6E0D3', border: '1px solid rgba(243,239,230,0.2)'}}
                         >
                           {receitaConsulta.opcaoMei ? 'MEI' : receitaConsulta.opcaoSimples ? 'Optante Simples' : 'Não optante Simples'}
                         </span>
@@ -9223,12 +9359,10 @@ ${htmlNomeDuplicado}
                 </div>
               </motion.div>
               )}
-            </div>
-          )}
         </div>
       </header>
 
-      <main className="max-w-[1920px] mx-auto px-6 lg:px-8 pb-6 lg:pb-8 -mt-8 relative z-10 no-print flex-1 w-full">
+      <main className={cn("max-w-[1920px] mx-auto px-6 lg:px-8 pb-6 lg:pb-8 relative z-10 no-print flex-1 w-full", analysis ? "mt-6 lg:pl-[284px]" : "-mt-12")}>
         {extractionErrors.length > 0 && (
           <div className="bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-800 border-l-4 border-l-rose-500 rounded-xl p-5 mb-6">
             <div className="flex items-start gap-3">
@@ -9282,34 +9416,34 @@ ${htmlNomeDuplicado}
                 <motion.div 
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  className="bg-white rounded-2xl border border-slate-200 overflow-hidden"
+                  className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden"
                 >
-                  <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                    <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                  <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center gap-4">
+                    <h4 className="text-[14px] font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                       <BarChart3 className="w-5 h-5 text-blue-600" />
                       Resumo do Carregamento
                     </h4>
                     {isProcessing && (
-                      <span className="text-sm text-blue-600 font-medium animate-pulse">
+                      <span className="text-[13px] text-blue-600 dark:text-blue-400 font-semibold tabular-nums animate-pulse">
                         Processando {processingProgress.current} de {processingProgress.total}...
                       </span>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-slate-100">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-slate-100 dark:divide-slate-800 dark:[&>div]:bg-transparent">
                     <div className="p-6 text-center">
-                      <div className="text-3xl font-bold text-slate-900">{stats.totalXmls}</div>
+                      <div className="font-serif text-[34px] leading-[42px] font-medium tabular-nums text-slate-900 dark:text-slate-100">{stats.totalXmls}</div>
                       <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Total XMLs Anexados</div>
                     </div>
                     <div className="p-6 text-center bg-slate-50/30">
-                      <div className="text-3xl font-bold text-slate-400">{stats.nonXmlCount}</div>
+                      <div className="font-serif text-[34px] leading-[42px] font-medium tabular-nums text-slate-400 dark:text-slate-500">{stats.nonXmlCount}</div>
                       <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Não-XML</div>
                     </div>
                     <div className="p-6 text-center">
-                      <div className="text-xl font-bold text-emerald-600 truncate">{formatarMoeda(faturamentoTotal)}</div>
+                      <div className="font-serif text-[26px] leading-[42px] font-medium tabular-nums text-slate-900 dark:text-slate-100 truncate">{formatarMoeda(faturamentoTotal)}</div>
                       <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Total de Saídas Estimado</div>
                     </div>
                     <div className="p-6 text-center bg-slate-50/30">
-                      <div className="text-sm font-bold text-slate-900 truncate">
+                      <div className="text-[15px] leading-[42px] font-semibold tabular-nums text-slate-900 dark:text-slate-100 truncate">
                         {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
                       </div>
                       <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1">Período Detectado</div>
@@ -9317,8 +9451,8 @@ ${htmlNomeDuplicado}
                   </div>
 
                   {fornecedorEntradaInfo && (
-                    <div className="mx-6 mb-0 mt-0 border-t border-slate-100/50 pt-4 pb-2">
-                      <div className="flex items-start gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-blue-700 text-sm">
+                    <div className="mx-6 mb-0 mt-0 border-t border-slate-100/50 dark:border-slate-800 pt-4 pb-2">
+                      <div className="flex items-start gap-3 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900 rounded-lg px-4 py-3 text-blue-700 dark:text-blue-300 text-sm">
                         <svg className="w-4 h-4 mt-0.5 shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                         <div>
                           <span className="font-bold">{fornecedorEntradaInfo.count} nota{fornecedorEntradaInfo.count !== 1 ? 's' : ''} de entrada de fornecedor</span> detectada{fornecedorEntradaInfo.count !== 1 ? 's' : ''} e ignorada{fornecedorEntradaInfo.count !== 1 ? 's' : ''} — o app analisa apenas saídas da empresa auditada.
@@ -9343,7 +9477,7 @@ ${htmlNomeDuplicado}
                   )}
 
                   {attachedSources.length > 0 && (
-                    <div className="p-6 border-t border-slate-100/50">
+                    <div className="p-6 border-t border-slate-100/50 dark:border-slate-800">
                       <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Fontes Anexadas ({attachedSources.length})</div>
                       <div className="flex flex-wrap gap-2 max-h-[360px] overflow-y-auto custom-scrollbar pr-1">
                         {attachedSources.map((source, sIdx) => {
@@ -9383,43 +9517,43 @@ ${htmlNomeDuplicado}
                           return (
                             <div 
                               key={sIdx}
-                              className="group flex items-center gap-2 bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-all hover:border-blue-300"
+                              className="group flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors hover:border-slate-400 dark:hover:border-slate-500"
                             >
                               {source.isZip ? (
                                 <FileText className="w-3 h-3 text-blue-500" />
                               ) : (
                                 <FolderOpen className="w-3 h-3 text-blue-500" />
                               )}
-                              <span className="text-slate-700">{source.name}</span>
+                              <span className="text-slate-700 dark:text-slate-200">{source.name}</span>
                               <div className="flex items-center gap-1.5 ml-1">
-                                <span className="bg-slate-50 text-slate-400 px-1.5 py-0.5 rounded text-[9px] border border-slate-100">
+                                <span className="bg-slate-50 dark:bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded text-[9px] border border-slate-100 dark:border-slate-700">
                                   {totalFiscalInSource} XMLs
                                 </span>
                                 
                                 {(source as any).error ? (
-                                  <span className="bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded text-[9px] border border-rose-100 flex items-center gap-1">
+                                  <span className="bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-300 px-1.5 py-0.5 rounded text-[9px] border border-rose-100 dark:border-rose-900 flex items-center gap-1">
                                     <AlertCircle className="w-2.5 h-2.5" />
                                     {(source as any).errorMsg || 'Erro'}
                                   </span>
                                 ) : (
                                   <>
                                     {status === 'sales' && (
-                                      <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded text-[9px] border border-emerald-100">
+                                      <span className="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-300 px-1.5 py-0.5 rounded text-[9px] border border-emerald-100 dark:border-emerald-900">
                                         Vendas
                                       </span>
                                     )}
                                     {status === 'purchases' && (
-                                      <span className="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded text-[9px] border border-amber-100">
+                                      <span className="bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 rounded text-[9px] border border-amber-100 dark:border-amber-900">
                                         Compras - Ignorada
                                       </span>
                                     )}
                                     {status === 'mixed' && (
-                                      <span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[9px] border border-blue-100">
+                                      <span className="bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-300 px-1.5 py-0.5 rounded text-[9px] border border-blue-100 dark:border-blue-900">
                                         Misto
                                       </span>
                                     )}
                                     {status === 'awaiting' && (
-                                      <span className="bg-slate-50 text-slate-400 px-1.5 py-0.5 rounded text-[9px] border border-slate-100">
+                                      <span className="bg-slate-50 dark:bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded text-[9px] border border-slate-100 dark:border-slate-700">
                                         Pronto
                                       </span>
                                     )}
@@ -9435,20 +9569,20 @@ ${htmlNomeDuplicado}
 
 
 
-                  <div className="p-10 bg-slate-50 flex flex-col items-center gap-6 border-t border-slate-100">
-                    <div className="flex gap-4">
+                  <div className="px-6 py-7 bg-slate-50 dark:bg-slate-800/40 flex flex-col items-center gap-6 border-t border-slate-100 dark:border-slate-800">
+                    <div className="flex flex-wrap justify-center gap-3">
                       <button
                         onClick={runAnalysis}
                         disabled={xmlList.length === 0 && nfseList.length === 0}
-                        className="flex items-center gap-2 px-10 py-5 text-white rounded-xl font-bold text-xl transition-all shadow-lg disabled:opacity-50 disabled:grayscale scale-105 active:scale-100"
-                      style={{background: '#17150F', boxShadow: '0 8px 32px rgba(23,21,15,0.4)'}}
+                        className="flex items-center gap-2.5 px-9 py-4 text-white rounded-xl font-semibold text-[17px] transition-all disabled:opacity-50 disabled:grayscale hover:opacity-90 active:scale-[0.98] dark:bg-slate-100! dark:text-slate-900"
+                      style={{background: '#17150F', boxShadow: '0 1px 2px rgba(23,21,15,0.08), 0 10px 24px -14px rgba(23,21,15,0.45)'}}
                       >
-                        <CheckCircle2 className="w-7 h-7" />
+                        <CheckCircle2 className="w-7 h-7 text-[#F0D27A] dark:text-[#8A6D0F]" />
                         Iniciar Auditoria Agora
                       </button>
                       <button 
                         onClick={reset}
-                        className="flex items-center gap-2 px-8 py-5 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all active:scale-95"
+                        className="flex items-center gap-2 px-6 py-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-semibold hover:border-slate-400 dark:hover:border-slate-500 transition-colors active:scale-[0.98]"
                       >
                         <Trash2 className="w-5 h-5" />
                         Limpar
@@ -9461,9 +9595,10 @@ ${htmlNomeDuplicado}
               {/* Upload Area - Now becomes smaller if data is present */}
               <div
                 className={cn(
-                  "relative group bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl transition-all duration-500",
-                  stats.totalFiles > 0 ? "p-8 opacity-60 hover:opacity-100" : "p-12 text-center",
-                  "hover:border-blue-400 dark:hover:border-blue-500 hover:bg-blue-50/30 dark:hover:bg-blue-950/30 cursor-pointer"
+                  "relative group bg-white dark:bg-slate-900 border-2 border-dashed border-blue-300/70 dark:border-blue-500/35 rounded-2xl transition-all duration-500",
+                  stats.totalFiles > 0 ? "p-8 opacity-60 hover:opacity-100" : "px-6 py-12 md:px-12 md:py-16 text-center",
+                  "hover:border-blue-400 dark:hover:border-blue-500 hover:bg-blue-50/40 dark:hover:bg-blue-950/30 cursor-pointer",
+                  "[&.border-blue-500]:border-blue-500 dark:[&.border-blue-500]:border-blue-400 [&.border-blue-500]:ring-4 [&.border-blue-500]:ring-blue-400/15 [&.bg-blue-50]:bg-blue-50"
                 )}
                 onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-blue-500', 'bg-blue-50'); }}
                 onDragLeave={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-blue-500', 'bg-blue-50'); }}
@@ -9501,19 +9636,27 @@ ${htmlNomeDuplicado}
                     stats.totalFiles === 0 && "flex-col"
                   )}>
                     <div className={cn(
-                      "p-5 bg-slate-100 dark:bg-slate-800 rounded-full text-slate-400 dark:text-slate-500 group-hover:text-blue-500 group-hover:bg-blue-100 dark:group-hover:bg-blue-950 transition-colors",
+                      "p-6 rounded-2xl bg-blue-50 dark:bg-blue-950/60 ring-1 ring-blue-200 dark:ring-blue-500/30 text-blue-600 dark:text-blue-300 group-hover:bg-blue-100 dark:group-hover:bg-blue-950 group-hover:ring-blue-300 dark:group-hover:ring-blue-400/50 transition-all",
                       stats.totalFiles > 0 && "scale-75"
                     )}>
-                      <Upload className="w-8 h-8" />
+                      <Upload className="w-9 h-9" strokeWidth={1.75} />
                     </div>
                     <div className={stats.totalFiles === 0 ? "text-center" : "text-left"}>
                       <h3 className={cn(
-                        "font-bold text-slate-800 dark:text-slate-100",
-                        stats.totalFiles === 0 ? "text-xl" : "text-lg"
+                        "font-serif font-medium tracking-tight text-slate-900 dark:text-slate-100",
+                        stats.totalFiles === 0 ? "text-[30px] md:text-[36px] leading-tight" : "text-xl"
                       )}>
                         {stats.totalFiles === 0 ? "Arraste seus arquivos aqui" : "Deseja adicionar mais arquivos?"}
                       </h3>
-                    <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Suporta XMLs individuais, pastas ou arquivos ZIP</p>
+                    <p className="text-slate-500 dark:text-slate-400 text-sm md:text-[15px] mt-1.5">Suporta XMLs individuais, pastas, arquivos ZIP ou RAR</p>
+                    {stats.totalFiles === 0 && (
+                      <div className="mt-4 flex flex-wrap justify-center gap-1.5" aria-hidden="true">
+                        <span className="px-2 py-0.5 rounded-md font-mono text-[11px] font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">.xml</span>
+                        <span className="px-2 py-0.5 rounded-md font-mono text-[11px] font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">.zip</span>
+                        <span className="px-2 py-0.5 rounded-md font-mono text-[11px] font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">.rar</span>
+                        <span className="px-2 py-0.5 rounded-md font-mono text-[11px] font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">pastas</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -9527,13 +9670,13 @@ ${htmlNomeDuplicado}
                 <div className="flex flex-col items-center">
                     <button 
                       onClick={() => fileInputRef.current?.click()}
-                      className="flex items-center gap-3 px-10 py-5 text-white rounded-xl font-bold transition-all active:scale-95 hover:scale-[1.02] shadow-xl"
-                      style={{background: '#17150F'}}
+                      className="flex items-center gap-2.5 px-8 py-4 rounded-xl font-semibold text-[15px] transition-all bg-[#C9A227] hover:bg-[#D4AF37] text-[#17150F] active:scale-[0.98] shadow-[0_1px_2px_rgba(23,21,15,0.08),0_12px_26px_-14px_rgba(138,109,15,0.55)] dark:shadow-none outline-none focus-visible:ring-2 focus-visible:ring-[#C9A227]/60 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
                     >
-                      <Upload className="w-6 h-6 text-blue-400" />
+                      <Upload className="w-5 h-5" />
                       Anexar Arquivos (ZIP ou XMLs)
                     </button>
-                    <p className="text-[10px] font-medium text-slate-400 mt-4 uppercase tracking-[0.2em] select-none">
+                    <p className="flex items-center gap-1.5 text-[10px] font-medium text-slate-400 dark:text-slate-500 mt-4 uppercase tracking-[0.2em] select-none">
+                      <FolderOpen className="w-3.5 h-3.5" />
                       Arraste pastas aqui se preferir
                     </p>
                   </div>
@@ -9563,10 +9706,11 @@ ${htmlNomeDuplicado}
               key="results"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="flex flex-col gap-6"
+              className="flex flex-col gap-6 shell"
+              data-ativa={secao}
             >
-              {/* Faixa de métricas — visão geral, encosta na base do header */}
-              <div className="flex flex-wrap gap-6 items-stretch">
+              {/* Faixa de métricas — visão geral, encosta na base do header (no visual novo, substituída pela Visão geral) */}
+              <div data-secao="legado" className="flex flex-wrap gap-6 items-stretch">
                 <div
                   onClick={() => breakdownPorCfop.length > 0 && setShowCfopBreakdown(!showCfopBreakdown)}
                   onKeyDown={e => { if (breakdownPorCfop.length > 0 && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setShowCfopBreakdown(!showCfopBreakdown); } }}
@@ -9578,7 +9722,7 @@ ${htmlNomeDuplicado}
                   )}
                 >
                   <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Total de Saídas Auditadas (Válidas)</div>
-                  <div className="text-3xl font-bold text-emerald-600 dark:text-emerald-400 mt-2">
+                  <div className="text-3xl font-serif font-medium tracking-tight text-slate-900 dark:text-slate-100 mt-2">
                     {formatarMoeda(faturamentoTotal)}
                   </div>
                   {breakdownPorCfop.length > 0 && (
@@ -9605,11 +9749,11 @@ ${htmlNomeDuplicado}
                       )}>
                         <div className={tilePad}>
                           <div className={tileLabel}>Séries</div>
-                          <div className={cn("font-bold text-slate-900 dark:text-slate-100", tileNumber)}>{analysis.length}</div>
+                          <div className={cn("font-serif font-medium text-slate-900 dark:text-slate-100", tileNumber)}>{analysis.length}</div>
                         </div>
                         <div className={tilePad}>
                           <div className={tileLabel}>Com Quebra</div>
-                          <div className={cn("font-bold text-amber-500 dark:text-amber-400", tileNumber)}>
+                          <div className={cn("font-serif font-medium", analysis.some(s => s.faltantes.length > 0) ? "text-amber-600 dark:text-amber-400" : "text-slate-900 dark:text-slate-100", tileNumber)}>
                             {analysis.filter(s => s.faltantes.length > 0).length}
                           </div>
                         </div>
@@ -9617,26 +9761,26 @@ ${htmlNomeDuplicado}
                           <>
                             <div className={cn(tilePad, "no-print")}>
                               <div className={tileLabel}>Faltante Bruto</div>
-                              <div className={cn("font-bold text-rose-600 dark:text-rose-400", tileNumber)}>{faltantesBrutos}</div>
+                              <div className={cn("font-serif font-medium", faltantesBrutos > 0 ? "text-rose-600 dark:text-rose-400" : "text-slate-900 dark:text-slate-100", tileNumber)}>{faltantesBrutos}</div>
                             </div>
                             <div className={cn(tilePad, "bg-amber-50/50 dark:bg-amber-950/20 no-print")}>
                               <div className={tileLabel}>Inutilizadas</div>
-                              <div className={cn("font-bold text-amber-600 dark:text-amber-400", tileNumber)}>{totalManual}</div>
+                              <div className={cn("font-serif font-medium text-slate-900 dark:text-slate-100", tileNumber)}>{totalManual}</div>
                             </div>
                             <div className={tilePad}>
                               <div className={tileLabel}>Faltante Líquido</div>
-                              <div className={cn("font-bold text-slate-500 dark:text-slate-400", tileNumber)}>{faltantesLiquidos}</div>
+                              <div className={cn("font-serif font-medium", faltantesLiquidos > 0 ? "text-rose-600 dark:text-rose-400" : "text-slate-900 dark:text-slate-100", tileNumber)}>{faltantesLiquidos}</div>
                             </div>
                           </>
                         ) : (
                           <div className={tilePad}>
                             <div className={tileLabel}>Total Faltantes</div>
-                            <div className={cn("font-bold text-rose-600 dark:text-rose-400", tileNumber)}>{faltantesLiquidos}</div>
+                            <div className={cn("font-serif font-medium", faltantesLiquidos > 0 ? "text-rose-600 dark:text-rose-400" : "text-slate-900 dark:text-slate-100", tileNumber)}>{faltantesLiquidos}</div>
                           </div>
                         )}
                         <div className={tilePad}>
                           <div className={tileLabel}>Total Recebidos</div>
-                          <div className={cn("font-bold text-blue-600 dark:text-blue-400", tileNumber)}>
+                          <div className={cn("font-serif font-medium text-slate-900 dark:text-slate-100", tileNumber)}>
                             {analysis.reduce((acc, s) => acc + s.recebidos, 0)}
                           </div>
                         </div>
@@ -9722,6 +9866,7 @@ ${htmlNomeDuplicado}
                 })()}
               </div>
 
+              <div data-secao="produtos" className="space-y-6">
               {/* Mapa Fiscal: usado pouco, então fica pequeno e fechado por padrão —
                   abaixo da fileira de métricas principal, não no topo da tela. */}
               {mapaFiscal && mapaFiscalDesbloqueado && (
@@ -9731,14 +9876,14 @@ ${htmlNomeDuplicado}
                       onClick={() => setShowMapaFiscal(!showMapaFiscal)}
                       className="flex-1 flex items-center justify-between gap-3 text-left"
                     >
-                      <span className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
+                      <span className="text-[14px] font-semibold text-slate-900 dark:text-slate-100">
                         Mapa Fiscal
                       </span>
                       <ChevronRight className={cn("w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0 transition-transform", showMapaFiscal && "rotate-90")} />
                     </button>
                     <button
                       onClick={exportarRelatorioMapaFiscalPdf}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors shrink-0 no-print"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:border-slate-400 dark:hover:border-slate-500 transition-colors shrink-0 no-print"
                       title="Abre um relatório em uma janela pra imprimir/salvar como PDF — resumo, comparativo mensal, séries por mês, ranking, NCMs, sazonalidade, devoluções e mudanças de cadastro"
                     >
                       <Download className="w-3 h-3" />
@@ -9747,11 +9892,11 @@ ${htmlNomeDuplicado}
                   </div>
 
                   {showMapaFiscal && (
-                    <div className="px-6 pb-6">
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-x-6 gap-y-5">
+                    <div className="px-6 pb-6 [&_th]:py-2.5 [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:font-semibold [&_tbody_td]:py-2.5">
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-x-6 gap-y-5 [&_.text-xl]:font-serif [&_.text-xl]:font-medium [&_.text-xl]:text-[24px] [&_.text-xl]:leading-tight [&_.text-xl]:tabular-nums">
                         <div>
                           <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Faturamento</div>
-                          <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">{formatarMoeda(mapaFiscal.faturamento)}</div>
+                          <div className="text-xl font-bold text-slate-900 dark:text-slate-100 mt-1">{formatarMoeda(mapaFiscal.faturamento)}</div>
                         </div>
                         <div>
                           <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Notas válidas</div>
@@ -9864,7 +10009,7 @@ ${htmlNomeDuplicado}
                                             const desceu = variacao !== null && variacao < -0.05;
                                             return (
                                               <td key={m.chave} className="py-2 pr-3 text-right tabular-nums whitespace-nowrap">
-                                                <span className="text-slate-600 dark:text-slate-400">{formatar(atual, l.formato)}</span>
+                                                <span className="text-slate-900 dark:text-slate-100">{formatar(atual, l.formato)}</span>
                                                 {variacao !== null && Number.isFinite(variacao) && (
                                                   <span className={cn(
                                                     "ml-1.5 text-[10px] font-bold",
@@ -10085,12 +10230,12 @@ ${htmlNomeDuplicado}
                                             )}
                                           </td>
                                           <td className="py-1.5 pr-3">
-                                            <span className={cn("text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded", origemCor[p.origem])}>
+                                            <span className={cn("inline-flex items-center text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap", origemCor[p.origem])}>
                                               {origemLabel[p.origem]}
                                             </span>
                                           </td>
                                           <td className="py-1.5 pr-3 text-center" title={`${formatarPct(p.pctAcumulado)}% acumulado até este produto, ordenado por valor`}>
-                                            <span className={cn("text-[9px] font-bold px-1.5 py-0.5 rounded", classeAbcCor[p.classeAbc])}>{p.classeAbc}</span>
+                                            <span className={cn("inline-flex items-center justify-center w-6 h-5 text-[11px] font-semibold rounded-md", classeAbcCor[p.classeAbc])}>{p.classeAbc}</span>
                                           </td>
                                           <td className="py-1.5 pr-3 text-right tabular-nums text-slate-600 dark:text-slate-400">{formatarQuantidadePorUnidade(p.porUnidade)}</td>
                                           <td className="py-1.5 pr-3 text-right tabular-nums font-semibold text-slate-700 dark:text-slate-300">{formatarMoeda(p.valor)}</td>
@@ -10247,8 +10392,8 @@ ${htmlNomeDuplicado}
                                         )}
                                       >
                                         <div className={cn("w-9 shrink-0 text-left", sazonalidadeDiaSelecionado === i ? "text-blue-600 dark:text-blue-400 font-bold" : "text-slate-500 dark:text-slate-400")}>{d.dia.slice(0, 3)}</div>
-                                        <div className="flex-1 h-4 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden">
-                                          <div className={cn("h-full", sazonalidadeDiaSelecionado === i ? "bg-blue-600 dark:bg-blue-400" : "bg-blue-400 dark:bg-blue-600")} style={{ width: `${(d.faturamento / maxDia) * 100}%` }} />
+                                        <div className="flex-1 h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                          <div className={cn("h-full rounded-full", sazonalidadeDiaSelecionado === i ? "bg-blue-600 dark:bg-blue-400" : "bg-blue-400 dark:bg-blue-500")} style={{ width: `${(d.faturamento / maxDia) * 100}%` }} />
                                         </div>
                                         <div className="w-28 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-400">{formatarMoeda(d.faturamento)}</div>
                                         <div className="w-12 shrink-0 text-right tabular-nums text-slate-400 dark:text-slate-500">{formatarPct(d.pct)}%</div>
@@ -10274,8 +10419,8 @@ ${htmlNomeDuplicado}
                                     {horasComMovimento.map(h => (
                                       <div key={h.hora} className="flex items-center gap-2 text-xs" title={`${h.quantidadeNotas} nota(s)`}>
                                         <div className="w-8 shrink-0 text-slate-500 dark:text-slate-400 tabular-nums">{String(h.hora).padStart(2, '0')}h</div>
-                                        <div className="flex-1 h-3.5 bg-slate-100 dark:bg-slate-800 rounded overflow-hidden">
-                                          <div className="h-full bg-emerald-400 dark:bg-emerald-600" style={{ width: `${(h.faturamento / maxHora) * 100}%` }} />
+                                        <div className="flex-1 h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                          <div className="h-full rounded-full bg-blue-400 dark:bg-blue-500" style={{ width: `${(h.faturamento / maxHora) * 100}%` }} />
                                         </div>
                                         <div className="w-24 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-400">{formatarMoeda(h.faturamento)}</div>
                                         <div className="w-12 shrink-0 text-right tabular-nums text-slate-400 dark:text-slate-500">{formatarPct(h.pct)}%</div>
@@ -10367,10 +10512,13 @@ ${htmlNomeDuplicado}
                 </div>
               )}
 
+              </div>
+
               {/* Corpo em duas colunas: filtros/utilitários à esquerda, auditoria ao centro */}
               <div className="flex flex-col lg:flex-row gap-8 items-start">
-                <aside className="w-full lg:w-72 shrink-0 lg:sticky lg:top-6 space-y-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+                <aside data-secao="notas sped" className="w-full lg:w-72 shrink-0 lg:sticky lg:top-6 space-y-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
                   <div
+                    data-secao="notas"
                     onClick={() => (periodoAnalise.diasDetalhados?.length ?? 0) > 0 && setShowDaysDetail(!showDaysDetail)}
                     onKeyDown={e => { if ((periodoAnalise.diasDetalhados?.length ?? 0) > 0 && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setShowDaysDetail(!showDaysDetail); } }}
                     role={(periodoAnalise.diasDetalhados?.length ?? 0) > 0 ? 'button' : undefined}
@@ -10380,8 +10528,8 @@ ${htmlNomeDuplicado}
                       (periodoAnalise.diasDetalhados?.length ?? 0) > 0 && "cursor-pointer hover:border-slate-300 dark:hover:border-slate-600"
                     )}
                   >
-                    <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">Período Analisado</div>
-                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100 mt-2">
+                    <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Período Analisado</div>
+                  <div className="text-lg font-serif font-medium tracking-tight tabular-nums text-slate-900 dark:text-slate-100 mt-1.5">
                     {periodoAnalise.inicio ? `${periodoAnalise.inicio} a ${periodoAnalise.fim}` : 'N/A'}
                   </div>
                   <div className="flex items-center justify-between text-xs font-semibold text-slate-400 dark:text-slate-500 mt-2">
@@ -10394,8 +10542,8 @@ ${htmlNomeDuplicado}
                   </div>
                 </div>
 
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                  <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide mb-3">Pesquisar Notas de Saída</div>
+                <div data-secao="notas" className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                  <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">Pesquisar Notas de Saída</div>
                   <div className="flex flex-col gap-2">
                     <div className="relative">
                       <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-4 top-1/2 -translate-y-1/2" />
@@ -10460,13 +10608,13 @@ ${htmlNomeDuplicado}
                 </div>
 
                 {/* SPED Fiscal card — compacto, abre para a direita */}
-                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden no-print">
+                <div data-secao="sped" className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden no-print">
                   <div className="text-sm font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide px-6 pt-5 pb-3 flex items-center justify-between">
                     SPED Fiscal
                     {spedData && (
                       <button
                         onClick={() => spedInputRef.current?.click()}
-                        className="text-[11px] font-normal normal-case text-slate-400 hover:text-slate-600 transition-colors"
+                        className="text-[11px] font-semibold normal-case tracking-normal text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
                         title="Anexar SPED de outro mês (ou substituir o do mesmo mês) sem reiniciar a análise"
                       >
                         Anexar +
@@ -10489,7 +10637,7 @@ ${htmlNomeDuplicado}
                       </p>
                       <button
                         onClick={() => spedInputRef.current?.click()}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-700 transition-colors"
+                        className="flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-lg text-xs font-semibold hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white transition-colors"
                       >
                         <Upload className="w-3.5 h-3.5" />
                         Anexar SPED (.txt)
@@ -10563,6 +10711,7 @@ ${htmlNomeDuplicado}
                   />
                 </div>
 
+                <div data-secao="perfil-compacto" className="space-y-6">
                 {/* Perfil de Clientes (NF-e) — compacto, abre para a direita (mesma lógica do SPED Fiscal) */}
                 {perfilClientes.clientes.length > 0 && (
                   <button
@@ -10620,11 +10769,238 @@ ${htmlNomeDuplicado}
                     </div>
                   </button>
                 )}
+                </div>
               </aside>
 
               {/* Main content */}
-              <div className="flex-1 min-w-0 space-y-8">
+              <div className="flex-1 min-w-0 flex flex-col gap-8">
 
+              {/* Visão geral (visual novo): total, o que ficou de fora, integridade da numeração, indicadores, séries e alertas */}
+              <div data-secao="visao" className="contents">
+              {(() => {
+                const somaValor = (l: XmlData[]) => l.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0);
+                const malfFora = notasAnomalias.malformadas.filter(x => !x.contaNoFaturamento);
+                const malfDentro = notasAnomalias.malformadas.filter(x => x.contaNoFaturamento);
+                const foraLista: XmlData[] = [...notasAnomalias.semProtocolo, ...notasAnomalias.semAutorizacaoNaoContingencia, ...malfFora];
+                const foraValor = somaValor(foraLista);
+                const esperados = analysis.reduce((a, s) => a + s.esperados, 0);
+                const faltantesTot = analysis.reduce((a, s) => a + s.faltantes.length, 0);
+                const comQuebra = analysis.filter(s => s.faltantes.length > 0).length;
+                const integridade = esperados > 0 ? ((esperados - faltantesTot) / esperados) * 100 : 100;
+                const integridadeTxt = integridade >= 100 ? '100' : String(Math.min(99, Math.floor(integridade)));
+                const raio = 50, circ = 2 * Math.PI * raio;
+                const corIntegridade = integridade >= 100 ? '#1F7A4D' : integridade >= 90 ? '#A15C07' : '#B4233A';
+                type ItemAlerta = { titulo: string; desc: string; valor: string; selo: 'fora' | 'dentro' | 'conferir'; destino: SecaoApp };
+                const alertas: ItemAlerta[] = [];
+                if (notasAnomalias.semProtocolo.length) alertas.push({ titulo: 'Contingência não regularizada', desc: `${notasAnomalias.semProtocolo.length} nota(s) emitida(s) offline, sem autorização`, valor: formatarMoeda(somaValor(notasAnomalias.semProtocolo)), selo: 'fora', destino: 'alertas' });
+                if (notasAnomalias.semAutorizacaoNaoContingencia.length) alertas.push({ titulo: 'Sem autorização', desc: `${notasAnomalias.semAutorizacaoNaoContingencia.length} nota(s) sem protocolo da SEFAZ`, valor: formatarMoeda(somaValor(notasAnomalias.semAutorizacaoNaoContingencia)), selo: 'fora', destino: 'alertas' });
+                if (malfFora.length) alertas.push({ titulo: 'Cancelamento disfarçado', desc: `${malfFora.length} nota(s) com cancelamento no próprio XML`, valor: formatarMoeda(somaValor(malfFora)), selo: 'fora', destino: 'alertas' });
+                if (malfDentro.length) alertas.push({ titulo: 'Notas para conferir', desc: `${malfDentro.length} nota(s) com chave ou estrutura fora do padrão`, valor: formatarMoeda(somaValor(malfDentro)), selo: 'dentro', destino: 'alertas' });
+                if (notasAnomalias.foraDoPrazo.length) alertas.push({ titulo: 'Contingência fora do prazo', desc: `${notasAnomalias.foraDoPrazo.length} nota(s) autorizada(s) com atraso`, valor: formatarMoeda(somaValor(notasAnomalias.foraDoPrazo)), selo: 'dentro', destino: 'alertas' });
+                if (notasAnomalias.numeroDuplicado.length) alertas.push({ titulo: 'Número duplicado', desc: `${notasAnomalias.numeroDuplicado.length} número(s) com chave duplicada`, valor: String(notasAnomalias.numeroDuplicado.length), selo: 'dentro', destino: 'alertas' });
+                if (notasHomologacao.total) alertas.push({ titulo: 'Notas de homologação (teste)', desc: `${notasHomologacao.total} nota(s) sem validade fiscal no lote`, valor: formatarMoeda(notasHomologacao.valor), selo: 'dentro', destino: 'alertas' });
+                if (faltantesTot) alertas.push({ titulo: 'Números sem inutilização', desc: `${faltantesTot.toLocaleString('pt-BR')} número(s) faltando em ${comQuebra} série(s)`, valor: faltantesTot.toLocaleString('pt-BR'), selo: 'conferir', destino: 'series' });
+                const horas = sazonalidade.porHora.filter(h => h.faturamento > 0);
+                const maxHora = horas.reduce((m, h) => Math.max(m, h.faturamento), 0);
+                const pctTef = auditoriaPagamento.totalCartao > 0 ? (auditoriaPagamento.totalIntegrado / auditoriaPagamento.totalCartao) * 100 : null;
+                const card = 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl';
+                const tile = cn(card, 'p-5 text-left transition-colors hover:border-slate-400 dark:hover:border-slate-500 outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50');
+                const rotuloTile = 'text-xs font-medium text-slate-500 dark:text-slate-400';
+                const valorTile = 'font-serif text-[32px] leading-tight tracking-tight tabular-nums mt-1';
+                return (
+                  <>
+                    <section className={cn(card, '-order-2 grid lg:grid-cols-[1.35fr_1fr] overflow-hidden')}>
+                      <div className="p-7">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">Total de saídas auditadas · válidas</div>
+                        <div className="font-serif text-[52px] leading-none tracking-tight text-slate-900 dark:text-slate-100 mt-3 mb-3 tabular-nums">
+                          <span className="text-[26px] text-slate-400 mr-1.5 align-[14px]">R$</span>{faturamentoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                        <div className="text-[13px] text-slate-500 dark:text-slate-400">
+                          <b className="font-semibold text-slate-900 dark:text-slate-100">{(periodoAnalise.totalNotas ?? 0).toLocaleString('pt-BR')}</b> notas · <b className="font-semibold text-slate-900 dark:text-slate-100">{analysis.length}</b> série(s) · {periodoAnalise.inicio ? (periodoAnalise.inicio === periodoAnalise.fim ? periodoAnalise.inicio : `${periodoAnalise.inicio} a ${periodoAnalise.fim}`) : '—'}
+                        </div>
+                        <div className="mt-5 flex flex-wrap items-center gap-2">
+                          {foraLista.length > 0 && (
+                            <button type="button" onClick={() => irParaSecao('alertas')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[13px] bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300">
+                              <b className="font-semibold">{formatarMoeda(foraValor)}</b> em {foraLista.length} nota(s) ficaram fora do total <span className="underline font-semibold ml-1">ver</span>
+                            </button>
+                          )}
+                          {breakdownPorCfop.length > 0 && (
+                            <button type="button" onClick={() => setShowCfopBreakdown(v => !v)} className="px-3 py-2 rounded-lg text-[13px] border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-400 transition-colors">
+                              {showCfopBreakdown ? 'Ocultar' : 'Ver'} por natureza (CFOP)
+                            </button>
+                          )}
+                          {(periodoAnalise.diasDetalhados?.length ?? 0) > 0 && (
+                            <button type="button" onClick={() => setShowDaysDetail(v => !v)} className="px-3 py-2 rounded-lg text-[13px] border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-400 transition-colors">
+                              {showDaysDetail ? 'Ocultar' : 'Ver'} notas por dia
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="p-6 border-t lg:border-t-0 lg:border-l border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 flex items-center gap-6">
+                        <svg viewBox="0 0 120 120" className="w-[124px] h-[124px] shrink-0" role="img" aria-label={`Integridade da numeração: ${integridadeTxt}%`}>
+                          <circle cx="60" cy="60" r={raio} fill="none" className="stroke-slate-200 dark:stroke-slate-700" strokeWidth="10" />
+                          <circle cx="60" cy="60" r={raio} fill="none" stroke={corIntegridade} strokeWidth="10" strokeLinecap="round" strokeDasharray={`${(integridade / 100) * circ} ${circ}`} transform="rotate(-90 60 60)" />
+                          <text x="60" y="64" textAnchor="middle" fontSize="28" className="font-serif fill-slate-900 dark:fill-slate-100">{integridadeTxt}%</text>
+                          <text x="60" y="82" textAnchor="middle" fontSize="10" className="fill-slate-500">da numeração</text>
+                        </svg>
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-semibold text-slate-900 dark:text-slate-100">Integridade da sequência</div>
+                          <p className="text-[12.5px] text-slate-500 dark:text-slate-400 mt-1 mb-3">{(esperados - faltantesTot).toLocaleString('pt-BR')} de {esperados.toLocaleString('pt-BR')} números das séries recebidos ou inutilizados.</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {comQuebra > 0 && <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"><i className="w-1.5 h-1.5 rounded-full bg-rose-500" />{comQuebra} com quebra</span>}
+                            {analysis.length - comQuebra > 0 && <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"><i className="w-1.5 h-1.5 rounded-full bg-emerald-500" />{analysis.length - comQuebra} íntegra(s)</span>}
+                            {alertas.length > 0 && <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"><i className="w-1.5 h-1.5 rounded-full bg-amber-500" />{alertas.length} alerta(s)</span>}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="grid grid-cols-2 xl:grid-cols-4 gap-5">
+                      <button type="button" onClick={() => irParaSecao('series')} className={tile}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className={rotuloTile}>Séries</div>
+                          <span aria-hidden="true" className={cn('w-7 h-7 rounded-lg grid place-items-center shrink-0', comQuebra > 0 ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-300' : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300')}><Hash className="w-3.5 h-3.5" /></span>
+                        </div>
+                        <div className={cn(valorTile, 'text-slate-900 dark:text-slate-100')}>{analysis.length}</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">{comQuebra > 0 ? `${comQuebra} com quebra` : 'todas íntegras'}</div>
+                      </button>
+                      <button type="button" onClick={() => irParaSecao('series')} className={tile}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className={rotuloTile}>Números faltantes</div>
+                          <span aria-hidden="true" className={cn('w-7 h-7 rounded-lg grid place-items-center shrink-0', faltantesTot > 0 ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-300' : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300')}>{faltantesTot > 0 ? <AlertCircle className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5" />}</span>
+                        </div>
+                        <div className={cn(valorTile, faltantesTot > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-slate-100')}>{faltantesTot.toLocaleString('pt-BR')}</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">sem inutilização correspondente</div>
+                      </button>
+                      {auditoriaIbsCbs.totalNotas > 0 && (
+                        <button type="button" onClick={() => irParaSecao('ibscbs')} className={tile}>
+                          <div className="flex items-center justify-between gap-2">
+                            <div className={rotuloTile}>Grupo IBS/CBS nas notas</div>
+                            <span aria-hidden="true" className={cn('w-7 h-7 rounded-lg grid place-items-center shrink-0', auditoriaIbsCbs.pctComGrupo === 100 ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300' : auditoriaIbsCbs.pctComGrupo === 0 ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-300' : 'bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-300')}><Percent className="w-3.5 h-3.5" /></span>
+                          </div>
+                          <div className={cn(valorTile, auditoriaIbsCbs.pctComGrupo === 100 ? 'text-slate-900 dark:text-slate-100' : auditoriaIbsCbs.pctComGrupo === 0 ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400')}>{formatarPct(auditoriaIbsCbs.pctComGrupo)}%</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400">{auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} notas com o grupo</div>
+                          <div className="h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 mt-3 overflow-hidden"><div className="h-full rounded-full bg-[#C9A227]" style={{ width: `${Math.min(100, auditoriaIbsCbs.pctComGrupo)}%` }} /></div>
+                        </button>
+                      )}
+                      {pctTef !== null && (
+                        <button type="button" onClick={() => irParaSecao('pagamentos')} className={tile}>
+                          <div className="flex items-center justify-between gap-2">
+                            <div className={rotuloTile}>Cartão integrado ao TEF</div>
+                            <span aria-hidden="true" className="w-7 h-7 rounded-lg grid place-items-center shrink-0 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"><CreditCard className="w-3.5 h-3.5" /></span>
+                          </div>
+                          <div className={cn(valorTile, 'text-slate-900 dark:text-slate-100')}>{formatarPct(pctTef)}%</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400">{auditoriaPagamento.totalNaoIntegrado} em POS manual de {auditoriaPagamento.totalCartao}</div>
+                          <div className="h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 mt-3 overflow-hidden"><div className="h-full rounded-full bg-[#C9A227]" style={{ width: `${Math.min(100, pctTef)}%` }} /></div>
+                        </button>
+                      )}
+                    </section>
+
+                    <section className="grid xl:grid-cols-[1.6fr_1fr] gap-5 items-start">
+                      <div className={cn(card, 'overflow-hidden')}>
+                        <div className="flex items-baseline gap-3 px-5 pt-4 pb-3">
+                          <h2 className="text-[13px] font-semibold text-slate-900 dark:text-slate-100">Séries e sequência</h2>
+                          <span className="text-xs text-slate-500 dark:text-slate-400 hidden sm:inline">clique numa série para ver os números</span>
+                          <button type="button" onClick={() => irParaSecao('series')} className="ml-auto text-xs font-semibold text-blue-600 dark:text-blue-400">Ver detalhes →</button>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-[11px] uppercase tracking-wider text-slate-400 border-y border-slate-200 dark:border-slate-700">
+                                <th className="text-left font-semibold px-5 py-2.5">Série</th>
+                                <th className="text-left font-semibold px-3 py-2.5">Faixa</th>
+                                <th className="text-right font-semibold px-3 py-2.5">Recebidas</th>
+                                <th className="text-right font-semibold px-3 py-2.5">Faltantes</th>
+                                <th className="text-left font-semibold px-5 py-2.5">Situação</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filteredAnalysis.map((s, idx) => (
+                                <tr key={idx} onClick={() => { irParaSecao('series'); setExpandedIdx(idx); }} className="cursor-pointer border-b border-slate-100 dark:border-slate-800 last:border-0 hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                  <td className="px-5 py-3">
+                                    <div className="font-serif text-[16px] text-slate-900 dark:text-slate-100 whitespace-nowrap">{tipoDocNota({ modelo: s.modelo })} · Série {s.serie}</div>
+                                    <div className="text-xs text-slate-500 dark:text-slate-400">{s.mesReferencia}</div>
+                                  </td>
+                                  <td className="px-3 py-3 font-mono text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">{s.min.toLocaleString('pt-BR')} – {s.max.toLocaleString('pt-BR')}</td>
+                                  <td className="px-3 py-3 text-right tabular-nums text-slate-700 dark:text-slate-200">{s.recebidos.toLocaleString('pt-BR')}</td>
+                                  <td className={cn('px-3 py-3 text-right tabular-nums', s.faltantes.length > 0 ? 'text-rose-600 dark:text-rose-400 font-semibold' : 'text-slate-400')}>{s.faltantes.length.toLocaleString('pt-BR')}</td>
+                                  <td className="px-5 py-3">
+                                    <span className={cn('px-2 py-0.5 rounded-full text-[11px] font-semibold', s.faltantes.length > 0 ? 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300')}>{s.faltantes.length > 0 ? 'Quebra' : 'Íntegra'}</span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      <div className={cn(card, 'overflow-hidden')}>
+                        <div className="flex items-baseline gap-3 px-5 pt-4 pb-3">
+                          <h2 className="text-[13px] font-semibold text-slate-900 dark:text-slate-100">Alertas</h2>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">{alertas.length} item(ns)</span>
+                        </div>
+                        {alertas.length === 0 ? (
+                          <div className="px-5 pb-5 text-sm text-slate-500 dark:text-slate-400">Nenhum alerta neste período.</div>
+                        ) : (
+                          <div className="border-t border-slate-200 dark:border-slate-700">
+                            {alertas.map((a, i) => (
+                              <button key={i} type="button" onClick={() => irParaSecao(a.destino)} className="w-full text-left grid grid-cols-[auto_1fr_auto] gap-3 px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 last:border-0 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                                <span aria-hidden="true" className={cn('w-7 h-7 rounded-lg grid place-items-center shrink-0 mt-0.5', a.selo === 'fora' ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-300' : 'bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-300')}>{a.selo === 'fora' ? <AlertTriangle className="w-3.5 h-3.5" /> : a.selo === 'conferir' ? <AlertCircle className="w-3.5 h-3.5" /> : <Info className="w-3.5 h-3.5" />}</span>
+                                <div className="min-w-0">
+                                  <div className="text-[13.5px] font-semibold text-slate-900 dark:text-slate-100">{a.titulo}</div>
+                                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{a.desc}</div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="font-serif text-[17px] tabular-nums text-slate-900 dark:text-slate-100 whitespace-nowrap">{a.valor}</div>
+                                  <div className={cn('text-[10.5px] font-semibold uppercase tracking-wider mt-0.5', a.selo === 'fora' ? 'text-rose-600 dark:text-rose-400' : a.selo === 'dentro' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400')}>{a.selo === 'fora' ? 'Fora do total' : a.selo === 'dentro' ? 'No total' : 'Conferir'}</div>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </section>
+
+                    {horas.length > 0 && (
+                      <section className={cn(card, 'p-5')}>
+                        <div className="flex items-baseline gap-3 mb-4">
+                          <h2 className="text-[13px] font-semibold text-slate-900 dark:text-slate-100">Vendas por horário</h2>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">notas de venda do período</span>
+                          {mapaFiscal && <button type="button" onClick={() => irParaSecao('produtos')} className="ml-auto text-xs font-semibold text-blue-600 dark:text-blue-400">Ver sazonalidade →</button>}
+                        </div>
+                        <div className="flex items-end gap-2 h-44">
+                          {horas.map(h => (
+                            <div key={h.hora} className="flex-1 min-w-0 flex flex-col items-center gap-1.5 h-full" title={`${String(h.hora).padStart(2, '0')}h · ${formatarMoeda(h.faturamento)}`}>
+                              <div className="text-[10.5px] text-slate-500 dark:text-slate-400 tabular-nums whitespace-nowrap">{h.faturamento >= 1000 ? `${(h.faturamento / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : h.faturamento.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}</div>
+                              <div className="w-full flex-1 flex items-end">
+                                <div className="w-full rounded-t-md rounded-b-sm" style={{ height: `${Math.max(2, (h.faturamento / maxHora) * 100)}%`, background: 'linear-gradient(180deg, #C9A227, rgba(201,162,39,0.45))' }} />
+                              </div>
+                              <div className="text-[11px] font-medium text-slate-600 dark:text-slate-300">{String(h.hora).padStart(2, '0')}h</div>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+                  </>
+                );
+              })()}
+              </div>
+
+
+              {!(mapaFiscal && mapaFiscalDesbloqueado) && (
+                <div data-secao="produtos" className="no-print bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 rounded-2xl px-6 py-12 flex flex-col items-center text-center">
+                  <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center mb-4">
+                    <TrendingUp className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                  </div>
+                  <div className="font-serif text-2xl tracking-tight text-slate-900 dark:text-slate-100">
+                    {mapaFiscal ? 'Mapa Fiscal oculto' : 'Sem dados de produtos nesta análise'}
+                  </div>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 max-w-md leading-relaxed">
+                    {mapaFiscal ? 'Clique em Produtos e sazonalidade no menu para reabrir o Mapa Fiscal.' : 'Os XMLs enviados não trazem itens suficientes para montar o Mapa Fiscal.'}
+                  </p>
+                </div>
+              )}
+              <div data-secao="clientes" className="space-y-8">
               {/* Card: Perfil de Clientes (NF-e) — NFC-e fica de fora, ver nota no useMemo */}
               {showPerfilClientes && perfilClientes.clientes.length > 0 && (() => {
                 const q = perfilClientesBusca.trim().toLowerCase();
@@ -10637,12 +11013,12 @@ ${htmlNomeDuplicado}
                   cnpj.replace(/^([0-9A-Za-z]{2})([0-9A-Za-z]{3})([0-9A-Za-z]{3})([0-9A-Za-z]{4})(\d{2})$/, '$1.$2.$3/$4-$5') || cnpj;
                 const formatarDataCliente = (d: string) => d ? d.slice(0, 10).split('-').reverse().join('/') : '—';
                 return (
-                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-violet-400 rounded-xl p-6">
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
                         <Users className="w-5 h-5 text-violet-500" />
                         <div>
-                          <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Perfil de Clientes (NF-e)</div>
+                          <div className="text-[14px] font-semibold text-slate-900 dark:text-slate-100">Perfil de Clientes (NF-e)</div>
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                             <strong className="text-slate-700 dark:text-slate-200">{perfilClientes.clientes.length} cliente(s)</strong> · {formatarMoeda(perfilClientes.totalConsiderado)} em vendas por NF-e — NFC-e não entra aqui (consumidor final quase nunca tem CNPJ)
                           </div>
@@ -10650,7 +11026,7 @@ ${htmlNomeDuplicado}
                       </div>
                       <button
                         onClick={() => setShowPerfilClientes(false)}
-                        className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 transition-colors shrink-0 no-print"
+                        className="fecha-secao p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 transition-colors shrink-0 no-print"
                         title="Fechar"
                       >
                         <X className="w-4 h-4" />
@@ -10801,6 +11177,8 @@ ${htmlNomeDuplicado}
                 );
               })()}
 
+              </div>
+              <div data-secao="fornecedores" className="space-y-8">
               {/* Card: Perfil de Fornecedores (NF-e de entrada) — espelho do Perfil de
                   Clientes, ver nota no useMemo perfilFornecedores */}
               {showPerfilFornecedores && perfilFornecedores.fornecedores.length > 0 && (() => {
@@ -10814,12 +11192,12 @@ ${htmlNomeDuplicado}
                   cnpj.replace(/^([0-9A-Za-z]{2})([0-9A-Za-z]{3})([0-9A-Za-z]{3})([0-9A-Za-z]{4})(\d{2})$/, '$1.$2.$3/$4-$5') || cnpj;
                 const formatarDataFornecedor = (d: string) => d ? d.slice(0, 10).split('-').reverse().join('/') : '—';
                 return (
-                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-amber-400 rounded-xl p-6">
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
                         <Package className="w-5 h-5 text-amber-500" />
                         <div>
-                          <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Perfil de Fornecedores (NF-e de Entrada)</div>
+                          <div className="text-[14px] font-semibold text-slate-900 dark:text-slate-100">Perfil de Fornecedores (NF-e de Entrada)</div>
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                             <strong className="text-slate-700 dark:text-slate-200">{perfilFornecedores.fornecedores.length} fornecedor(es)</strong> · {formatarMoeda(perfilFornecedores.totalConsiderado)} em compras — quem vende PRA empresa auditada, com regime declarado por cada um (importa pro crédito de IBS/CBS na Reforma)
                           </div>
@@ -10827,7 +11205,7 @@ ${htmlNomeDuplicado}
                       </div>
                       <button
                         onClick={() => setShowPerfilFornecedores(false)}
-                        className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 transition-colors shrink-0 no-print"
+                        className="fecha-secao p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 transition-colors shrink-0 no-print"
                         title="Fechar"
                       >
                         <X className="w-4 h-4" />
@@ -11001,6 +11379,8 @@ ${htmlNomeDuplicado}
                 );
               })()}
 
+              </div>
+              <div data-secao="nfse" className="space-y-8">
               {/* Card: Notas de Serviço (NFS-e) — só aparece se alguma for encontrada */}
               {nfseList.length > 0 && (() => {
                 const q = nfseBusca.trim().toLowerCase();
@@ -11012,15 +11392,15 @@ ${htmlNomeDuplicado}
                 );
                 const valorTotal = nfseList.reduce((s, n) => s + (parseFloat(n.valor || '0') || 0), 0);
                 return (
-                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-blue-400 rounded-xl p-6">
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
                         <Briefcase className="w-5 h-5 text-blue-500" />
                         <div>
-                          <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Notas de Serviço (NFS-e)</div>
+                          <div className="text-[14px] font-semibold text-slate-900 dark:text-slate-100">Notas de Serviço (NFS-e)</div>
                           <SeloTotal tipo="fora" />
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            <strong className="text-slate-700 dark:text-slate-200">{nfseList.length} nota(s)</strong> · {formatarMoeda(valorTotal)} (fora do Total de Saídas Auditadas, que soma só NF-e/NFC-e) — TEF e IBS/CBS acima são só pra NF-e/NFC-e; sequência da NFS-e é auditada abaixo
+                            <strong className="text-slate-700 dark:text-slate-200">{nfseList.length} nota(s)</strong> · {formatarMoeda(valorTotal)} · fora do Total de Saídas Auditadas e dos painéis de TEF e IBS/CBS (que consideram só NF-e/NFC-e)
                           </div>
                         </div>
                       </div>
@@ -11135,7 +11515,7 @@ ${htmlNomeDuplicado}
                                   <td className="py-1.5 pr-3">
                                     <button
                                       onClick={() => baixarXmlEvidencia(n)}
-                                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-transparent text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:border-slate-900 hover:text-slate-900 dark:hover:border-slate-300 dark:hover:text-white transition-colors"
                                     >
                                       <Download className="w-3 h-3" />
                                       XML
@@ -11159,6 +11539,21 @@ ${htmlNomeDuplicado}
                 );
               })()}
 
+              </div>
+              {!(spedCardOpen && spedData && spedCrossRef) && (
+                <div data-secao="sped" className="no-print bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 rounded-2xl px-6 py-12 flex flex-col items-center text-center">
+                  <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center mb-4">
+                    <Database className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                  </div>
+                  <div className="font-serif text-2xl tracking-tight text-slate-900 dark:text-slate-100">
+                    {spedData ? 'Cruzamento do SPED fechado' : Object.keys(spedEntries).length > 0 ? `Nenhum SPED para ${filterMes}` : 'Nenhum SPED nesta análise'}
+                  </div>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 max-w-md leading-relaxed">
+                    {spedData ? 'Clique no card SPED Fiscal para abrir o cruzamento com os XMLs.' : 'Envie o arquivo do SPED (.txt) pelo card SPED Fiscal para cruzar com os XMLs e ver esta seção.'}
+                  </p>
+                </div>
+              )}
+              <div data-secao="sped" className="space-y-8">
               {/* SPED Fiscal — card expandido (abre para a direita) */}
               {spedCardOpen && spedData && spedCrossRef && (() => {
                 const formatValorSped = (v: string) => {
@@ -11171,11 +11566,11 @@ ${htmlNomeDuplicado}
                 // que não tem esse limite.
                 const LIMITE_SPED_LINHAS = 300;
                 return (
-                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden no-print">
+                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden no-print">
                     {/* Cabeçalho */}
-                    <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-4">
+                    <div className="px-6 pt-5 pb-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-4">
                       <div>
-                        <div className="text-sm font-bold text-slate-800">SPED Fiscal</div>
+                        <div className="text-[14px] font-semibold text-slate-900 dark:text-slate-100">SPED Fiscal × XMLs</div>
                         <div className="text-xs text-slate-400 mt-0.5">{spedData.razaoSocial} · CNPJ {spedData.cnpj} · {spedCrossRef.periodo}</div>
                       </div>
                       <button
@@ -11188,10 +11583,10 @@ ${htmlNomeDuplicado}
                     </div>
 
                     {/* Estatísticas rápidas */}
-                    <div className="px-6 py-3 border-b border-slate-100 flex gap-6 flex-wrap text-xs">
-                      <span className="text-slate-500">No SPED: <strong className="text-slate-700">{spedCrossRef.spedSaidasTotal}</strong></span>
+                    <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex gap-x-8 gap-y-3 flex-wrap items-baseline text-xs [&_strong]:ml-1 [&_strong]:font-serif [&_strong]:font-medium [&_strong]:text-[18px] [&_strong]:tabular-nums">
+                      <span className="text-slate-500 dark:text-slate-400">Saídas no SPED: <strong className="text-slate-900 dark:text-slate-100">{spedCrossRef.spedSaidasTotal}</strong></span>
                       <span className="text-slate-500">Com XML: <strong className="text-emerald-600">{spedCrossRef.saidaOk}</strong></span>
-                      <span className="text-slate-500">Sem XML: <strong className={spedCrossRef.saidaFaltantes.length > 0 ? 'text-amber-600' : 'text-slate-700'}>{spedCrossRef.saidaFaltantes.length}</strong></span>
+                      <span className="text-slate-500 dark:text-slate-400">Sem XML: <strong className={spedCrossRef.saidaFaltantes.length > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-900 dark:text-slate-100'}>{spedCrossRef.saidaFaltantes.length}</strong></span>
                       {spedCrossRef.adicionados.length > 0 && (
                         <span className="text-slate-500">Adicionados: <strong className="text-blue-600">{spedCrossRef.adicionados.length}</strong></span>
                       )}
@@ -11221,7 +11616,7 @@ ${htmlNomeDuplicado}
                               a.click();
                               URL.revokeObjectURL(url);
                             }}
-                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold hover:bg-red-100 transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-[11px] font-semibold hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white transition-colors"
                             title="Gera novo SPED com os XMLs não declarados inseridos como C100"
                           >
                             <Download className="w-3 h-3" />
@@ -11234,14 +11629,14 @@ ${htmlNomeDuplicado}
 
                     {/* Banner de período parcial */}
                     {spedCrossRef.mesesFora.length > 0 && (
-                      <div className="mx-6 my-3 px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl text-xs text-orange-800">
+                      <div className="mx-6 my-4 px-4 py-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 rounded-xl text-xs leading-relaxed text-amber-800 dark:text-amber-200">
                         <strong>⚠ SPED com período parcial</strong> — cobre apenas {spedCrossRef.periodo}.<br />
                         XMLs de <strong>{spedCrossRef.mesesFora.join(', ')}</strong> ({spedCrossRef.xmlsForaPeriodo.length} notas) estão fora do período declarado e não podem ser comparados com este SPED.
                       </div>
                     )}
 
                     {/* Filtros + Busca */}
-                    <div className="px-6 py-3 border-b border-slate-100 flex flex-wrap gap-3 items-center">
+                    <div className="px-6 py-3.5 border-b border-slate-100 dark:border-slate-800 flex flex-wrap gap-3 items-center">
                       <div className="flex gap-1.5 flex-wrap">
                         {(['Todas', 'SemXML', 'NaoDeclarado', 'Adicionados', 'Canceladas'] as const).map(f => {
                           const label =
@@ -11265,8 +11660,8 @@ ${htmlNomeDuplicado}
                                       ? 'bg-red-100 text-red-800 border border-red-300'
                                       : f === 'Adicionados'
                                         ? 'bg-blue-100 text-blue-800 border border-blue-300'
-                                        : 'bg-slate-900 text-white'
-                                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                                        : 'border border-slate-900 bg-slate-900 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900'
+                                  : 'border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-slate-100'
                               )}
                             >
                               {label}
@@ -11281,7 +11676,7 @@ ${htmlNomeDuplicado}
                           value={spedSearch}
                           onChange={e => setSpedSearch(e.target.value)}
                           placeholder="Buscar número, chave, data…"
-                          className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-300 bg-slate-50"
+                          className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-300 dark:focus:ring-slate-600 bg-white dark:bg-slate-800 placeholder:text-slate-400"
                         />
                         {spedSearch && (
                           <button onClick={() => setSpedSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
@@ -11300,7 +11695,7 @@ ${htmlNomeDuplicado}
                     </div>
 
                     {/* Tabela com scroll interno */}
-                    <div className="overflow-y-auto max-h-[500px] custom-scrollbar">
+                    <div className="overflow-y-auto max-h-[500px] custom-scrollbar [&_thead]:border-slate-200 dark:[&_thead]:bg-[#211E15] dark:[&_thead]:border-slate-700 [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider">
                       {spedCardFiltro === 'NaoDeclarado' ? (() => {
                         const q = spedSearch.trim().toLowerCase();
                         const rows = q
@@ -11330,11 +11725,11 @@ ${htmlNomeDuplicado}
                             </thead>
                             <tbody>
                               {rows.slice(0, LIMITE_SPED_LINHAS).map((x, i) => (
-                                <tr key={i} className="border-b border-slate-50 hover:bg-red-50/30 bg-red-50/20 transition-colors">
+                                <tr key={i} className="border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors">
                                   <td className="px-6 py-2 text-slate-500">{x.data ?? '—'}</td>
                                   <td className="px-3 py-2 text-slate-400">{x.modelo ?? '—'}</td>
                                   <td className="px-3 py-2 text-slate-400">{x.serie ?? '—'}</td>
-                                  <td className="px-3 py-2 font-mono text-slate-700">{x.numero ?? '—'}</td>
+                                  <td className="px-3 py-2.5 font-mono text-slate-900 dark:text-slate-100">{x.numero ?? '—'}</td>
                                   <td className="px-6 py-2 text-right text-slate-600">
                                     {x.valor ? parseFloat(x.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '—'}
                                   </td>
@@ -11367,12 +11762,12 @@ ${htmlNomeDuplicado}
                               const cancelada = c.codSit === '02' || c.codSit === '06';
                               const adicionado = spedCardFiltro === 'Adicionados';
                               return (
-                                <tr key={i} className={cn('border-b border-slate-50 hover:bg-slate-50 transition-colors', falta && !cancelada && 'bg-amber-50/40', adicionado && 'bg-blue-50/30')}>
+                                <tr key={i} className={cn('border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors', falta && !cancelada && 'bg-amber-50/50 dark:bg-amber-950/20', adicionado && 'bg-blue-50/40 dark:bg-blue-950/20')}>
                                   <td className="px-6 py-2 text-slate-500">{spedCrossRef.formatDt(c.dtDoc)}</td>
                                   <td className="px-3 py-2 text-slate-400">{c.codMod}</td>
                                   <td className="px-3 py-2 text-slate-400">{c.ser}</td>
-                                  <td className="px-3 py-2 font-mono text-slate-700">{c.numDoc}</td>
-                                  <td className="px-6 py-2 text-right text-slate-600">{formatValorSped(c.vlDoc)}</td>
+                                  <td className="px-3 py-2.5 font-mono text-slate-900 dark:text-slate-100">{c.numDoc}</td>
+                                  <td className="px-6 py-2.5 text-right tabular-nums font-medium text-slate-900 dark:text-slate-100">{formatValorSped(c.vlDoc)}</td>
                                   <td className="px-3 py-2 font-mono text-[10px] text-slate-400 max-w-[200px] truncate">{c.chave || '—'}</td>
                                   <td className="px-3 py-2 text-center">
                                     {cancelada ? (
@@ -11380,7 +11775,7 @@ ${htmlNomeDuplicado}
                                     ) : falta ? (
                                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700">Sem XML</span>
                                     ) : (
-                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700">Com XML</span>
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">Com XML</span>
                                     )}
                                   </td>
                                 </tr>
@@ -11408,10 +11803,17 @@ ${htmlNomeDuplicado}
                 );
               })()}
 
+              </div>
+              <div data-secao="notas" className="space-y-8">
+                {!(notaSearchQuery.trim() || filterNotaModelo !== 'Todos' || filterNotaSituacao !== 'Todas' || filterNotaCfop !== 'Todos') && (
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 text-sm text-slate-500 dark:text-slate-400">
+                    Use a busca ao lado para encontrar notas por número, chave, cliente, produto, NCM, data ou valor — ou os filtros de modelo, situação e CFOP.
+                  </div>
+                )}
               {/* Selection bar — always visible regardless of the current search/filter, since
                   selections made across earlier searches must stay reachable and downloadable. */}
               {notasSelecionadas.size > 0 && (
-                <div className="bg-white p-4 rounded-2xl border border-slate-200 no-print">
+                <div className="bg-white dark:bg-slate-900 px-5 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 no-print">
                   <div className="flex flex-wrap items-center gap-3">
                     <button
                       onClick={() => setShowSelecionadas(!showSelecionadas)}
@@ -11423,7 +11825,7 @@ ${htmlNomeDuplicado}
                     <button
                       onClick={() => baixarDanfesSelecionados()}
                       disabled={!!baixandoLote}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold disabled:opacity-40 hover:bg-slate-700 transition-all"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 text-xs font-semibold disabled:opacity-40 hover:bg-slate-700 dark:hover:bg-white transition-colors"
                     >
                       <Download className="w-3.5 h-3.5" />
                       {baixandoLote?.tipo === 'danfe' ? `Gerando ${baixandoLote.atual}/${baixandoLote.total}...` : 'Baixar DANFEs (.zip)'}
@@ -11431,7 +11833,7 @@ ${htmlNomeDuplicado}
                     <button
                       onClick={() => baixarXmlsSelecionados()}
                       disabled={!!baixandoLote}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 text-xs font-bold disabled:opacity-40 hover:bg-slate-50 transition-all"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold disabled:opacity-40 hover:border-slate-400 dark:hover:border-slate-500 transition-colors"
                     >
                       <Download className="w-3.5 h-3.5" />
                       {notasSelecionadas.size === 1 ? 'Baixar XML' : 'Baixar XMLs (.zip)'}
@@ -11542,7 +11944,7 @@ ${htmlNomeDuplicado}
                                     <button
                                       onClick={() => baixarDanfe(nota)}
                                       disabled={downloadingDanfeChave === nota.chave || !nota.rawXml}
-                                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 transition-all"
+                                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors"
                                     >
                                       <Download className="w-3.5 h-3.5" />
                                       {downloadingDanfeChave === nota.chave ? 'Gerando...' : 'Baixar'}
@@ -11562,10 +11964,12 @@ ${htmlNomeDuplicado}
                 </div>
               )}
 
+              </div>
+              <div data-secao="visao notas" className="grupo-dias space-y-8 -order-1 empty:hidden">
               {showDaysDetail && periodoAnalise.diasComContagem && periodoAnalise.diasComContagem.length > 0 && (
                 <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700">
                   <div className="flex items-center justify-between mb-4">
-                    <div className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Notas por Dia</div>
+                    <div className="text-[13px] font-semibold text-slate-900 dark:text-slate-100">Notas por dia</div>
                     <button
                       onClick={() => setNotasPorDiaModoResumido(v => !v)}
                       className="flex items-center gap-1.5 text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
@@ -11602,7 +12006,7 @@ ${htmlNomeDuplicado}
                       <tfoot className="sticky bottom-0 bg-white dark:bg-slate-900">
                         <tr className="border-t border-slate-200 dark:border-slate-700">
                           <td className="py-1.5 font-black text-slate-500 dark:text-slate-400 text-xs">Total</td>
-                          <td className="py-1.5 text-right font-black text-slate-700 dark:text-slate-300">{periodoAnalise.totalNotas ?? 0}</td>
+                          <td className="py-2 text-right font-serif font-medium text-base tabular-nums text-slate-900 dark:text-slate-100">{periodoAnalise.totalNotas ?? 0}</td>
                         </tr>
                       </tfoot>
                     </table>
@@ -11611,9 +12015,9 @@ ${htmlNomeDuplicado}
               )}
 
               {showCfopBreakdown && breakdownPorCfop.length > 0 && (
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 mb-6">
+                <div data-secao="visao" className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 mb-6">
                   <div className="flex items-center justify-between mb-4">
-                    <div className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Totais por Natureza da Operação (CFOP)</div>
+                    <div className="text-[13px] font-semibold text-slate-900 dark:text-slate-100">Totais por natureza da operação (CFOP)</div>
                     <button
                       onClick={() => setShowCfopPorModelo(v => !v)}
                       className="flex items-center gap-1.5 text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline no-print"
@@ -11658,8 +12062,8 @@ ${htmlNomeDuplicado}
                       </tbody>
                       <tfoot>
                         <tr>
-                          <td colSpan={showCfopPorModelo ? 4 : 2} className="py-3 pr-4 font-black text-slate-900 dark:text-slate-100 uppercase text-xs tracking-wider">Total de Saídas</td>
-                          <td className="py-3 pr-4 text-right font-black text-emerald-600 dark:text-emerald-400">
+                          <td colSpan={showCfopPorModelo ? 4 : 2} className="pt-3.5 pb-1 pr-4 border-t border-slate-200 dark:border-slate-700 font-semibold text-slate-500 dark:text-slate-400 uppercase text-[11px] tracking-wider">Total de Saídas</td>
+                          <td className="pt-3.5 pb-1 pr-4 border-t border-slate-200 dark:border-slate-700 text-right font-serif font-medium text-xl tabular-nums whitespace-nowrap text-slate-900 dark:text-slate-100">
                             {formatarMoeda(breakdownPorCfop.reduce((acc, item) => acc + item.valor, 0))}
                           </td>
                         </tr>
@@ -11669,21 +12073,23 @@ ${htmlNomeDuplicado}
                 </div>
               )}
 
+              </div>
+              <div data-secao="alertas" className="space-y-8">
               {/* Painel de problemas reais: sem protocolo + número duplicado */}
               {(notasAnomalias.semProtocolo.length > 0 || notasAnomalias.numeroDuplicado.length > 0) && (
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-amber-400 rounded-xl p-6 mb-6">
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <AlertTriangle className="w-5 h-5 text-amber-500" />
+                      <AlertTriangle className="w-9 h-9 p-2 rounded-lg bg-rose-50 text-rose-600 dark:bg-rose-950 dark:text-rose-400 shrink-0" />
                       <div>
                         <div className="flex items-baseline gap-3">
-                          <div className="text-sm font-bold text-amber-700 tracking-wide">Contingência Não Regularizada</div>
+                          <div className="text-[14px] font-semibold text-slate-900 dark:text-slate-100">Contingência não regularizada</div>
                           <SeloTotal tipo={notasAnomalias.semProtocolo.length > 0 ? 'fora' : 'dentro'} />
                           {notasAnomalias.semProtocolo.length > 0 && (
-                            <div className="text-sm font-bold text-amber-700">{formatarMoeda(notasAnomalias.semProtocolo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
+                            <div className="text-base font-serif font-medium tabular-nums text-slate-900 dark:text-slate-100">{formatarMoeda(notasAnomalias.semProtocolo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
                           )}
                         </div>
-                        <div className="text-xs text-amber-600 mt-0.5">
+                        <div className="text-[12.5px] text-slate-500 dark:text-slate-400 mt-0.5">
                           {notasAnomalias.semProtocolo.length > 0 && (
                             <span>{notasAnomalias.semProtocolo.length} nota(s) emitida(s) offline sem autorização SEFAZ — fora do Total de Saídas Auditadas{notasAnomalias.numeroDuplicado.length > 0 ? ' · ' : ''}</span>
                           )}
@@ -11786,7 +12192,7 @@ ${htmlNomeDuplicado}
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-6 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+                      <AlertTriangle className="w-9 h-9 p-2 rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-400 shrink-0" />
                       <div>
                         <div className="flex items-baseline gap-3">
                           <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Notas Malformadas</div>
@@ -11860,7 +12266,7 @@ ${htmlNomeDuplicado}
                                 <td className="py-1.5 pr-3">
                                   <button
                                     onClick={() => baixarXmlEvidencia(xml)}
-                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-transparent text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:border-slate-900 hover:text-slate-900 dark:hover:border-slate-300 dark:hover:text-white transition-colors"
                                   >
                                     <Download className="w-3 h-3" />
                                     XML
@@ -11880,7 +12286,7 @@ ${htmlNomeDuplicado}
 
               {/* Card: Sem Autorização (não contingência) */}
               {notasAnomalias.semAutorizacaoNaoContingencia.length > 0 && (
-                <div className="bg-white dark:bg-slate-900 border-l-4 border-l-slate-400 border border-slate-200 dark:border-slate-700 rounded-xl p-6 mb-6">
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                       <Ban className="w-5 h-5 text-slate-400 dark:text-slate-500" />
@@ -11966,17 +12372,17 @@ ${htmlNomeDuplicado}
 
               {/* Painel informativo: contingência autorizada fora do prazo */}
               {notasAnomalias.foraDoPrazo.length > 0 && (
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 border-l-orange-400 rounded-xl p-6 mb-6">
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <Clock className="w-5 h-5 text-orange-400" />
+                      <Clock className="w-9 h-9 p-2 rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-400 shrink-0" />
                       <div>
                         <div className="flex items-baseline gap-3">
-                          <div className="text-sm font-bold text-orange-700 tracking-wide">Contingência Regularizada Fora do Prazo</div>
+                          <div className="text-[14px] font-semibold text-slate-900 dark:text-slate-100">Contingência regularizada fora do prazo</div>
                           <SeloTotal tipo="dentro" />
-                          <div className="text-sm font-bold text-orange-700">{formatarMoeda(notasAnomalias.foraDoPrazo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
+                          <div className="text-base font-serif font-medium tabular-nums text-slate-900 dark:text-slate-100">{formatarMoeda(notasAnomalias.foraDoPrazo.reduce((s, x) => s + (parseFloat(x.valor || '0') || 0), 0))}</div>
                         </div>
-                        <div className="text-xs text-orange-600 mt-0.5">
+                        <div className="text-[12.5px] text-slate-500 dark:text-slate-400 mt-0.5">
                           {notasAnomalias.foraDoPrazo.length} nota(s) emitida(s) offline e autorizada(s) pelo SEFAZ com atraso superior a 30 min — incluídas no Total de Saídas Auditadas
                         </div>
                       </div>
@@ -12040,22 +12446,46 @@ ${htmlNomeDuplicado}
                 </div>
               )}
 
+              </div>
+              <div data-secao="ibscbs" className="space-y-8">
               {/* Card: Auditoria de IBS/CBS (Reforma Tributária) — aberto pelo card compacto na lateral direita */}
               {showAuditoriaIbsCbs && auditoriaIbsCbs.totalNotas > 0 && (() => {
                 const corBordaIbsCbs = auditoriaIbsCbs.pctComGrupo === 0
                   ? 'border-l-rose-400'
                   : auditoriaIbsCbs.pctComGrupo === 100 ? 'border-l-emerald-400' : 'border-l-amber-400';
                 return (
-                  <div className={cn("bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 rounded-xl p-6 mb-6", corBordaIbsCbs)}>
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 mb-6 [&_th]:py-2.5 [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:font-semibold [&_tbody_td]:py-2.5">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
-                        <Receipt className="w-5 h-5 text-blue-500" />
+                        <Receipt className="w-9 h-9 p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 shrink-0" />
                         <div>
-                          <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Auditoria de IBS/CBS (Reforma Tributária)</div>
+                          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                            <div className="text-[14px] font-semibold text-slate-900 dark:text-slate-100">Auditoria de IBS/CBS (Reforma Tributária)</div>
+                            <span className={cn(
+                              "inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap",
+                              auditoriaIbsCbs.pctComGrupo === 0
+                                ? "bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300"
+                                : auditoriaIbsCbs.pctComGrupo === 100
+                                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                                  : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+                            )}>
+                              {auditoriaIbsCbs.pctComGrupo === 0 ? <AlertCircle className="w-3 h-3" /> : auditoriaIbsCbs.pctComGrupo === 100 ? <CheckCircle2 className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+                              {auditoriaIbsCbs.pctComGrupo === 0 ? 'Sem grupo IBS/CBS' : auditoriaIbsCbs.pctComGrupo === 100 ? 'Adaptado' : 'Parcial'}
+                            </span>
+                          </div>
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                             <strong className={cn(
                               auditoriaIbsCbs.pctComGrupo === 0 ? "text-rose-600 dark:text-rose-400" : auditoriaIbsCbs.pctComGrupo === 100 ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
                             )}>{auditoriaIbsCbs.notasComGrupo} de {auditoriaIbsCbs.totalNotas} nota(s) ({formatarPct(auditoriaIbsCbs.pctComGrupo)}%)</strong> já trazem o grupo IBS/CBS preenchido
+                          </div>
+                          <div className="h-1.5 w-full max-w-xs rounded-full bg-slate-100 dark:bg-slate-800 mt-2 overflow-hidden" aria-hidden="true">
+                            <div
+                              className={cn(
+                                "h-full rounded-full",
+                                auditoriaIbsCbs.pctComGrupo === 0 ? "bg-rose-500 dark:bg-rose-400" : auditoriaIbsCbs.pctComGrupo === 100 ? "bg-emerald-500 dark:bg-emerald-400" : "bg-amber-500 dark:bg-amber-400"
+                              )}
+                              style={{ width: `${Math.min(100, auditoriaIbsCbs.pctComGrupo)}%` }}
+                            />
                           </div>
                         </div>
                       </div>
@@ -12070,7 +12500,7 @@ ${htmlNomeDuplicado}
                         </button>
                         <button
                           onClick={() => setShowAuditoriaIbsCbs(false)}
-                          className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline"
+                          className="fecha-secao text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline"
                         >
                           Ocultar
                         </button>
@@ -12118,7 +12548,7 @@ ${htmlNomeDuplicado}
                                       <td className="py-1.5">
                                         <button
                                           onClick={() => baixarXmlEvidencia(n)}
-                                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-transparent text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:border-slate-900 hover:text-slate-900 dark:hover:border-slate-300 dark:hover:text-white transition-colors"
                                         >
                                           <Download className="w-3 h-3" />
                                           XML
@@ -12156,7 +12586,7 @@ ${htmlNomeDuplicado}
                                       <td className="py-1.5">
                                         <button
                                           onClick={() => baixarXmlEvidencia(n)}
-                                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-transparent text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:border-slate-900 hover:text-slate-900 dark:hover:border-slate-300 dark:hover:text-white transition-colors"
                                         >
                                           <Download className="w-3 h-3" />
                                           XML
@@ -12180,7 +12610,7 @@ ${htmlNomeDuplicado}
                               </div>
                               <button
                                 onClick={exportarLaudoIbsCbs}
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors no-print"
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:border-slate-400 dark:hover:border-slate-500 transition-colors no-print"
                                 title="Abre o laudo em uma janela pra imprimir/salvar como PDF — com a lista de produtos do cadastro do cliente dentro de cada código, pra identificar visualmente qual classificação destoa"
                               >
                                 <Download className="w-3 h-3" />
@@ -12516,6 +12946,8 @@ ${htmlNomeDuplicado}
                 );
               })()}
 
+              </div>
+              <div data-secao="pagamentos" className="space-y-8">
               {/* Card: Auditoria de Pagamento (TEF) — aberto pelo card compacto na lateral direita */}
               {showAuditoriaPagamento && (auditoriaPagamento.totalCartao > 0 || auditoriaPagamento.totalCartaoNaoAplicavel > 0 || auditoriaPagamento.problemas.length > 0 || auditoriaPagamento.breakdownPorTipoPagamento.length > 0) && (() => {
                 // Sem Math.round: 464/466 arredondaria pra "100%" e escondia os 2
@@ -12537,21 +12969,27 @@ ${htmlNomeDuplicado}
                   ? 'border-l-rose-400'
                   : pctNaoIntegrado >= 50 ? 'border-l-amber-400' : 'border-l-blue-400';
                 return (
-                  <div className={cn("bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 rounded-xl p-6 mb-6", corBorda)}>
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 mb-6 [&_th]:py-2.5 [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:font-semibold [&_tbody_td]:py-2.5">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
-                        <CreditCard className="w-5 h-5 text-blue-500" />
+                        <CreditCard className="w-9 h-9 p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 shrink-0" />
                         <div>
                           <div className="flex items-baseline gap-3">
-                            <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Auditoria de Pagamento (TEF)</div>
+                            <div className="text-[14px] font-semibold text-slate-900 dark:text-slate-100">Auditoria de Pagamento (TEF)</div>
                             {temProblemasTecnicos && (
-                              <div className="text-sm font-bold text-rose-600 dark:text-rose-400">{auditoriaPagamento.problemas.length} problema(s) técnico(s)</div>
+                              <div className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300 whitespace-nowrap">{auditoriaPagamento.problemas.length} problema(s) técnico(s)</div>
                             )}
                             {riscoObrigatoriedade && (
-                              <div className="text-sm font-bold text-rose-600 dark:text-rose-400">⚠ obrigatoriedade de TEF ({regimeTributario.label})</div>
+                              <div className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300 whitespace-nowrap">Obrigatoriedade de TEF ({regimeTributario.label})</div>
                             )}
                             {auditoriaPagamento.totalFalsoTef > 0 && (
-                              <div className="text-sm font-bold text-rose-600 dark:text-rose-400">⚠ {auditoriaPagamento.totalFalsoTef} Falso TEF</div>
+                              <div className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300 whitespace-nowrap">{auditoriaPagamento.totalFalsoTef} Falso TEF</div>
+                            )}
+                            {!temProblemasTecnicos && !riscoObrigatoriedade && pctNaoIntegrado >= 50 && (
+                              <div className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 whitespace-nowrap">
+                                <AlertTriangle className="w-3 h-3" />
+                                Maioria em POS manual
+                              </div>
                             )}
                           </div>
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-xs">
@@ -12588,6 +13026,19 @@ ${htmlNomeDuplicado}
                               </>
                             )}
                           </div>
+                          {auditoriaPagamento.totalCartao > 0 && (
+                            <div className="h-1.5 w-full max-w-xs rounded-full bg-slate-100 dark:bg-slate-800 mt-2 overflow-hidden" aria-hidden="true">
+                              <div
+                                className={cn(
+                                  "h-full rounded-full",
+                                  temProblemasTecnicos || riscoObrigatoriedade || pctIntegrado === 0
+                                    ? "bg-rose-500 dark:bg-rose-400"
+                                    : pctIntegrado === 100 ? "bg-emerald-500 dark:bg-emerald-400" : "bg-amber-500 dark:bg-amber-400"
+                                )}
+                                style={{ width: `${Math.min(100, pctIntegrado)}%` }}
+                              />
+                            </div>
+                          )}
                           {auditoriaPagamento.totalCartao === 0 && auditoriaPagamento.totalCartaoNaoAplicavel === 0 && (
                             <div className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">
                               Os três números acima ficam zerados porque não há nenhuma venda em cartão neste período — não é erro, veja abaixo as formas de pagamento realmente usadas.
@@ -12614,7 +13065,7 @@ ${htmlNomeDuplicado}
                         </button>
                         <button
                           onClick={() => setShowAuditoriaPagamento(false)}
-                          className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline"
+                          className="fecha-secao text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline"
                         >
                           Ocultar
                         </button>
@@ -12634,7 +13085,7 @@ ${htmlNomeDuplicado}
                                   <div
                                     key={b.tPag}
                                     className={cn(
-                                      "border rounded-lg px-3 py-2",
+                                      "border rounded-xl px-3.5 py-3",
                                       temProblemaNesseTipo
                                         ? "bg-rose-50 dark:bg-rose-950 border-rose-200 dark:border-rose-800"
                                         : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700"
@@ -12647,7 +13098,7 @@ ${htmlNomeDuplicado}
                                       {temProblemaNesseTipo && '⚠ '}{b.tPagNome}
                                     </div>
                                     <div className={cn(
-                                      "text-sm font-bold mt-0.5",
+                                      "font-serif text-[19px] leading-tight font-medium tabular-nums mt-1",
                                       temProblemaNesseTipo ? "text-rose-700 dark:text-rose-300" : "text-slate-800 dark:text-slate-100"
                                     )}>{formatarMoeda(b.valor)}</div>
                                     <div className={cn(
@@ -12672,8 +13123,8 @@ ${htmlNomeDuplicado}
                                 .reduce((s, p) => s + (parseFloat(p.xml.valor || '0') || 0), 0);
                               const explicadoPorSemPagamento = !valorBate && valorProblemasTPag90 > 0 && Math.abs(diffValor - valorProblemasTPag90) < diffValor * 0.15;
                               return (
-                                <div className="mt-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2.5 text-[11px] text-blue-800 dark:text-blue-200 space-y-1.5">
-                                  <div className="font-bold uppercase tracking-wider text-[10px] text-blue-500 dark:text-blue-400">Observação sobre os números acima</div>
+                                <div className="mt-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-xs leading-relaxed text-slate-600 dark:text-slate-300 space-y-2">
+                                  <div className="font-semibold uppercase tracking-wider text-[11px] text-slate-500 dark:text-slate-400">Observação sobre os números acima</div>
                                   <div>
                                     {valorBate ? '✓' : '⚠'} <strong>Valores:</strong> a soma das formas de pagamento ({formatarMoeda(somaValores)}) {valorBate ? 'bate exatamente' : 'diverge'} com o Total de Saídas Auditadas ({formatarMoeda(faturamentoTotal)})
                                     {valorBate
@@ -12806,7 +13257,7 @@ ${htmlNomeDuplicado}
                                         <td className="py-1.5 pr-3">
                                           <button
                                             onClick={() => baixarXmlEvidencia(n.xml)}
-                                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-transparent text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:border-slate-900 hover:text-slate-900 dark:hover:border-slate-300 dark:hover:text-white transition-colors"
                                           >
                                             <Download className="w-3 h-3" />
                                             XML
@@ -12875,7 +13326,7 @@ ${htmlNomeDuplicado}
                                       <td className="py-1.5 pr-3">
                                         <button
                                           onClick={() => baixarXmlEvidencia(n.xml)}
-                                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors"
+                                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-transparent text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:border-slate-900 hover:text-slate-900 dark:hover:border-slate-300 dark:hover:text-white transition-colors"
                                         >
                                           <Download className="w-3 h-3" />
                                           XML
@@ -12934,11 +13385,22 @@ ${htmlNomeDuplicado}
                 );
               })()}
 
+              </div>
+              {!((notasAnomalias.semProtocolo.length > 0 || notasAnomalias.numeroDuplicado.length > 0) || notasAnomalias.malformadas.length > 0 || notasAnomalias.semAutorizacaoNaoContingencia.length > 0 || notasAnomalias.foraDoPrazo.length > 0 || notasHomologacao.total > 0) && (
+                <div data-secao="alertas" className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl px-6 py-12 flex flex-col items-center text-center">
+                  <div className="w-12 h-12 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 flex items-center justify-center mb-4">
+                    <CheckCircle2 className="w-6 h-6 text-emerald-700 dark:text-emerald-300" />
+                  </div>
+                  <div className="font-serif text-2xl tracking-tight text-slate-900 dark:text-slate-100">Nenhum alerta nesta análise</div>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 max-w-md leading-relaxed">Não há nota sem protocolo, sem autorização, malformada, autorizada fora do prazo, com número duplicado nem de homologação no lote.</p>
+                </div>
+              )}
+              <div data-secao="alertas" className="space-y-8">
               {/* Nota de homologação/teste (tpAmb=2) no meio da produção: não tem
                   validade fiscal e infla o faturamento auditado sem ninguém notar. */}
               {notasHomologacao.total > 0 && (
-                <div className="bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 rounded-xl p-4 text-sm text-rose-800 dark:text-rose-300">
-                  <span className="font-bold">⚠ {notasHomologacao.total} nota(s) de AMBIENTE DE HOMOLOGAÇÃO (teste) misturada(s) no movimento.</span>{' '}
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 text-sm leading-relaxed text-slate-600 dark:text-slate-300">
+                  <span className="font-semibold text-rose-700 dark:text-rose-400">⚠ {notasHomologacao.total} nota(s) de AMBIENTE DE HOMOLOGAÇÃO (teste) misturada(s) no movimento.</span>{' '}
                   Nota emitida com tpAmb=2 não tem validade fiscal — não é venda de verdade e não deveria estar no lote. Confira a configuração do sistema emissor.{' '}
                   <strong>Estão somadas no Total de Saídas Auditadas ({formatarMoeda(notasHomologacao.valor)})</strong> — se não forem vendas reais, o total está a mais nesse valor.
                   <span className="block mt-1 text-xs opacity-80">
@@ -12947,6 +13409,8 @@ ${htmlNomeDuplicado}
                 </div>
               )}
 
+              </div>
+              <div data-secao="series" className="space-y-8">
               {(() => {
                 // Portal buttons only show up automatically while the whole analysis found
                 // zero matching inutilizações (once any is found, XML or manual, the
@@ -12971,7 +13435,7 @@ ${htmlNomeDuplicado}
                   return (
                     <button
                       onClick={() => setForcarPainelInutilizacao(true)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-100 hover:bg-amber-100 text-xs font-bold transition-all no-print w-fit"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-500 text-xs font-semibold transition-all no-print w-fit"
                     >
                       <Search className="w-3.5 h-3.5" />
                       Consultar/confirmar inutilização manualmente
@@ -12982,17 +13446,17 @@ ${htmlNomeDuplicado}
                 const modelosComFaltante = Array.from(new Set(analysis.filter(s => s.faltantes.length > 0).map(s => s.modelo)));
 
                 return (
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col gap-3 no-print">
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-5 flex flex-col gap-3 no-print">
                     {exibirBotoes && (
                       <>
-                        <div className="text-sm text-amber-800">
-                          <span className="font-bold">Números faltantes sem inutilização correspondente.</span> Pode valer a pena conferir no portal da SEFAZ antes de fechar a análise.
+                        <div className="text-sm text-slate-600 dark:text-slate-300">
+                          <span className="font-semibold text-amber-700 dark:text-amber-400">Números faltantes sem inutilização correspondente.</span> Pode valer a pena conferir no portal da SEFAZ antes de fechar a análise.
                         </div>
                         <div className="flex flex-wrap items-center gap-3">
                           {seriePendenteNfce && (
                             <button
                               onClick={() => consultarInutilizadasNoPortal(seriePendenteNfce.cnpj, -1, PORTAL_INUTILIZADAS_NFCE_PE, '65')}
-                              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
+                              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold hover:bg-slate-700 dark:hover:bg-white transition-all shrink-0"
                             >
                               <Copy className="w-3.5 h-3.5" />
                               {copiedCnpjIdx === -1 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações NFC-e no Portal'}
@@ -13001,7 +13465,7 @@ ${htmlNomeDuplicado}
                           {seriePendenteNfe && (
                             <button
                               onClick={() => consultarInutilizadasNoPortal(seriePendenteNfe.cnpj, -2, PORTAL_INUTILIZADAS_NFE_PE, '55')}
-                              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all shrink-0"
+                              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold hover:bg-slate-700 dark:hover:bg-white transition-all shrink-0"
                             >
                               <Copy className="w-3.5 h-3.5" />
                               {copiedCnpjIdx === -2 ? 'CNPJ copiado! Abrindo portal...' : 'Consultar Inutilizações NF-e no Portal'}
@@ -13011,13 +13475,13 @@ ${htmlNomeDuplicado}
                       </>
                     )}
                     {exibirFormulario && (
-                      <div className={cn("flex flex-wrap items-end gap-3", exibirBotoes && "pt-3 border-t border-amber-200")}>
+                      <div className={cn("flex flex-wrap items-end gap-3", exibirBotoes && "pt-3 border-t border-slate-100 dark:border-slate-800")}>
                         <div>
                           <label className="text-[10px] font-bold text-amber-700 uppercase tracking-widest block mb-1">Modelo</label>
                           <select
                             value={manualInutModelo}
                             onChange={(e) => setManualInutModelo(e.target.value)}
-                            className="px-3 py-2 rounded-lg border border-amber-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                            className="px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-800 text-sm bg-white dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-300"
                           >
                             {(modelosComFaltante.length > 0 ? modelosComFaltante : ['65', '55']).map(m => (
                               <option key={m} value={m}>{m === '55' ? 'NF-e (55)' : 'NFC-e (65)'}</option>
@@ -13077,7 +13541,7 @@ ${htmlNomeDuplicado}
               <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-nowrap items-center gap-2 no-print">
                 <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 font-bold text-xs px-1 shrink-0">
                   <Filter className="w-3.5 h-3.5" />
-                  FILTROS:
+                  Filtros
                 </div>
                 <select
                   value={filterModelo}
@@ -13180,7 +13644,7 @@ ${htmlNomeDuplicado}
                   <div className="relative shrink-0">
                     <button
                       onClick={() => setShowPrintMenu(v => !v)}
-                      className="flex items-center gap-1 text-white px-2.5 py-1.5 rounded-lg transition-all shrink-0"
+                      className="flex items-center gap-1 text-white px-2.5 py-1.5 rounded-lg transition-all shrink-0 hover:opacity-90 dark:ring-1 dark:ring-slate-600"
                       style={{background: '#17150F'}}
                       title={window.self !== window.top
                         ? 'Imprimir Relatório / Exportar PDF — se não abrir, use o ícone "Abrir em nova aba" no topo.'
@@ -13280,7 +13744,7 @@ ${htmlNomeDuplicado}
                                 className={cn(
                                   "px-3 py-1.5 rounded-full text-xs font-bold border transition-all",
                                   auditoriaFiltroTipo === t
-                                    ? "bg-amber-500 text-white border-amber-500"
+                                    ? "bg-slate-900 text-white border-slate-900"
                                     : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
                                 )}
                               >
@@ -13292,7 +13756,7 @@ ${htmlNomeDuplicado}
                         <div className="overflow-x-auto overflow-y-auto max-h-[500px]">
                           <table className="w-full text-sm">
                             <thead className="sticky top-0 z-10">
-                              <tr className="bg-slate-50 text-left text-[10px] font-black uppercase tracking-wider text-slate-400">
+                              <tr className="bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                                 <th className="px-4 py-3">Tipo</th>
                                 <th className="px-4 py-3">Item (Sequência Fiscal)</th>
                                 <th className="px-4 py-3">Item (Planilha)</th>
@@ -13353,7 +13817,7 @@ ${htmlNomeDuplicado}
               {/* Series List */}
               <div className="space-y-4">
                 {filteredAnalysis.map((serie, idx) => (
-                  <div key={idx} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden transition-all hover:shadow-md">
+                  <div key={idx} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden transition-colors hover:border-slate-300 dark:hover:border-slate-600">
                     <div
                       className="p-6 cursor-pointer flex items-center gap-6"
                       onClick={() => setExpandedIdx(expandedIdx === idx ? null : idx)}
@@ -13366,14 +13830,23 @@ ${htmlNomeDuplicado}
                       </div>
 
                       <div className="flex-1">
-                        <div className="flex items-center gap-3">
-                          <h3 className="font-semibold text-slate-800 dark:text-slate-200 text-lg">{serie.razaoSocial}</h3>
-                          <span className="px-2 py-0.5 bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 text-[10px] font-semibold rounded uppercase tracking-wider border border-amber-200 dark:border-amber-800">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <h3 className="font-serif font-medium text-slate-900 dark:text-slate-100 text-xl tracking-tight">{tipoDocNota({ modelo: serie.modelo })} · Série {serie.serie}</h3>
+                          <span className={cn(
+                            "inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold rounded-full tracking-wide border",
+                            serie.faltantes.length > 0
+                              ? "bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800"
+                              : "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
+                          )}>
+                            {serie.faltantes.length > 0 ? <AlertCircle className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
+                            {serie.faltantes.length > 0 ? 'Com quebra' : 'Íntegra'}
+                          </span>
+                          <span className="px-2.5 py-0.5 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px] font-medium rounded-full tracking-wide border border-slate-200 dark:border-slate-700">
                             {serie.mesReferencia}
                           </span>
                           {mesesFaltantesPorSerie.has(idx) && (
                             <span
-                              className="px-2 py-0.5 bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 text-[10px] font-semibold rounded uppercase tracking-wider border border-rose-200 dark:border-rose-800"
+                              className="px-2.5 py-0.5 bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 text-[11px] font-semibold rounded-full tracking-wide border border-amber-200 dark:border-amber-800"
                               title="Essa série tem nota em outros meses do período, mas não nesse(s) — pode ser série nova, descontinuada, ou realmente sem nenhum movimento nesse mês."
                             >
                               ⚠ Sem nota em: {mesesFaltantesPorSerie.get(idx)!.join(', ')}
@@ -13381,7 +13854,7 @@ ${htmlNomeDuplicado}
                           )}
                         </div>
                         <div className="text-slate-400 dark:text-slate-500 text-sm font-medium">
-                          Mod {serie.modelo} • Série {serie.serie} • CNPJ {serie.cnpj} • IE {serie.ie}
+                          {serie.razaoSocial} · CNPJ {serie.cnpj} · IE {serie.ie}
                         </div>
                       </div>
 
@@ -13477,7 +13950,7 @@ ${htmlNomeDuplicado}
                         )}
 
                         {serie.faltantes.length === 0 && serie.todasInutilizacoes.length > 0 && (
-                          <div className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-slate-600 dark:text-slate-300 text-sm">
+                          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-slate-600 dark:text-slate-300 text-sm">
                             <div className="font-bold flex items-center gap-2 mb-1 text-slate-700 dark:text-slate-200">
                               <FileSearch className="w-4 h-4" />
                               Inutilizações Registradas nessa Série ({serie.todasInutilizacoes.length})
@@ -13496,7 +13969,7 @@ ${htmlNomeDuplicado}
                           </div>
                         )}
 
-                        <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-blue-800 dark:text-blue-200 text-sm">
+                        <div className="bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 rounded-lg p-4 text-slate-600 dark:text-slate-300 text-sm">
                           <div className="font-bold flex items-center gap-2 mb-1">
                             <Search className="w-4 h-4" />
                             Verificação de Abrangência
@@ -13509,11 +13982,13 @@ ${htmlNomeDuplicado}
                 ))}
               </div>
 
+              </div>
+              <div data-secao="nfse" className="space-y-8">
               {/* Series List — NFS-e (auditoria de sequência isolada, ver nfseAnalysis) */}
               {nfseAnalysis.length > 0 && (
                 <div className="space-y-4">
                   {nfseAnalysis.map((serie, idx) => (
-                    <div key={`nfse_${serie.cnpj}_${serie.serie}_${idx}`} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden transition-all hover:shadow-md">
+                    <div key={`nfse_${serie.cnpj}_${serie.serie}_${idx}`} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden transition-colors hover:border-slate-300 dark:hover:border-slate-600">
                       <div
                         className="p-6 cursor-pointer flex items-center gap-6"
                         onClick={() => setExpandedNfseIdx(expandedNfseIdx === idx ? null : idx)}
@@ -13526,14 +14001,23 @@ ${htmlNomeDuplicado}
                         </div>
 
                         <div className="flex-1">
-                          <div className="flex items-center gap-3">
-                            <h3 className="font-semibold text-slate-800 dark:text-slate-200 text-lg">{serie.razaoSocial}</h3>
-                            <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-semibold rounded uppercase tracking-wider border border-blue-200 dark:border-blue-800">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <h3 className="font-serif font-medium text-slate-900 dark:text-slate-100 text-xl tracking-tight">NFS-e · Série {serie.serie}</h3>
+                            <span className={cn(
+                              "inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold rounded-full tracking-wide border",
+                              serie.faltantes.length > 0
+                                ? "bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800"
+                                : "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
+                            )}>
+                              {serie.faltantes.length > 0 ? <AlertCircle className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
+                              {serie.faltantes.length > 0 ? 'Com quebra' : 'Íntegra'}
+                            </span>
+                            <span className="px-2.5 py-0.5 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px] font-medium rounded-full tracking-wide border border-slate-200 dark:border-slate-700">
                               NFS-e
                             </span>
                           </div>
                           <div className="text-slate-400 dark:text-slate-500 text-sm font-medium">
-                            Série {serie.serie} • CNPJ {serie.cnpj} (prestador) • nDPS
+                            {serie.razaoSocial} · CNPJ {serie.cnpj} (prestador) · nDPS
                           </div>
                         </div>
 
@@ -13619,19 +14103,21 @@ ${htmlNomeDuplicado}
                 </div>
               )}
 
+              </div>
+              <div data-secao="series" className="space-y-8">
               {/* Consolidated Message */}
               {analysis.some(s => s.faltantes.length > 0) && (
-                <div className="bg-white rounded-2xl border-2 border-blue-600 p-8 shadow-xl no-print">
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 p-6 md:p-8 no-print">
                   <div className="flex justify-between items-center mb-6">
                     <div>
-                      <h2 className="font-serif text-2xl font-semibold text-slate-900">Relatório Consolidado</h2>
-                      <p className="text-slate-500 mt-1">Edite a mensagem completa abaixo antes de enviar.</p>
+                      <h2 className="font-serif text-2xl font-medium tracking-tight text-slate-900 dark:text-slate-100">Relatório Consolidado</h2>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Edite a mensagem completa abaixo antes de enviar.</p>
                     </div>
                     <div className="flex items-center gap-3">
                       <div className="flex flex-col items-end">
                         <button 
                           onClick={() => window.print()}
-                          className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-6 py-4 rounded-xl font-bold transition-all"
+                          className="flex items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-500 text-slate-700 dark:text-slate-200 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all"
                         >
                           <Printer className="w-5 h-5" />
                           Imprimir
@@ -13645,8 +14131,8 @@ ${htmlNomeDuplicado}
                       <button 
                         onClick={() => copyToClipboard(consolidatedMessage, 999)}
                         className={cn(
-                          "px-10 py-4 rounded-xl font-bold text-lg transition-all shadow-lg",
-                          copiedIdx === 999 ? "bg-slate-900 text-white" : "bg-blue-600 text-white hover:bg-blue-700"
+                          "px-5 py-2.5 rounded-lg font-semibold text-sm transition-all",
+                          copiedIdx === 999 ? "bg-emerald-600 text-white" : "bg-slate-900 text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
                         )}
                       >
                         {copiedIdx === 999 ? "Copiado!" : "Copiar Mensagem Completa"}
@@ -13656,21 +14142,22 @@ ${htmlNomeDuplicado}
                   <textarea 
                     value={consolidatedMessage}
                     onChange={(e) => setConsolidatedMessage(e.target.value)}
-                    className="w-full h-96 bg-slate-50 p-6 rounded-xl text-sm text-slate-700 font-mono border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                    className="w-full h-96 bg-slate-50 dark:bg-slate-950 p-5 rounded-xl text-[13px] leading-relaxed text-slate-700 dark:text-slate-200 font-mono border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 outline-none resize-y"
                   />
                 </div>
               )}
               {analysis.every(s => s.faltantes.length === 0) && nfseAnalysis.every(s => s.faltantes.length === 0) && (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-10 text-center space-y-4">
-                  <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-10 text-center space-y-4">
+                  <div className="w-20 h-20 bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-200 dark:ring-emerald-800 rounded-full flex items-center justify-center mx-auto">
                     <CheckCircle2 className="w-10 h-10" />
                   </div>
-                  <h2 className="font-serif text-3xl font-semibold text-emerald-900">Sequência Totalmente Íntegra</h2>
-                  <p className="text-emerald-700 font-medium max-w-xl mx-auto text-lg">
+                  <h2 className="font-serif text-3xl font-medium tracking-tight text-slate-900 dark:text-slate-100">Sequência Totalmente Íntegra</h2>
+                  <p className="text-slate-500 dark:text-slate-400 max-w-xl mx-auto text-base leading-relaxed">
                     Parabéns! Todos os documentos fiscais foram identificados e a sequência numérica está completa para todas as séries analisadas.
                   </p>
                 </div>
               )}
+              </div>
               </div>
 
               </div>

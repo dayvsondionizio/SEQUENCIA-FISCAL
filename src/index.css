@@ -6,7 +6,61 @@
   --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
   --font-serif: 'Newsreader', ui-serif, Georgia, serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* Visual "papel e tinta": os cinzas frios (azulados) do Tailwind viram cinzas quentes que conversam com o
+     preto-quente #17150F do cabeçalho e o fundo papel #FCFBF8. Só muda a cor — nenhuma classe do app muda. */
+  --color-slate-50: #F8F7F4;
+  --color-slate-100: #F1EFEA;
+  --color-slate-200: #E6E2D9;
+  --color-slate-300: #D3CDC0;
+  --color-slate-400: #A39C8E;
+  --color-slate-500: #776F62;
+  --color-slate-600: #5C564B;
+  --color-slate-700: #45403A;
+  --color-slate-800: #2C2820;
+  --color-slate-900: #1D1B15;
+  --color-slate-950: #17150F;
+
+  /* O azul (botões, links, foco) vira o dourado da marca: 600 = #8A6D0F, contraste 4,9:1 com texto branco. */
+  --color-blue-50: #FBF7EA;
+  --color-blue-100: #F5EDD0;
+  --color-blue-200: #EADBA3;
+  --color-blue-300: #DCC473;
+  --color-blue-400: #C9A227;
+  --color-blue-500: #A8840F;
+  --color-blue-600: #8A6D0F;
+  --color-blue-700: #6F570B;
+  --color-blue-800: #57440A;
+  --color-blue-900: #3F3108;
+  --color-blue-950: #261D05;
 }
+
+/* Cards: a listra colorida na lateral é um padrão datado — o estado agora vem do ícone e do selo no título. */
+.border-l-4 { border-left-width: 1px !important; }
+
+/* Visual novo — seções do menu lateral: o contêiner da análise marca a seção ativa (data-ativa) e só os blocos
+   dela aparecem. Os blocos são os mesmos de sempre; nada é removido da tela, só escondido fora da sua seção. */
+.shell[data-ativa="visao"] [data-secao]:not([data-secao~="visao"]),
+.shell[data-ativa="series"] [data-secao]:not([data-secao~="series"]),
+.shell[data-ativa="alertas"] [data-secao]:not([data-secao~="alertas"]),
+.shell[data-ativa="notas"] [data-secao]:not([data-secao~="notas"]),
+.shell[data-ativa="pagamentos"] [data-secao]:not([data-secao~="pagamentos"]),
+.shell[data-ativa="clientes"] [data-secao]:not([data-secao~="clientes"]),
+.shell[data-ativa="fornecedores"] [data-secao]:not([data-secao~="fornecedores"]),
+.shell[data-ativa="produtos"] [data-secao]:not([data-secao~="produtos"]),
+.shell[data-ativa="ibscbs"] [data-secao]:not([data-secao~="ibscbs"]),
+.shell[data-ativa="sped"] [data-secao]:not([data-secao~="sped"]),
+.shell[data-ativa="nfse"] [data-secao]:not([data-secao~="nfse"]) { display: none !important; }
+
+/* Cards que são a própria seção (Clientes, Fornecedores, IBS/CBS, TEF): o "fechar" deixava a seção vazia. */
+.shell .fecha-secao { display: none !important; }
+
+/* Em Notas de saída, o grupo "notas por dia + CFOP" só aparece quando o "notas por dia" está aberto
+   (o CFOP é só da Visão geral) — sem isso sobra um vão vazio no topo da coluna. */
+.shell[data-ativa="notas"] .grupo-dias:not(:has(> :not([data-secao~="visao"]))) { display: none !important; }
+
+/* Números alinhados por coluna em todas as tabelas. */
+table { font-variant-numeric: tabular-nums; }
 
 /* Modo escuro: esquenta os tons de superfície (fundo/cards/bordas) pra
    combinar com o preto quente (#17150F) do header da identidade nova —
