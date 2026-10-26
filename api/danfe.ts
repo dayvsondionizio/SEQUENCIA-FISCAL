@@ -28,6 +28,16 @@ ${conteudo}
 </nfeProc>`;
 }
 
+// nfe-danfe-pdf 1.0.3 quebra (TypeError lendo infAdic.infCpl) quando a nota não
+// tem o grupo <infAdic>, que é opcional no leiaute — vários emissores de NFC-e
+// (ex.: Cloudfy) não o enviam. Só para desenhar o PDF, inclui o grupo vazio.
+function garantirInfAdic(xml: string): string {
+  if (/<infAdic[\s>]/.test(xml)) return xml;
+  const vazio = '<infAdic></infAdic>';
+  if (/<infRespTec[\s>]/.test(xml)) return xml.replace(/<infRespTec([\s>])/, `${vazio}<infRespTec$1`);
+  return xml.replace('</infNFe>', `${vazio}</infNFe>`);
+}
+
 // Vercel Node.js serverless function: receives a note's XML and streams back
 // the rendered DANFE PDF. Stateless — nothing is persisted.
 export default async function handler(req: any, res: any) {
@@ -43,7 +53,7 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const xmlProcessado = toNfeProc(xml, chave, protocolo, dataEmissao);
+    const xmlProcessado = garantirInfAdic(toNfeProc(xml, chave, protocolo, dataEmissao));
     const pdfDoc = await gerarPDF(xmlProcessado, { cancelada: !!cancelada });
 
     const chunks: Buffer[] = [];
