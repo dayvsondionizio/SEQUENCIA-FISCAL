@@ -1597,6 +1597,7 @@ export default function App() {
   const [showAnomalias, setShowAnomalias] = useState(false);
   const [showSemAutorizacao, setShowSemAutorizacao] = useState(false);
   const [showMalformadas, setShowMalformadas] = useState(false);
+  const [showValorZero, setShowValorZero] = useState(false);
   const [showAuditoriaPagamento, setShowAuditoriaPagamento] = useState(false);
   const [showAuditoriaRegime, setShowAuditoriaRegime] = useState(false);
   const [showAuditoriaIbsCbs, setShowAuditoriaIbsCbs] = useState(false);
@@ -4269,6 +4270,75 @@ ${htmlNomeDuplicado}
     });
     return { total: afetadas.length, valor: afetadas.reduce((acc, x) => acc + (parseFloat(x.valor || '0') || 0), 0), amostra: afetadas.slice(0, 10) };
   }, [xmlList, filterMes]);
+
+  // Notas de saída AUTORIZADAS e NÃO canceladas com valor total (vNF) igual a zero.
+  // Normalmente é desconto de 100% dado no caixa (cortesia, consumo interno, troca —
+  // ou venda recebida por fora). Só o tPag 90 ("Sem pagamento") declara isso no
+  // próprio XML; "Dinheiro R$ 0,00" não explica nada. Não altera nenhum total:
+  // essas notas já somam R$ 0,00 no faturamento — o card serve para acompanhar.
+  const notasValorZero = useMemo(() => {
+    type LinhaZero = { xml: XmlData; valorProdutos: number; qtdItens: number; produtos: string; formas: string; semPagamentoDeclarado: boolean };
+    const vazio = { linhas: [] as LinhaZero[], semExplicacao: 0, valorProdutos: 0, porForma: [] as { forma: string; qtd: number }[], porMes: [] as { mes: string; qtd: number }[] };
+    if (!mainCnpj) return vazio;
+    const tPagNomes: Record<string, string> = {
+      '01': 'Dinheiro', '02': 'Cheque', '03': 'Cartão de Crédito', '04': 'Cartão de Débito', '05': 'Crédito Loja',
+      '10': 'Vale Alimentação', '11': 'Vale Refeição', '12': 'Vale Presente', '13': 'Vale Combustível',
+      '14': 'Duplicata Mercantil', '15': 'Boleto Bancário', '16': 'Depósito Bancário', '17': 'PIX (Dinâmico)',
+      '18': 'Transferência Bancária', '19': 'Programa de Fidelidade', '20': 'PIX (Estático)', '90': 'Sem pagamento', '99': 'Outros',
+    };
+    const linhas: LinhaZero[] = [];
+    xmlList.forEach(xml => {
+      if (xml.tipo !== 'nfe' || xml.emitCnpj !== mainCnpj || xml.tpNF === '0' || !xml.protocolo) return;
+      if (xml.chave && chavesCanceladas.has(xml.chave)) return;
+      if (filterMes !== 'Todos' && getMonthYear(xml.data) !== filterMes) return;
+      const v = (xml.valor ?? '').trim();
+      if (v === '' || isNaN(parseFloat(v)) || parseFloat(v) !== 0) return;
+      const ext = getNotaExtract(xml);
+      const dets = ext?.dets ?? [];
+      const pags = ext?.detPags ?? [];
+      const nomes = Array.from(new Set(dets.map(d => d.xProd).filter(Boolean)));
+      linhas.push({
+        xml,
+        valorProdutos: dets.reduce((a, d) => a + (d.vProd || 0), 0),
+        qtdItens: dets.length,
+        produtos: nomes.slice(0, 3).join(', ') + (nomes.length > 3 ? ` e mais ${nomes.length - 3}` : ''),
+        formas: pags.length ? Array.from(new Set(pags.map(p => tPagNomes[p.tPag] || (p.xPag ? `${p.xPag} (${p.tPag})` : `Código ${p.tPag}`)))).join(' + ') : 'Não informada',
+        semPagamentoDeclarado: pags.some(p => p.tPag === '90'),
+      });
+    });
+    if (!linhas.length) return vazio;
+    linhas.sort((a, b) => (a.xml.data || '').localeCompare(b.xml.data || ''));
+    const contar = (chaves: string[]) => {
+      const m = new Map<string, number>();
+      chaves.forEach(k => m.set(k, (m.get(k) || 0) + 1));
+      return Array.from(m, ([k, qtd]) => ({ k, qtd }));
+    };
+    return {
+      linhas,
+      semExplicacao: linhas.filter(l => !l.semPagamentoDeclarado).length,
+      valorProdutos: linhas.reduce((a, l) => a + l.valorProdutos, 0),
+      porForma: contar(linhas.map(l => l.formas)).map(({ k, qtd }) => ({ forma: k, qtd })).sort((a, b) => b.qtd - a.qtd),
+      porMes: contar(linhas.map(l => getMonthYear(l.xml.data))).map(({ k, qtd }) => ({ mes: k, qtd })),
+    };
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
+
+  const exportarNotasValorZero = () => {
+    const fmtData = (d: string) => d ? new Date(d).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '';
+    const aoa: (string | number)[][] = [
+      ['Tipo', 'Série', 'Número', 'Data/hora', 'Chave', 'Itens', 'Produtos', 'Valor dos produtos (R$)', 'Valor da nota (R$)', 'Forma de pagamento informada', 'Explicação no XML'],
+    ];
+    notasValorZero.linhas.forEach(l => aoa.push([
+      l.xml.modelo === '65' ? 'NFC-e' : l.xml.modelo === '55' ? 'NF-e' : (l.xml.modelo || ''),
+      l.xml.serie, l.xml.numero, fmtData(l.xml.data), l.xml.chave || '', l.qtdItens, l.produtos,
+      Number(l.valorProdutos.toFixed(2)), 0, l.formas,
+      l.semPagamentoDeclarado ? 'tPag 90 (Sem pagamento)' : 'Nenhuma — conferir com o cliente',
+    ]));
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 7 }, { wch: 6 }, { wch: 10 }, { wch: 16 }, { wch: 48 }, { wch: 6 }, { wch: 50 }, { wch: 14 }, { wch: 12 }, { wch: 26 }, { wch: 32 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Notas valor zero');
+    XLSX.writeFile(wb, `Notas_valor_zero_${mainCnpj}_${filterMes === 'Todos' ? 'todos_os_meses' : filterMes.replace('/', '-')}.xlsx`, { compression: true });
+  };
 
   // Responsável Técnico (<infRespTec>): identifica quem desenvolve/mantém o
   // sistema de automação do cliente — mais confiável que <verProc> (que em
@@ -8151,7 +8221,7 @@ ${htmlNomeDuplicado}
   type ItemMenu = { id: string; nome: string; icone: React.ComponentType<{ className?: string }>; badge?: number; acao?: () => void };
   const montarMenu = (): { titulo: string; itens: ItemMenu[] }[] => {
     const nAlertas = [notasAnomalias.semProtocolo.length, notasAnomalias.semAutorizacaoNaoContingencia.length, notasAnomalias.malformadas.length,
-      notasAnomalias.foraDoPrazo.length, notasAnomalias.numeroDuplicado.length, notasHomologacao.total].filter(n => n > 0).length;
+      notasAnomalias.foraDoPrazo.length, notasAnomalias.numeroDuplicado.length, notasHomologacao.total, notasValorZero.linhas.length].filter(n => n > 0).length;
     const auditoria: ItemMenu[] = [
       { id: 'visao', nome: 'Visão geral', icone: LayoutDashboard },
       { id: 'series', nome: 'Séries e sequência', icone: Hash },
@@ -10646,6 +10716,7 @@ ${htmlNomeDuplicado}
                 if (malfDentro.length) alertas.push({ titulo: 'Notas para conferir', desc: `${malfDentro.length} nota(s) com chave ou estrutura fora do padrão`, valor: formatarMoeda(somaValor(malfDentro)), selo: 'dentro', destino: 'alertas' });
                 if (notasAnomalias.foraDoPrazo.length) alertas.push({ titulo: 'Contingência fora do prazo', desc: `${notasAnomalias.foraDoPrazo.length} nota(s) autorizada(s) com atraso`, valor: formatarMoeda(somaValor(notasAnomalias.foraDoPrazo)), selo: 'dentro', destino: 'alertas' });
                 if (notasAnomalias.numeroDuplicado.length) alertas.push({ titulo: 'Número duplicado', desc: `${notasAnomalias.numeroDuplicado.length} número(s) com chave duplicada`, valor: String(notasAnomalias.numeroDuplicado.length), selo: 'dentro', destino: 'alertas' });
+                if (notasValorZero.linhas.length) alertas.push({ titulo: 'Notas com valor zero', desc: `${notasValorZero.linhas.length} nota(s) autorizada(s) com desconto total${notasValorZero.semExplicacao ? ` · ${notasValorZero.semExplicacao} sem tPag 90` : ''}`, valor: formatarMoeda(notasValorZero.valorProdutos), selo: 'conferir', destino: 'alertas' });
                 if (notasHomologacao.total) alertas.push({ titulo: 'Notas de homologação (teste)', desc: `${notasHomologacao.total} nota(s) sem validade fiscal no lote`, valor: formatarMoeda(notasHomologacao.valor), selo: 'dentro', destino: 'alertas' });
                 if (faltantesTot) alertas.push({ titulo: 'Números sem inutilização', desc: `${faltantesTot.toLocaleString('pt-BR')} número(s) faltando em ${comQuebra} série(s)`, valor: faltantesTot.toLocaleString('pt-BR'), selo: 'conferir', destino: 'series' });
                 const horas = sazonalidade.porHora.filter(h => h.faturamento > 0);
@@ -12151,6 +12222,102 @@ ${htmlNomeDuplicado}
                 );
               })()}
 
+              {/* Card: Notas com valor zero (autorizadas, não canceladas, vNF = 0) */}
+              {notasValorZero.linhas.length > 0 && (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-6 mb-6">
+                  <div className="flex items-center justify-between gap-4 mb-4">
+                    <div className="flex items-center gap-3">
+                      <AlertTriangle className="w-9 h-9 p-2 rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-400 shrink-0" />
+                      <div>
+                        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                          <div className="text-sm font-bold text-slate-700 dark:text-slate-200 tracking-wide">Notas com valor zero</div>
+                          <div className="text-sm font-bold text-amber-700 dark:text-amber-400">{formatarMoeda(notasValorZero.valorProdutos)} em produtos saíram sem receita</div>
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          {notasValorZero.linhas.length} nota(s) autorizada(s), não cancelada(s), com valor total R$ 0,00
+                          {notasValorZero.semExplicacao > 0 && <> · <strong className="text-rose-600 dark:text-rose-400">{notasValorZero.semExplicacao} sem tPag 90 (Sem pagamento)</strong></>}
+                          {notasValorZero.porMes.length > 1 && <> · {notasValorZero.porMes.map(m => `${m.mes}: ${m.qtd}`).join(' · ')}</>}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0 no-print">
+                      <button onClick={exportarNotasValorZero} className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:border-slate-400">
+                        <Download className="w-3 h-3" /> Planilha
+                      </button>
+                      <button
+                        onClick={() => setShowValorZero(!showValorZero)}
+                        className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 underline"
+                      >
+                        {showValorZero ? 'Ocultar' : 'Ver detalhes'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {showValorZero && (
+                    <div>
+                      <div className="mb-3 text-xs text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 space-y-1">
+                        <div>
+                          Nota de venda autorizada com desconto igual ao valor dos produtos: a mercadoria saiu do estoque e <strong className="text-slate-700 dark:text-slate-300">nenhuma receita foi registrada</strong>. O XML não diz o motivo.
+                          Pode ser cortesia, consumo interno, troca ou erro de caixa — mas também é o formato de uma venda recebida por fora. Confirme com o cliente quem autorizou e por quê.
+                        </div>
+                        <div>
+                          <strong className="text-slate-700 dark:text-slate-300">Forma de pagamento informada:</strong>{' '}
+                          {notasValorZero.porForma.map(f => `${f.forma}: ${f.qtd}`).join(' · ')}.
+                          Só o tPag 90 ("Sem pagamento") declara no XML que não houve pagamento; "Dinheiro R$ 0,00" não explica nada.
+                        </div>
+                        <div>Não muda nenhum total do app: essas notas já entram com R$ 0,00 no Total de Saídas Auditadas.</div>
+                      </div>
+                      <div className="overflow-x-auto overflow-y-auto max-h-80">
+                        <table className="w-full text-xs">
+                          <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
+                            <tr className="text-left text-slate-500 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                              <th className="py-1.5 pr-3">Tipo</th>
+                              <th className="py-1.5 pr-3">Série</th>
+                              <th className="py-1.5 pr-3">Nº</th>
+                              <th className="py-1.5 pr-3">Data/hora</th>
+                              <th className="py-1.5 pr-3">Produtos</th>
+                              <th className="py-1.5 pr-3">Pagamento informado</th>
+                              <th className="py-1.5 pr-3">Baixar</th>
+                              <th className="py-1.5 text-right">Produtos (R$)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {notasValorZero.linhas.map((l, i) => (
+                              <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
+                                <td className="py-1.5 pr-3 font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">{l.xml.modelo === '65' ? 'NFC-e' : l.xml.modelo === '55' ? 'NF-e' : (l.xml.modelo ? `Mod. ${l.xml.modelo}` : '—')}</td>
+                                <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{l.xml.serie}</td>
+                                <td className="py-1.5 pr-3 font-mono text-slate-700 dark:text-slate-300">{l.xml.numero}</td>
+                                <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">{l.xml.data ? new Date(l.xml.data).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}</td>
+                                <td className="py-1.5 pr-3 text-slate-600 dark:text-slate-400 max-w-[260px] truncate" title={l.produtos}>{l.produtos || '—'}</td>
+                                <td className="py-1.5 pr-3 whitespace-nowrap">
+                                  <span
+                                    className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold"
+                                    style={l.semPagamentoDeclarado ? {background: 'rgba(100,116,139,0.15)', color: '#475569'} : {background: 'rgba(244,63,94,0.15)', color: '#BE123C'}}
+                                    title={l.semPagamentoDeclarado ? 'O XML declara tPag 90 — Sem pagamento' : 'O XML informa uma forma de pagamento com valor zero — não explica o desconto total'}
+                                  >
+                                    {l.formas}
+                                  </span>
+                                </td>
+                                <td className="py-1.5 pr-3">
+                                  <button
+                                    onClick={() => baixarXmlEvidencia(l.xml)}
+                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-transparent text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:border-slate-400"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    XML
+                                  </button>
+                                </td>
+                                <td className="py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300 tabular-nums">{formatarMoeda(l.valorProdutos)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Card: Sem Autorização (não contingência) */}
               {notasAnomalias.semAutorizacaoNaoContingencia.length > 0 && (
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 mb-6">
@@ -13253,7 +13420,7 @@ ${htmlNomeDuplicado}
               })()}
 
               </div>
-              {!((notasAnomalias.semProtocolo.length > 0 || notasAnomalias.numeroDuplicado.length > 0) || notasAnomalias.malformadas.length > 0 || notasAnomalias.semAutorizacaoNaoContingencia.length > 0 || notasAnomalias.foraDoPrazo.length > 0 || notasHomologacao.total > 0) && (
+              {!((notasAnomalias.semProtocolo.length > 0 || notasAnomalias.numeroDuplicado.length > 0) || notasAnomalias.malformadas.length > 0 || notasAnomalias.semAutorizacaoNaoContingencia.length > 0 || notasAnomalias.foraDoPrazo.length > 0 || notasHomologacao.total > 0 || notasValorZero.linhas.length > 0) && (
                 <div data-secao="alertas" className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl px-6 py-12 flex flex-col items-center text-center">
                   <div className="w-12 h-12 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 flex items-center justify-center mb-4">
                     <CheckCircle2 className="w-6 h-6 text-emerald-700 dark:text-emerald-300" />
