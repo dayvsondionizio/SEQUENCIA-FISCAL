@@ -1052,6 +1052,22 @@ const CFOP_DESCRICOES: Record<string, string> = {
   '949': 'Outra saída de mercadoria ou prestação de serviço não especificado',
 };
 
+// Descrições de CFOP de ENTRADA (1xxx/2xxx) — a tabela CFOP_DESCRICOES é indexada só pelo
+// sufixo e foi feita para saídas (5202 = devolução de compra, mas 1202 = devolução de venda).
+const CFOP_ENTRADA_DESCRICOES: Record<string, string> = {
+  '101': 'Compra para industrialização',
+  '102': 'Compra para comercialização',
+  '201': 'Devolução de venda de produção do estabelecimento',
+  '202': 'Devolução de venda de mercadoria adquirida ou recebida de terceiros',
+  '410': 'Devolução de venda de produção do estabelecimento em operação com ST',
+  '411': 'Devolução de venda de mercadoria adquirida ou recebida de terceiros em operação com ST',
+  '556': 'Compra de material para uso ou consumo',
+  '949': 'Outra entrada de mercadoria ou prestação de serviço não especificada',
+};
+function descricaoCfopEntrada(cfop: string): string {
+  return CFOP_ENTRADA_DESCRICOES[cfop.slice(-3)] || `CFOP ${cfop} (entrada)`;
+}
+
 function descricaoCfop(cfop: string): string {
   const suffix = cfop.slice(-3);
   return CFOP_DESCRICOES[suffix] || `CFOP ${cfop} - Não classificado`;
@@ -1999,6 +2015,38 @@ export default function App() {
       }))
       .sort((a, b) => a.cfop.localeCompare(b.cfop));
   }, [xmlList, filterMes]);
+
+  // Notas de ENTRADA emitidas pela própria empresa (tpNF = 0: devolução de venda 1202,
+  // retorno etc.). Não somam no Total de Saídas — ficam listadas à parte na tabela de
+  // CFOP só para o analista conferir se foram escrituradas no Questor.
+  const entradasProprias = useMemo(() => {
+    const vazio = { porCfop: [] as { cfop: string; descricao: string; notas: number; valor: number }[], notas: 0, valor: 0 };
+    if (!mainCnpj) return vazio;
+    const porCfop: Record<string, { valor: number; chaves: Set<string> }> = {};
+    let notas = 0, total = 0;
+    xmlList.forEach((xml, idx) => {
+      if (xml.tipo !== 'nfe' || xml.emitCnpj !== mainCnpj || xml.tpNF !== '0' || !xml.protocolo) return;
+      if (xml.chave && chavesCanceladas.has(xml.chave)) return;
+      if (filterMes !== 'Todos' && getMonthYear(xml.data) !== filterMes) return;
+      const valorNota = parseFloat(xml.valor || '0') || 0;
+      const id = xml.chave || String(idx);
+      notas++; total += valorNota;
+      const itens: Record<string, number> = xml.cfopValores || {};
+      const totalItens = Object.values(itens).reduce((a, v) => a + v, 0);
+      const somar = (cfop: string, v: number) => {
+        const p = porCfop[cfop] || (porCfop[cfop] = { valor: 0, chaves: new Set() });
+        p.valor += v; p.chaves.add(id);
+      };
+      if (totalItens > 0) Object.entries(itens).forEach(([cfop, v]) => somar(cfop, valorNota * (v / totalItens)));
+      else somar(xml.natureza || 'Não identificado', valorNota);
+    });
+    return {
+      porCfop: Object.entries(porCfop)
+        .map(([cfop, p]) => ({ cfop, descricao: /^[12]\d{3}$/.test(cfop) ? descricaoCfopEntrada(cfop) : cfop, notas: p.chaves.size, valor: p.valor }))
+        .sort((a, b) => a.cfop.localeCompare(b.cfop)),
+      notas, valor: total,
+    };
+  }, [xmlList, filterMes, mainCnpj, chavesCanceladas]);
 
   // Mesmo critério do breakdownPorCfop, mas separando o valor de cada CFOP
   // entre NF-e (mod 55) e NFC-e (mod 65) — só pro botão "detalhar por modelo",
@@ -10762,6 +10810,16 @@ ${htmlNomeDuplicado}
                               <b className="font-semibold">{formatarMoeda(foraValor)}</b> em {foraLista.length} nota(s) ficaram fora do total <span className="underline font-semibold ml-1">ver</span>
                             </button>
                           )}
+                          {entradasProprias.notas > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => { setShowCfopBreakdown(true); setTimeout(() => document.getElementById('cfop-entradas-proprias')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80); }}
+                              title="Notas de entrada emitidas pela própria empresa (ex.: devolução de venda). Não somam no Total de Saídas — confira se foram lançadas no Questor."
+                              className="text-left px-3 py-2 rounded-lg text-[13px] bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
+                            >
+                              <span><b className="font-semibold">{entradasProprias.notas}</b> nota(s) de entrada emitida(s) (CFOP {entradasProprias.porCfop.map(c => c.cfop).join(', ')}) · <b className="font-semibold">{formatarMoeda(entradasProprias.valor)}</b> · fora do total, conferir no Questor <span className="underline font-semibold ml-1">ver</span></span>
+                            </button>
+                          )}
                           {breakdownPorCfop.length > 0 && (
                             <button type="button" onClick={() => setShowCfopBreakdown(v => !v)} className="px-3 py-2 rounded-lg text-[13px] border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-400 transition-colors">
                               {showCfopBreakdown ? 'Ocultar' : 'Ver'} por natureza (CFOP)
@@ -11952,7 +12010,7 @@ ${htmlNomeDuplicado}
                 </div>
               )}
 
-              {showCfopBreakdown && breakdownPorCfop.length > 0 && (
+              {showCfopBreakdown && (breakdownPorCfop.length > 0 || entradasProprias.notas > 0) && (
                 <div data-secao="visao" className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 mb-6">
                   <div className="flex items-center justify-between mb-4">
                     <div className="text-[13px] font-semibold text-slate-900 dark:text-slate-100">Totais por natureza da operação (CFOP)</div>
@@ -12008,6 +12066,37 @@ ${htmlNomeDuplicado}
                       </tfoot>
                     </table>
                   </div>
+                  {entradasProprias.notas > 0 && (
+                    <div id="cfop-entradas-proprias" className="mt-5 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/40 px-4 py-3">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 mb-2">
+                        <div className="text-[13px] font-semibold text-amber-900 dark:text-amber-200">Entradas emitidas pela empresa — não somam no total acima</div>
+                        <div className="text-xs text-amber-800/80 dark:text-amber-300/80">Conferir se foram escrituradas no Questor</div>
+                      </div>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs font-bold text-amber-800/70 dark:text-amber-300/70 uppercase tracking-wider border-b border-amber-200 dark:border-amber-800">
+                            <th className="py-1.5 pr-4">CFOP</th>
+                            <th className="py-1.5 pr-4">Natureza</th>
+                            <th className="py-1.5 pr-4 text-right">Notas</th>
+                            <th className="py-1.5 pr-4 text-right whitespace-nowrap">Vlr Contábil</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {entradasProprias.porCfop.map(({ cfop, descricao, notas, valor }) => (
+                            <tr key={cfop} className="border-b border-amber-100 dark:border-amber-900 last:border-0">
+                              <td className="py-1.5 pr-4 font-mono font-bold text-amber-800 dark:text-amber-300">{cfop}</td>
+                              <td className="py-1.5 pr-4 text-amber-900 dark:text-amber-200">{descricao}</td>
+                              <td className="py-1.5 pr-4 text-right tabular-nums text-amber-900 dark:text-amber-200">{notas}</td>
+                              <td className="py-1.5 pr-4 text-right font-semibold tabular-nums text-amber-900 dark:text-amber-100">{formatarMoeda(valor)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div className="mt-2 text-xs text-amber-800/80 dark:text-amber-300/80">
+                        A lista de cada nota está em Notas de saída, com a situação "Devolução/Entrada".
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
