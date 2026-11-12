@@ -10804,33 +10804,48 @@ ${htmlNomeDuplicado}
                         <div className="text-[13px] text-slate-500 dark:text-slate-400">
                           <b className="font-semibold text-slate-900 dark:text-slate-100">{(periodoAnalise.totalNotas ?? 0).toLocaleString('pt-BR')}</b> notas · <b className="font-semibold text-slate-900 dark:text-slate-100">{analysis.length}</b> série(s) · {periodoAnalise.inicio ? (periodoAnalise.inicio === periodoAnalise.fim ? periodoAnalise.inicio : `${periodoAnalise.inicio} a ${periodoAnalise.fim}`) : '—'}
                         </div>
-                        <div className="mt-5 flex flex-wrap items-center gap-2">
-                          {foraLista.length > 0 && (
-                            <button type="button" onClick={() => irParaSecao('alertas')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[13px] bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300">
-                              <b className="font-semibold">{formatarMoeda(foraValor)}</b> em {foraLista.length} nota(s) ficaram fora do total <span className="underline font-semibold ml-1">ver</span>
-                            </button>
-                          )}
-                          {entradasProprias.notas > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => { setShowCfopBreakdown(true); setTimeout(() => document.getElementById('cfop-entradas-proprias')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80); }}
-                              title="Notas de entrada emitidas pela própria empresa (ex.: devolução de venda). Não somam no Total de Saídas — confira se foram lançadas no Questor."
-                              className="text-left px-3 py-2 rounded-lg text-[13px] bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
-                            >
-                              <span><b className="font-semibold">{entradasProprias.notas}</b> nota(s) de entrada emitida(s) (CFOP {entradasProprias.porCfop.map(c => c.cfop).join(', ')}) · <b className="font-semibold">{formatarMoeda(entradasProprias.valor)}</b> · fora do total, conferir no Questor <span className="underline font-semibold ml-1">ver</span></span>
-                            </button>
-                          )}
-                          {breakdownPorCfop.length > 0 && (
-                            <button type="button" onClick={() => setShowCfopBreakdown(v => !v)} className="px-3 py-2 rounded-lg text-[13px] border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-400 transition-colors">
-                              {showCfopBreakdown ? 'Ocultar' : 'Ver'} por natureza (CFOP)
-                            </button>
-                          )}
-                          {(periodoAnalise.diasDetalhados?.length ?? 0) > 0 && (
-                            <button type="button" onClick={() => setShowDaysDetail(v => !v)} className="px-3 py-2 rounded-lg text-[13px] border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-400 transition-colors">
-                              {showDaysDetail ? 'Ocultar' : 'Ver'} notas por dia
-                            </button>
-                          )}
-                        </div>
+                        {/* avisos: um por linha, largura toda; ações: lado a lado logo abaixo */}
+                        {(foraLista.length > 0 || entradasProprias.notas > 0) && (
+                          <div className="mt-5 flex flex-col gap-2">
+                            {foraLista.length > 0 && (
+                              <button type="button" onClick={() => irParaSecao('alertas')} className="w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg text-left text-[13px] bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900 hover:border-rose-300 dark:hover:border-rose-700 transition-colors">
+                                <span className="flex items-center gap-2 min-w-0">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" aria-hidden="true" />
+                                  <span><b className="font-semibold">{formatarMoeda(foraValor)}</b> em {foraLista.length} nota(s) ficaram fora do total</span>
+                                </span>
+                                <span className="shrink-0 font-semibold underline">ver</span>
+                              </button>
+                            )}
+                            {entradasProprias.notas > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => { setShowCfopBreakdown(true); setTimeout(() => document.getElementById('cfop-entradas-proprias')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80); }}
+                                title="Notas de entrada emitidas pela própria empresa (ex.: devolução de venda). Não somam no Total de Saídas — confira se foram lançadas no Questor."
+                                className="w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg text-left text-[13px] bg-amber-50 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:border-amber-300 dark:hover:border-amber-700 transition-colors"
+                              >
+                                <span className="flex items-center gap-2 min-w-0">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" aria-hidden="true" />
+                                  <span><b className="font-semibold">{entradasProprias.notas}</b> nota(s) de entrada (CFOP {entradasProprias.porCfop.map(c => c.cfop).join(', ')}) · <b className="font-semibold">{formatarMoeda(entradasProprias.valor)}</b> fora do total — conferir no Questor</span>
+                                </span>
+                                <span className="shrink-0 font-semibold underline">ver</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {(breakdownPorCfop.length > 0 || (periodoAnalise.diasDetalhados?.length ?? 0) > 0) && (
+                          <div className="mt-4 flex flex-wrap items-center gap-2">
+                            {breakdownPorCfop.length > 0 && (
+                              <button type="button" onClick={() => setShowCfopBreakdown(v => !v)} className="px-3 py-2 rounded-lg text-[13px] border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-400 transition-colors">
+                                {showCfopBreakdown ? 'Ocultar' : 'Ver'} por natureza (CFOP)
+                              </button>
+                            )}
+                            {(periodoAnalise.diasDetalhados?.length ?? 0) > 0 && (
+                              <button type="button" onClick={() => setShowDaysDetail(v => !v)} className="px-3 py-2 rounded-lg text-[13px] border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-400 transition-colors">
+                                {showDaysDetail ? 'Ocultar' : 'Ver'} notas por dia
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div className="p-6 border-t lg:border-t-0 lg:border-l border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 flex items-center gap-6">
                         <svg viewBox="0 0 120 120" className="w-[124px] h-[124px] shrink-0" role="img" aria-label={`Integridade da numeração: ${integridadeTxt}%`}>
