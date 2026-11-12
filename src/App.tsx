@@ -1652,6 +1652,7 @@ export default function App() {
   const [showExportXmlMenu, setShowExportXmlMenu] = useState(false);
   const [exportPartes, setExportPartes] = useState(1);
   const [notaSearchQuery, setNotaSearchQuery] = useState('');
+  const [limiteListaNotas, setLimiteListaNotas] = useState(100);
   const [notaSearchCampo, setNotaSearchCampo] = useState<'Numero' | 'Chave' | 'Cliente' | 'Item' | 'Ncm' | 'Data' | 'Valor'>('Numero');
   const [filterNotaModelo, setFilterNotaModelo] = useState('Todos');
   const [filterNotaSituacao, setFilterNotaSituacao] = useState('Todas');
@@ -8416,6 +8417,8 @@ ${htmlNomeDuplicado}
     URL.revokeObjectURL(link.href);
   };
 
+  useEffect(() => { setLimiteListaNotas(100); }, [notaSearchQuery, filterNotaModelo, filterNotaSituacao, filterNotaCfop]);
+
   const toggleSelecaoNota = (chave: string) => {
     setNotasSelecionadas(prev => {
       const next = new Set(prev);
@@ -11888,7 +11891,34 @@ ${htmlNomeDuplicado}
                       <table className="w-full text-sm">
                         <thead className="sticky top-0 bg-white dark:bg-slate-900 z-10">
                           <tr className="text-left text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider border-b border-slate-200 dark:border-slate-700">
-                            <th className="py-2 pr-2 w-8"></th>
+                            <th className="py-2 pr-2 w-8">
+                              {(() => {
+                                // "Selecionar tudo" marca TODAS as notas do filtro atual — inclusive as
+                                // que passam das 100 mostradas na lista — para baixar o lote inteiro.
+                                const selecionaveis = notasSaidaFiltradas
+                                  .filter(n => n.tipo !== 'inutilizacao' && !!n.chave && !!n.rawXml)
+                                  .map(n => n.chave!);
+                                if (selecionaveis.length === 0) return null;
+                                const marcadas = selecionaveis.filter(c => notasSelecionadas.has(c)).length;
+                                const todas = marcadas === selecionaveis.length;
+                                return (
+                                  <input
+                                    type="checkbox"
+                                    checked={todas}
+                                    ref={el => { if (el) el.indeterminate = marcadas > 0 && !todas; }}
+                                    onChange={() => setNotasSelecionadas(prev => {
+                                      const next = new Set(prev);
+                                      if (todas) selecionaveis.forEach(c => next.delete(c));
+                                      else selecionaveis.forEach(c => next.add(c));
+                                      return next;
+                                    })}
+                                    title={todas ? 'Desmarcar todas as notas do filtro' : `Selecionar todas as ${selecionaveis.length.toLocaleString('pt-BR')} notas do filtro${selecionaveis.length > 100 ? ' (inclusive as que não aparecem na lista)' : ''}`}
+                                    aria-label="Selecionar todas as notas do filtro"
+                                    className="w-4 h-4 rounded border-slate-300 accent-slate-900 cursor-pointer"
+                                  />
+                                );
+                              })()}
+                            </th>
                             <th className="py-2 pr-4">Número</th>
                             <th className="py-2 pr-4">Série/Modelo</th>
                             <th className="py-2 pr-4">Cliente</th>
@@ -11901,7 +11931,7 @@ ${htmlNomeDuplicado}
                           </tr>
                         </thead>
                         <tbody>
-                          {notasSaidaFiltradas.slice(0, 100).map((nota, idx) => {
+                          {notasSaidaFiltradas.slice(0, limiteListaNotas).map((nota, idx) => {
                             const isInutilizacao = nota.tipo === 'inutilizacao';
                             const podeSelecionar = !isInutilizacao && !!nota.chave && !!nota.rawXml;
                             return (
@@ -11968,10 +11998,28 @@ ${htmlNomeDuplicado}
                         </tbody>
                       </table>
                     )}
-                    {notasSaidaFiltradas.length > 100 && (
-                      <p className="text-xs text-slate-400 mt-2">Mostrando 100 de {notasSaidaFiltradas.length} resultados. Refine a busca para ver menos notas.</p>
-                    )}
                   </div>
+                  {/* Mais de 100 resultados: mostra quantas faltam e deixa abrir mais */}
+                  {notasSaidaFiltradas.length > limiteListaNotas && (() => {
+                    const restantes = notasSaidaFiltradas.length - limiteListaNotas;
+                    const btn = 'px-3 py-1.5 rounded-lg text-[13px] font-semibold border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-slate-400 transition-colors';
+                    return (
+                      <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3">
+                        <span className="text-[13px] text-slate-500 dark:text-slate-400">
+                          Mostrando <b className="text-slate-900 dark:text-slate-100">{limiteListaNotas.toLocaleString('pt-BR')}</b> de <b className="text-slate-900 dark:text-slate-100">{notasSaidaFiltradas.length.toLocaleString('pt-BR')}</b> notas · <b className="text-amber-700 dark:text-amber-400">{restantes.toLocaleString('pt-BR')} ainda não aparecem</b>
+                        </span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button type="button" className={btn} onClick={() => setLimiteListaNotas(l => l + 100)}>Mostrar mais {Math.min(100, restantes)}</button>
+                          {restantes > 100 && (
+                            <button type="button" className={btn} onClick={() => setLimiteListaNotas(l => l + 500)}>Mostrar mais {Math.min(500, restantes).toLocaleString('pt-BR')}</button>
+                          )}
+                          {restantes > 500 && restantes <= 5000 && (
+                            <button type="button" className={btn} onClick={() => setLimiteListaNotas(notasSaidaFiltradas.length)}>Mostrar todas ({notasSaidaFiltradas.length.toLocaleString('pt-BR')})</button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
